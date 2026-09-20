@@ -1,0 +1,67 @@
+# ===================
+# Dependencies
+# ===================
+
+# Node.js — at any depth, in every sub-project
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+
+# PHP / Composer — at any depth, in every sub-project
+vendor/
+**/vendor/
+composer.phar
+auth.json
+.phpunit.result.cache
+
+# ===================
+# Environment files
+# ===================
+.env
+.env.*
+!.env.example
+
+# ===================
+# IDE / Editor
+# ===================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===================
+# OS generated files
+# ===================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===================
+# Build / Cache
+# ===================
+/build/
+/dist/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Laravel specific
+storage/*.key
+
+# ===================
+# Signing credentials / secrets
+# ===================
+
+# App Store Connect API private keys (one-time download, never recoverable)
+*.p8
+
+# Android signing
+*.jks
+*.keystore
+upload_certificate.pem
+proposals/CLIENT_NAME_proposal.md
