@@ -1,0 +1,164 @@
+import React, { useState, useEffect } from 'react';
+import { Plus, Calendar, FileText, Trash2, Edit } from 'lucide-react';
+
+interface SOARecord {
+  id: string;
+  generatedDate: string;
+  billingPeriod: string;
+  totalAccounts: number;
+  totalAmount: number;
+  status: string;
+  generatedBy: string;
+}
+
+const SOAGeneration: React.FC = () => {
+  const [soaRecords, setSoaRecords] = useState<SOARecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchSOARecords();
+  }, []);
+
+  const fetchSOARecords = async () => {
+    try {
+      setIsLoading(true);
+      // TODO: Replace with actual API call
+      // const response = await axios.get('/api/soa-generation');
+      // setSoaRecords(response.data);
+      
+      // Mock data for demonstration
+      setSoaRecords([]);
+    } catch (error) {
+      console.error('Error fetching SOA records:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddSOA = () => {
+    // TODO: Open modal or navigate to SOA generation form
+    console.log('Add new SOA');
+  };
+
+  const handleEdit = (id: string) => {
+    console.log('Edit SOA:', id);
+  };
+
+  const handleDelete = (id: string) => {
+    console.log('Delete SOA:', id);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-900">
+        <div className="text-white">Loading...</div>
+      </div>
+    );
+  }
+
+  if (soaRecords.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full bg-gray-900">
+        <div className="text-center">
+          <div className="mb-6">
+            <FileText size={64} className="mx-auto text-gray-600" />
+          </div>
+          <h2 className="text-xl font-semibold text-white mb-2">No SOA Generated</h2>
+          <p className="text-gray-400 mb-6">Get started by generating your first Statement of Account</p>
+          <button
+            onClick={handleAddSOA}
+            className="inline-flex items-center px-6 py-3 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+          >
+            <Plus size={20} className="mr-2" />
+            Generate SOA
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full bg-gray-900 overflow-y-auto">
+      <div className="p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-semibold text-white">SOA Generation</h1>
+          <button
+            onClick={handleAddSOA}
+            className="inline-flex items-center px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors"
+          >
+            <Plus size={20} className="mr-2" />
+            Generate SOA
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {soaRecords.map((record) => (
+            <div
+              key={record.id}
+              className="bg-gray-800 border border-gray-700 rounded-lg p-6 hover:border-orange-500 transition-colors"
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div className="flex items-center">
+                  <div className="bg-orange-600 bg-opacity-20 p-2 rounded-lg mr-3">
+                    <FileText size={24} className="text-orange-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold">SOA #{record.id}</h3>
+                    <p className="text-gray-400 text-sm">{record.billingPeriod}</p>
+                  </div>
+                </div>
+                <span
+                  className={`px-2 py-1 text-xs rounded ${
+                    record.status === 'Generated'
+                      ? 'bg-green-600 bg-opacity-20 text-green-400'
+                      : 'bg-yellow-600 bg-opacity-20 text-yellow-400'
+                  }`}
+                >
+                  {record.status}
+                </span>
+              </div>
+
+              <div className="space-y-3 mb-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400 text-sm">Generated Date</span>
+                  <span className="text-white text-sm">{record.generatedDate}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400 text-sm">Total Accounts</span>
+                  <span className="text-white text-sm">{record.totalAccounts}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400 text-sm">Total Amount</span>
+                  <span className="text-white text-sm font-semibold">₱{record.totalAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-400 text-sm">Generated By</span>
+                  <span className="text-white text-sm">{record.generatedBy}</span>
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-4 border-t border-gray-700">
+                <button
+                  onClick={() => handleEdit(record.id)}
+                  className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors flex items-center justify-center"
+                >
+                  <Edit size={16} className="mr-1" />
+                  <span className="text-sm">View</span>
+                </button>
+                <button
+                  onClick={() => handleDelete(record.id)}
+                  className="flex-1 px-3 py-2 bg-red-600 bg-opacity-20 hover:bg-red-600 hover:bg-opacity-30 text-red-400 rounded transition-colors flex items-center justify-center"
+                >
+                  <Trash2 size={16} className="mr-1" />
+                  <span className="text-sm">Delete</span>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SOAGeneration;

@@ -1,0 +1,50 @@
+# Files excluded from the archive uploaded to EAS Build.
+#
+# When this file exists it REPLACES .gitignore for upload purposes, so
+# everything that should stay out of the archive must be listed here.
+#
+# node_modules is committed to this repo, which meant EAS included all
+# ~43k files (150 MB archive). The build server runs its own install from
+# package-lock.json, so uploading them was pure waste.
+
+# ===================
+# Dependencies — reinstalled on the build server
+# ===================
+node_modules/
+
+# ===================
+# Secrets — never needed inside the build archive
+# ===================
+
+# Build-time vars come from the "env" block in eas.json
+.env
+.env.*
+!.env.example
+
+# Signing credentials. Used locally by eas submit / build.js,
+# never read from inside the uploaded archive.
+*.p8
+*.jks
+*.keystore
+*.der
+*.pem
+credentials.json
+
+# ===================
+# Local caches and tooling
+# ===================
+.expo/
+.git/
+.vscode/
+.idea/
+dist/
+web-build/
+*.log
+npm-debug.log*
+
+# ===================
+# OS generated files
+# ===================
+.DS_Store
+Thumbs.db
+desktop.ini

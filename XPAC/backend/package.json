@@ -1,0 +1,16 @@
+{
+  "name": "cbms-socket-server",
+  "version": "1.0.0",
+  "description": "Socket.IO server for CBMS real-time notifications",
+  "main": "socket-server.js",
+  "scripts": {
+    "start": "node socket-server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "mysql2": "^3.22.3",
+    "socket.io": "^4.7.2",
+    "ws": "^8.16.0"
+  }
+}

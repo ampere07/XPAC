@@ -1,0 +1,35 @@
+# The Authorization header, carried through to PHP.
+#
+# Laravel ships this block in its stock public/.htaccess and it had been dropped
+# from ours. Under CGI/FastCGI Apache does not expose Authorization to PHP at
+# all unless it is copied into the environment here, so $request->bearerToken()
+# was empty on every request and the personal access token issued at sign-in
+# could never authenticate anyone. Only the session cookie ever worked — and a
+# customer who leaves the app signed in and comes back after the session has
+# lapsed then has no credential left, which is what left them on a dashboard
+# showing their name and account number with every figure reading unavailable.
+#
+# SetEnvIf rather than the stock RewriteRule [E=...] form, because a request
+# reaches this file through TWO internal rewrites: ../.htaccess sends /foo to
+# public/foo, and the rule below sends that to index.php. Apache prefixes an
+# environment variable set with [E=...] with REDIRECT_ on each internal
+# redirect, so the stock form arrives as REDIRECT_REDIRECT_HTTP_AUTHORIZATION,
+# which Symfony's ServerBag does not read. SetEnvIf re-fires on each pass and
+# lands unprefixed. The RewriteRule form is kept as well for servers where
+# mod_setenvif is unavailable.
+<IfModule mod_setenvif.c>
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Send everything to index.php
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>

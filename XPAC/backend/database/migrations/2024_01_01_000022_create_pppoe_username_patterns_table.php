@@ -1,0 +1,27 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('pppoe_username_patterns', function (Blueprint $table) {
+            $table->id();
+            $table->bigInteger('organization_id')->nullable();
+            $table->string('pattern_name');
+            $table->enum('pattern_type', ['username', 'password'])->nullable();
+            $table->longText('sequence');
+            $table->string('created_by')->nullable();
+            $table->string('updated_by')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('pppoe_username_patterns');
+    }
+};

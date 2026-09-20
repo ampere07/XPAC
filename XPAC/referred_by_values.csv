@@ -1,0 +1,844 @@
+﻿"MATCHED AGENT"
+referred_by,count,agent_first_name,agent_middle_initial,agent_last_name,agent_id
+"Brigs Ranay",116,Brigs,,Ranay,37
+"Edith Naviza",111,Edith,,Naviza,24
+"Lanie Madamba",98,Lanie,,Madamba,30
+"Allan inosante",90,Allan,,Inosante,38
+"Jasmine Estrada",40,Jasmine,,Estrada,31
+"Lolita Macailao",35,Lolita,,Macailao,33
+"Jherwen Telen",33,Jherwen,,Telen,9398
+"Elizabeth Barison",31,Elizabeth,,Barison,27
+"Benito Patriarca",23,Benito,,Patriarca,40
+"Reynaldo Obina",17,Reynaldo,,Obina,32
+"Eduardo Torrena",15,Eduardo,,Torrena,25
+"Celso Concepcion",13,Celso,,Concepcion,39
+"William Arboleda",13,William,,Arboleda,35
+"Erlinda Ocampo",9,Erlinda,,Ocampo,23
+"Mary Jane Rellesiva",8,"Mary Jane",,Rellesiva,34
+"Rhea Orillosa",7,Rhea,,Orillosa,44
+"Joy Iringan",3,Joy,,Iringan,41
+"Jon Abdao",2,Jon,,Abdao,9958
+"Monique Crisanto",2,Monique,,Crisanto,49
+"Rene Napao",2,Rene,,Napao,48
+"Chairman lolita Macailao",1,Lolita,,Macailao,33
+TOTAL,669
+
+"TEAM NAME"
+referred_by,count
+"Team Beth",552
+"Team Ed",510
+"Team Mabhe",442
+"Team Aleli",18
+"Team Allan",8
+"Team Brigs",5
+"Team Brigs and Allan",1
+"Team Mabeh",1
+TOTAL,1537
+
+"NO MATCH IN USERS"
+referred_by,count
+Briggs/Allan,85
+Brigs/Allan,69
+friend,64
+Neighbor,60
+"Walk in",55
+Family,48
+Briggs-Allan,35
+"Briggs & Allan",19
+"Agent Monique",11
+"Tech 11",10
+Walk-in,9
+"Tech 02",8
+Agent,6
+Neighborhood,6
+"Tech 03",6
+"Tech 12",6
+"Argie salcepuedes",5
+"Agent William",4
+Allan,4
+Allan/Briggs,4
+"angelic abing",4
+ATSS,4
+Friends,4
+Kapitbahay,4
+Neighbors,4
+Rose,4
+walkin,4
+Wifi,4
+1840,3
+Briggs,3
+Facebook,3
+"Jeffrey Reyes",3
+Kath,3
+"Mylene Adriano",3
+relative,3
+Relatives,3
+"Rico Bustamante",3
+"Sir Jon",3
+"Tech 04",3
+"Willky jane Macapagal",3
+20220006245,2
+20220006427,2
+20220006733,2
+"Agent Julie",2
+Alcaraz,2
+Argie,2
+"Aries caro",2
+"ATE BETH",2
+"Atss fiber",2
+"Chairman allan",2
+"Chona Bose",2
+"Dan banaag",2
+Delma,2
+Dennis,2
+"Dexter dagohoy",2
+"donna mae timbresa",2
+"Eddie Torrena",2
+"Edna tuvilla",2
+"Ernesto Manjares",2
+"Ester Tiongson",2
+"Francis Ugbana",2
+"Gelic Abing",2
+"Genovevo S. Betongga",2
+HANNY,2
+"Igmedio Villanueva",2
+"Jenny Trono",2
+"Joel Cantoneros",2
+"josefina navaja",2
+"Joyce Cudal",2
+"Juvie ladesma",2
+"Kevin cabigting",2
+"Lanie Madimba",2
+"Lino Agapay",2
+"Lyka bais",2
+"Mae Mendoza",2
+"Marco Lopez",2
+"Maria Cristina Aguilar",2
+"Marilyn Illustrisimo",2
+"Marylynn Orpio",2
+Mave,2
+"Medy Albao",2
+Neighbour,2
+"No one",2
+Nothing,2
+Online,2
+"Perla amor",2
+"Presy Tabieros",2
+"Quindao family",2
+"Rene Nopao",2
+"Rochelle M. Carlos",2
+"Rosario Osorio",2
+"Rowena Valdez",2
+"seen on facebook",2
+"Social Media",2
+"Tech 08",2
+"Teresita Donayre",2
+"Walk -in",2
+"Zena lee lomocso",2
+---,1
+000201,1
+008150126991,1
+041114,1
+09077694575,1
+09079639271,1
+09094078312,1
+09107998201,1
+09125330747,1
+09273455378,1
+09308581835,1
+09462522304,1
+09468272078,1
+09552692228,1
+09560643254,1
+09638867426,1
+09671569582,1
+09754479603,1
+09774753862,1
+09928413725,1
+09942981402,1
+09950161060,1
+09958327017,1
+09995252100,1
+20200,1
+20220000209,1
+20220000353,1
+20220000663,1
+20220000713,1
+20220000721,1
+20220000733,1
+20220000793,1
+20220001027,1
+20220001158,1
+20220001304,1
+20220001396,1
+20220001477,1
+20220001647,1
+20220001979,1
+20220002062,1
+20220002216,1
+20220002251,1
+20220002467,1
+20220002621,1
+20220002629,1
+20220002666,1
+20220002735,1
+20220002926,1
+20220003067,1
+20220003070,1
+20220003126,1
+20220003392,1
+20220003594,1
+20220003737,1
+20220003796,1
+20220004011,1
+20220004036,1
+20220004176,1
+20220004205,1
+20220004433,1
+20220004453,1
+20220004674,1
+20220005036,1
+20220005122,1
+20220005180,1
+20220005311,1
+20220005588,1
+20220005679,1
+20220006087,1
+20220006189,1
+20220006234,1
+20220006235,1
+20220006502,1
+20220006609,1
+20220006615,1
+20220006739,1
+20220007150,1
+20220007405,1
+20220007696,1
+20220007730,1
+20220007884,1
+20220008079,1
+20250303,1
+202600000000,1
+699,1
+"70 mbs",1
+717230813,1
+9543115080,1
+9615324474,1
+9634041851,1
+9634347649,1
+9954900551,1
+"A friend",1
+A/N,1
+"abesamis hoa",1
+"Adelfa Barcenas",1
+"Adhelyn calape",1
+"Adrich Asuncion",1
+ADS,1
+"Agent Allan",1
+"Agent Raquel",1
+"Agent Silver",1
+"aida abog",1
+"Ailyn Aguenza",1
+"AJ Ariston",1
+"Albuera, Jeremy",1
+Alcatraz,1
+"Aldrin Castro",1
+"aldrin latumbo",1
+"Alex Lustre Jr.",1
+"Alice cantoria",1
+"Alice Torrevilla",1
+"Alicia Cantoria",1
+"Alicia Cundangan",1
+"Allan Dimarucot",1
+"Allan Innosante",1
+"Allan Inocencio",1
+"Alma francisco",1
+"Alma pataray",1
+Alvin,1
+"Alyssa cabia",1
+"Amancio Bona",1
+"Anabelle Berador",1
+"Analin Alcaraz",1
+"Analyn Mogote",1
+Andr,1
+"Andrian Peñaflor",1
+"Angel Gelizon",1
+"Angel Talisic",1
+Angelic,1
+"Angelic abing montesino",1
+"angelic m abing",1
+"Angelic M. Abing",1
+"Angelina madrid",1
+"Angeline baria",1
+"Angeline Jabonite",1
+"Angelita Buensuceso",1
+"Angelo Buensalida",1
+"Angelo Malinao",1
+"Anna Mae borlado",1
+"Annie Saiyo/ Ian Robert Saiyo",1
+"Anthony Caincoy",1
+"Anthony Caingcoy",1
+"Antonio Francisco Valisno",1
+Aprilyn,1
+Archie,1
+"Argue salcepuedes",1
+"Aries Accaya",1
+"Arlene Regalado",1
+arlyn,1
+"Arlyn Escal Ambe",1
+"Arnie Duran",1
+Arnold,1
+"Assenehr sanfelipe oiran",1
+"ate cristy",1
+"Ate dang",1
+"Ate Goy",1
+"Ate grace",1
+"ATSS Application Form",1
+"Atss personnel",1
+"Atss tech",1
+"Atss Telecomunnication Services",1
+"atss,kath",1
+"Aubrey Leanne Amparado",1
+Aunt,1
+"Babby renio taico",1
+"Babis renio",1
+"Basas family",1
+"Belen centillas",1
+"Belinda bajado",1
+"Beng Castor",1
+Bernard,1
+"Bernard luspo",1
+Beth,1
+"Beth Bangco",1
+"Bhambie Caballero",1
+"Bing Baylon",1
+Bong,1
+"Boni Oruga",1
+"Brenda Pelareja",1
+Brgy,1
+"Brgy Official",1
+BRIGGS-WIFI,1
+Brigs-Allan,1
+brix,1
+Brother,1
+"Brother Jericho Gadiana",1
+"Bryan Cortis",1
+"Bryan Jay Beo",1
+"carlo cruz",1
+"Carlo Espenilla",1
+"CARLO LADIMO",1
+"Carlo Ornopia",1
+"Carlos Galindez",1
+Carmen,1
+"Caroline Serrano",1
+Catalina,1
+Cath,1
+"Cath Cabalquinto",1
+"Catherine B. Malapote",1
+"Catherine Cabalquinto",1
+"Catherine Ugbana",1
+"Celso Concepcio",1
+"Celso Marqueses",1
+"Chairman Ferdie",1
+"Chairman Lolit",1
+"Chairman Rabe",1
+Chanra,1
+"Cherryl Obrence",1
+"Chona Rosco",1
+"Christel E. Casuyon",1
+"Christian Allan Hernandez",1
+"Christian Dupaya",1
+"Christianne Boso",1
+"Christina aguilar",1
+"Cj andres",1
+"Clark pajunar",1
+co-worker,1
+"Cora Pineclla",1
+COUSIN,1
+Cris,1
+"Crisabelle Darag",1
+Cristina,1
+"Cristina Paula Rodrigo & Nicaella Velasco",1
+"CRISTITA PAGLINAWAN",1
+"Cristy jacento",1
+"Cristy Rayos",1
+Cupang,1
+"CYNTHIA ROQUE",1
+Dahlia,1
+"DAISY HERNO",1
+"Danilo tamayo",1
+"Danreb Divinagracia",1
+"Dapnhi C. Mantilla",1
+"darwin asuncion",1
+"Dave taglucop",1
+daycare,1
+"Delfa Morata",1
+"Denvers Serbano",1
+"Devieanne Montales",1
+"Diosalyn Molera",1
+"Diosdada tatel",1
+Direct,1
+"djoraine bulawan",1
+"Dominga Buce",1
+"Dominga pugasa buce",1
+"Domingo calmante",1
+Donayre,1
+Eddie,1
+"Eddielee bongawan",1
+"Eden Dumapias",1
+"Edgar Pilapil",1
+"Ednalyn opis",1
+"Edrian Laurence Adricula",1
+Eduardo,1
+"Eleina Rosal Baldo",1
+"Elen Joy Gallos Custodio",1
+"Elsie Villamor",1
+"Elvira Perez",1
+"Emelyn Dela cruz",1
+"Emelyn Pleños",1
+"Emily Brina",1
+Emilyn,1
+"Eric mar arcilla",1
+"Eric Sopot",1
+"Erica conception",1
+"Erica villegas",1
+"Ericson Altero",1
+"Erika Salvedia Concepcion",1
+"Ernesto Valenzuela",1
+"Estrada Jasmin",1
+Eula,1
+"Eula Ramos",1
+Evangeline,1
+"Evelyn diaz factor",1
+"Facebook ad",1
+"Facebook post",1
+"Family Neighbor (Mark Justine Banaag)",1
+Fb,1
+"FB page",1
+"Felisa Hinampas",1
+"Felix Noquera",1
+"Ferdie otero",1
+Fernando,1
+Fiber,1
+Firned,1
+Flier,1
+"Flora Mae torrel",1
+Francis,1
+"Francis Dupaya",1
+"Francis Dupya",1
+"Fred Marceño",1
+"Friend of my grandson",1
+"Friend, neighbor",1
+Gemma,1
+"Gemma Alicante",1
+"Gemma Lozada",1
+"Genaro Juluat",1
+"Generic Almario",1
+"Gilbert Radaza",1
+GIRLFRIEND,1
+"Girlie baliling mendiola",1
+"Grace ann Garbo",1
+"Grace Estapia",1
+"Grace Llanera",1
+"Grace peñaranda",1
+"Granemyr Intila",1
+Hannah,1
+"Hanny Salcepuedes",1
+"Harold Baclig",1
+"Harold Bautista",1
+"Hazel Leppago",1
+"HELEN TAMAYO",1
+"Henner Soyosa",1
+Henritabasubas,1
+Hi,1
+"Honeyle Garcia",1
+"House mate",1
+"Hubbert Rival",1
+husband,1
+"I can see in facebook",1
+"I don't know. I gave flyer",1
+"Igmedio  Villanueva",1
+"ILuminada M. Adan",1
+"Installer of Cupang Elementary School Annex",1
+Internet,1
+Irene,1
+"Irene Biros",1
+"James Aaron Bragas (Ron-ron)",1
+"James santaromana",1
+"Jamn deniros",1
+"Janeth Mendez",1
+"Janette afable",1
+"Janica homoc",1
+"Jannarie Palmones",1
+"Jasmin estrada",1
+"Jasmin Leaño",1
+"Jasmin Rodico",1
+"Jasmin Roldan",1
+"Jasmin sy",1
+"Jasmine Alejandro",1
+"Jasmine Selose",1
+"Jay Culanculan",1
+"Jay Joseph Buensalida",1
+"Jay-ar Quidlat",1
+"jayson legson",1
+"Jayson Santos",1
+"Jean  Euden",1
+"Jean Buenavista",1
+"Jefferson Domdom",1
+"Jefrey borbe",1
+"Jeicel Ashley Abagon",1
+"Jenalyn Sanchez",1
+"Jenebelle Dupit",1
+"Jennifer buensalida",1
+"Jennifer escanilla",1
+"Jennifer Rojas Salazar",1
+"Jensin Decio",1
+"Jeric siano",1
+"Jerome Arada",1
+"Jerrelyn Yutila",1
+"Jerwen telen",1
+jerwind0911,1
+"Jessa & Lalaine",1
+"Jessa Yamson",1
+"Jessie barbaroa castillo",1
+"Jessie mijares",1
+"Jessielyn De Leon",1
+"JESUS P. GULFO",1
+"Jezzel lobaton",1
+"Jhayvee prieto",1
+"Jhen Agustin",1
+"Jhon james velasco",1
+"Jhon ray almado felia",1
+"Jimmy Santos",1
+"Jimwel R. Abrantes",1
+"Jizyl Mae Ramilo",1
+"JL Yutila (Friends)",1
+"Joan Bianes",1
+"Joanna Joay Sevial",1
+"Jocelyn Bayate",1
+"Joe Leppago -neighbor",1
+"Joel antonio",1
+"Joel Lamila",1
+John,1
+"John Brix Sangalang",1
+"John Carlo Salamida",1
+"john cyrill paquig",1
+"John Mark Rivera",1
+"John Patrick Requinto",1
+"John Rusell Ampere",1
+"John Sendy Guillermo",1
+"Jon Oadba",1
+"Jonah Avellanosa",1
+"Jonalyn Banaag",1
+"jonathan santos",1
+"Joshua Balanquit",1
+"Joshua Nicart",1
+"Joshua Toong",1
+"Josue D. Quindao",1
+"Jovy velasco",1
+Joy,1
+"Jude Rubio",1
+"Judith delarona",1
+"Judy Ann Aquino",1
+"Julie Capillan",1
+"Julie Dacusin",1
+"Junar Barrun",1
+"June pastrana",1
+"June pencerga",1
+"Junesio Tuazon",1
+Junior,1
+"Juvie ledesma",1
+"Juvilyn Malenab",1
+"Juvy ledesma",1
+"Kathlyne Jane",1
+"Katrina Adona",1
+"Keilyn Española",1
+"Kenneth Villarias",1
+"KEVIN MINERVA",1
+"Khyeeza Arnaiz",1
+"Kim Boncales",1
+"Kim Lester marcelo",1
+"King james banaag",1
+"Kirby Josh punla",1
+"Kobe Cebujano",1
+Krayzel,1
+"Kriss Andres",1
+"Kristina C. Atienza",1
+Lalaine/kath,1
+"Land lord",1
+Landlord,1
+lannie,1
+"Lee Ann Barrios",1
+"Leiya Macabenta",1
+"Lejean manalili",1
+"Lenny Cabutotan",1
+"Leonalyn Calumba",1
+"Leonora piad",1
+"Lerma B. Ayade",1
+"Lester n borja",1
+"Lhen Abellera",1
+Liezel,1
+"Liezel Ramos Gelizon",1
+"Liezel sabanal",1
+"Linda Estorque",1
+"Lita ponggan",1
+"Lito L Laude",1
+"Lolita Batin",1
+"Lorie Lorenzo",1
+"Lorna Buyco",1
+"Lorna Maglahus",1
+"Louie cabiling",1
+"Louie m reyes",1
+lunduyan,1
+"Luz esmedia",1
+"Luzviminda Esmedia",1
+"Luzviminda Ezmedia",1
+"Luzviminda ygrubay esmedia",1
+"Lyn Piguerra",1
+M.penola,1
+"Ma Beatriz Conos",1
+"Ma caridad balagon",1
+"Ma'am Effen Cadion",1
+"Mabhe Ocampo",1
+"Mae muyco",1
+"Manny Salcepuedes",1
+"Manolito Norte hao",1
+"marcela anchuvas",1
+"Marcial Ballesteros",1
+"Maria Panotes",1
+"maria renell arguelles",1
+"Marian Bobis",1
+"Maribel Abellano",1
+"Maribel Jimenez",1
+"Maricar balagon",1
+"Maricel Cruz",1
+"Maricel Laya",1
+"Maricel Quicay",1
+"Mariel Victorio",1
+Marilou,1
+"Marilou Dausin",1
+"Marilou O.Crisostomo",1
+"Marilyn Dela Torre",1
+"Marilyn M nayve",1
+"Marites A. Peñaflor",1
+"Marjorie M. Recto",1
+"Mark boize directo",1
+"Mark Daniel Reynoso",1
+"Mark Formanez",1
+"Mark Jay",1
+"Mark Jay Sister",1
+"Mark jumadioa",1
+"Mark Kevin Garcia",1
+"Marlene Baay",1
+"Marlene Bosano",1
+Marley,1
+"Marlyn Pagtalunan",1
+"Mary  jane dayandante",1
+"Mary Ann demecillo",1
+"Mary Ann Hermosilla",1
+"Mary grace Abad",1
+"Mary Grace B. Galoy",1
+"Mary Grace Babaran Alegria",1
+"Mary Josephine lanceta",1
+"Mary Joy Cruz",1
+"Matthew Godez",1
+"Maxito diones",1
+"May Ann abenoja Indiano",1
+"May ann Indiano",1
+"May neighbors",1
+Melba,1
+"Melva Orapa",1
+"Mercy campos/ lourdes campos",1
+"Merleen Arcibal",1
+"Merlyn Jawod",1
+"Merna Clores Beja",1
+"Michael abelar",1
+"Micheal Abilar",1
+"Michelle Juarez",1
+"Mildred Estiller",1
+"Minerva Gonzales",1
+"mirasol ondes",1
+"Mis che lobaton",1
+"Mitch Santiago",1
+"Monika Cris Inchon",1
+Monique,1
+Mrs,1
+"my cousin",1
+"My friend",1
+"My landlord",1
+Mylyn,1
+"myrene Moscare Orita",1
+N,1
+n/a`,1
+"Nakita ko Lang po sa fb",1
+"Nakita ko sa school an may ATSS,i ask someone na may ATSS din.",1
+Nancy,1
+"Naricel cruz",1
+"Neighbor ( ate che )",1
+Neighbours,1
+"Nelia Linda Tuscano",1
+"Nena abayon valles",1
+"Nenia Villanue Panes",1
+"Nhabie Samad",1
+"Nicole and Josephine",1
+"Nida botero",1
+Nieghbor,1
+"Nita Felizarta",1
+"Nita hate",1
+"Nitchelle Ann Buban",1
+No,1
+"No referrer",1
+noe,1
+"Nollora Family (neighbor)",1
+non,1
+Nonae,1
+"None- with existing account, this is for 2nd account.",1
+"nonoy serillano",1
+nonw,1
+"Norelyn Regalado",1
+"NORMA CURITANA",1
+"Nurmina Baihakki",1
+"old wifi",1
+"Online Ads",1
+"Online time",1
+"Our lady of lourdes",1
+Palmones,1
+Patriarca,1
+"Patrick Perez",1
+"Paul Vincent Sto. Tomas",1
+Paula,1
+"Paulyn Criszel Blas",1
+"PC Adelaida Rabe",1
+"perla elorde",1
+"peter bagual",1
+"Peter Noynay",1
+Philip,1
+"Pia Estrellanes",1
+"purok 3 zone 8 barangay cupang lunduyan",1
+q,1
+"Queen Dalogdog",1
+"Querico Habitan",1
+"Rachell polongasa",1
+"Raffy balmes",1
+"Raffy Martinez",1
+"Rakel Ancheta",1
+"Ramel Luto",1
+Random,1
+"Randy sagnip",1
+"raphael depeña",1
+"RAQUEL Salazar",1
+"Rea Lou Bariguez",1
+"Rebecca Cantalejo",1
+"Rebecca Divina",1
+"recesio rogelio dumaboc",1
+"referred by Honey Nepomuceno",1
+Reiden,1
+"Reiden G. Relleta",1
+"Remelyn De Guzman",1
+Remon,1
+"RENE TIMOLA JR",1
+"Rey Bello",1
+"Reynan Vallar",1
+"Reynante Abejo",1
+"Rhona Cello",1
+"Rhona delfenado cello",1
+"Richel Abasula",1
+"Ricky Merandilla",1
+"Ricky Valeza",1
+Riza,1
+"Riza Aclo",1
+"Rizal abella",1
+"Rizalyn G. Bilamede",1
+"Robelle tores",1
+"rochelle carlos",1
+"Rochelle Ramboyong",1
+"RODA BADAGUAS BORBO",1
+"Rodolfo quitlong",1
+"Roger Delatorre",1
+"Rolly Nalaunan",1
+"Roma guna",1
+"Romel nabasano",1
+"Romeo Artiola Jr",1
+"Rommel A Centeno",1
+"Rommel Aguilar Centeno",1
+Rommelray@gmail.com,1
+"Rona omillano",1
+"Ronald Babis tayco Reño",1
+"Ronan casas",1
+"Ronica Priol",1
+"Rosa maria Baylosis",1
+"Rosalie tabangcura",1
+"Rosalie Velasquez",1
+"Rose Afos",1
+"Rose Marie Garcia",1
+"Roseanne coralde",1
+"Rosemarie Cruzado",1
+"Rossel D. Agcol",1
+"Roy Nesus",1
+"Ruel velasco",1
+"Rufel abanil",1
+"Rufelyn sunugan",1
+"Rusty Cruz",1
+"Rvin Escobar samar",1
+"Rvin samar",1
+"ryan ambis",1
+"Ryan montero",1
+"Sa madaming kuryente",1
+"Sa may madaming kuryente",1
+"Salvacion lara",1
+"Sandy pinca",1
+"Santos larracas",1
+santos01,1
+"Saw it on FB (Kag. Dan Banaag)",1
+"Saw it Online",1
+"Search Online",1
+"Second account",1
+Self,1
+"Shanrey Darag",1
+"Shella Blanco",1
+"sir allan",1
+"Sir Francis",1
+"Sister in Law",1
+"Sitio igiban Dela Torre court",1
+"Soledad Manuel",1
+"Sophia Kyza Lorico",1
+"Sunshine Elardo",1
+Tadifa,1
+"Tech 01",1
+"Tech 4",1
+"Teddy Escomen",1
+"Teddy gardose",1
+"Teddylyn Escomen Bello",1
+"Teresita Samaidio",1
+test,1
+"Thelma Dee",1
+"There is a box of your internet near our house",1
+"Theresa Cayago",1
+"Through fliers",1
+"Through onlie",1
+"Tinielyn Junsay",1
+Tita,1
+"Tru Social Media",1
+"under nurmina",1
+User,1
+"Vanessa Fabula",1
+"Vanessa minerva",1
+"Vea manolong",1
+"Venus Austral",1
+"Vette jo",1
+"via Brochure",1
+"Vicky Mendoza",1
+"Vince Aize Santos",1
+"Violeta pascual",1
+Vivian,1
+"VIVIAN NABERA",1
+Walk,1
+"Walk in or trayckel",1
+Walk/in,1
+Walking,1
+web,1
+wife,1
+"Wilky Jean Dizon",1
+William,1
+"Wilmore Bahade",1
+TOTAL,1404

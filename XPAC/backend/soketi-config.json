@@ -1,0 +1,31 @@
+{
+    "debug": false,
+    "port": 6001,
+    "appManager.driver": "array",
+    "appManager.array.apps": [
+        {
+            "id": "1000001",
+            "key": "8ctWR5PdV1dgM5h6RTGioI8k1hPbl8ImM3P6K3cne5v",
+            "secret": "KsCIAKjsPEWMDj2vWCWs7qYwkXZBUugVfcRjZyPRhJo",
+            "maxConnections": -1,
+            "enableClientMessages": true,
+            "enabled": true,
+            "maxBackendEventsPerSecond": -1,
+            "maxClientEventsPerSecond": -1,
+            "maxReadRequestsPerSecond": -1
+        }
+    ],
+    "cors.credentials": true,
+    "cors.origin": ["*"],
+    "cors.methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "cors.allowedHeaders": [
+        "Origin",
+        "Content-Type",
+        "X-Auth-Token",
+        "X-Requested-With",
+        "Accept",
+        "Authorization",
+        "X-CSRF-TOKEN",
+        "X-Socket-Id"
+    ]
+}

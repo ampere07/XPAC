@@ -1,0 +1,20 @@
+# See public/.htaccess for why this is here: the Authorization header has to
+# survive this hop as well, since this file adds a second internal rewrite in
+# front of it.
+<IfModule mod_setenvif.c>
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+</IfModule>
+
+# Redirect all requests to the /public directory
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # If the request is not already pointing to /public
+    RewriteCond %{REQUEST_URI} !^/public/
+
+    # Redirect everything to the public folder
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

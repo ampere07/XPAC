@@ -1,0 +1,15 @@
+# API Configuration for Local Development
+REACT_APP_API_BASE_URL=https://backend.atssfiber.ph/api
+EXPO_PUBLIC_API_BASE_URL=https://backend.atssfiber.ph/api
+
+# Security - Encryption Key for Secure Storage
+REACT_APP_STORAGE_ENCRYPTION_KEY=810dec70ac762744fb6d6fdcf3e45b517168a4f6027d8126a5222ed3b48a2b31
+EXPO_PUBLIC_STORAGE_ENCRYPTION_KEY=810dec70ac762744fb6d6fdcf3e45b517168a4f6027d8126a5222ed3b48a2b31
+
+# Session Timeout (8 hours in milliseconds)
+REACT_APP_SESSION_TIMEOUT=28800000
+EXPO_PUBLIC_SESSION_TIMEOUT=28800000
+
+# Feature Flags
+REACT_APP_ENABLE_LOGGING=true
+EXPO_PUBLIC_ENABLE_LOGGING=true

@@ -1,0 +1,31 @@
+{
+  "name": "ampere-cloud-business-management-system",
+  "version": "1.0.0",
+  "description": "Full-stack business management application with Laravel backend and React frontend",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:frontend": "cd frontend && npm start",
+    "start:backend": "cd backend && npm start",
+    "install:all": "npm run install:frontend && npm run install:backend",
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && npm install && composer install",
+    "build": "cd frontend && npm run build",
+    "dev": "npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "business-management",
+    "laravel",
+    "react",
+    "typescript",
+    "fullstack"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "mysql2": "^3.22.3"
+  }
+}
