@@ -73,7 +73,7 @@ export async function startTechLocationUpdates(): Promise<void> {
     // Android: a persistent foreground-service notification is what keeps location
     // flowing when the app is backgrounded AND after it is swiped from recents.
     foregroundService: {
-      notificationTitle: 'ATSS location sharing active',
+      notificationTitle: 'XPAC location sharing active',
       notificationBody: 'Sharing your live location with dispatch while you are on duty.',
       notificationColor: '#7c3aed',
       killServiceOnDestroy: false,

@@ -363,10 +363,10 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
                     ) : (
                         <View style={s.logoFallbackRow}>
                             <View style={[s.logoCircle, { backgroundColor: '#ffffff' }]}>
-                                <Text style={[s.logoLetter, { color: colorPalette?.primary || '#ef4444' }]}>A</Text>
+                                <Text style={[s.logoLetter, { color: colorPalette?.primary || '#ef4444' }]}>X</Text>
                             </View>
                             <Text style={s.logoText}>
-                                ATSS <Text style={s.logoTextBold}>PORTAL</Text>
+                                XPAC <Text style={s.logoTextBold}>PORTAL</Text>
                             </Text>
                         </View>
                     )}

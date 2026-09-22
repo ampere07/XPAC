@@ -421,7 +421,7 @@ const ReleaseNotes: React.FC<ReleaseNotesProps> = ({ onBack }) => {
             <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.introBox}>
                     <Text style={[styles.introText, { color: '#475569' }]}>
-                        Keep track of the latest features, improvements, and bug fixes in the ATSS Portal.
+                        Keep track of the latest features, improvements, and bug fixes in the XPAC Portal.
                     </Text>
                 </View>
 

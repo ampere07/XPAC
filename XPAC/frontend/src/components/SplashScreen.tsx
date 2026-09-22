@@ -36,7 +36,7 @@ const SplashScreen: React.FC = () => {
       }}>
         <img
           src={atsslogo}
-          alt="ATSS Fiber Logo"
+          alt="XPAC Fiber Logo"
           style={{
             height: '80px',
             marginBottom: '10px'
