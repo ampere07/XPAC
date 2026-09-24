@@ -87,8 +87,8 @@ interface MultiStepFormProps {
 const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEditButton = false, onLayoutChange, currentLayout = 'multistep', isEditMode: externalIsEditMode, onEditModeChange, requireFields = true }, ref) => {
   const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.xpacsconnect.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
-  const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
-  const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
+  const COVERAGE_CENTER = { lat: 15.787124124642782, lng: 120.45190419803266 }; // Zamboanga City
+  const COVERAGE_RADIUS = 30000; // 25km in meters - covers Zamboanga area
 
   const [currentStep, setCurrentStep] = useState(1);
   const [showMapModal, setShowMapModal] = useState(false);

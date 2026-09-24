@@ -94,8 +94,8 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
   } = props;
   const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.xpacsconnect.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
-  const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
-  const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
+  const COVERAGE_CENTER = { lat: 15.787124124642782, lng: 120.45190419803266 }; // Zamboanga City
+  const COVERAGE_RADIUS = 30000; // 25km in meters - covers Zamboanga area
 
   const [showMapModal, setShowMapModal] = useState(false);
   const [mapCenter, setMapCenter] = useState(COVERAGE_CENTER);
