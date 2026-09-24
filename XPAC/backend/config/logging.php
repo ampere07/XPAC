@@ -63,25 +63,6 @@ return [
             'level' => env('LOG_LEVEL', 'debug'),
         ],
 
-        /*
-        | What went wrong on the customer's device.
-        |
-        | The dashboard's balance card fails in the browser, where nothing on
-        | this server can see it — the request the customer's phone could not
-        | complete never arrives to be logged. A fault nobody can reproduce is
-        | then invisible: the endpoint answers correctly for everyone who tries
-        | it, and the customer is left looking at "Balance unavailable".
-        |
-        | Kept in its own file rather than laravel.log so it can be read on its
-        | own, and rotated because it is written by clients rather than by us.
-        */
-        'client' => [
-            'driver' => 'daily',
-            'path' => storage_path('logs/customer-dashboard.log'),
-            'level' => 'debug',
-            'days' => 14,
-        ],
-
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
@@ -140,17 +121,7 @@ return [
         'billing' => [
             'driver' => 'daily',
             'path' => storage_path('logs/billinggeneration.log'),
-            /*
-             * Explicit, not LOG_LEVEL.
-             *
-             * Its only writer is EnhancedBillingGenerationServiceWithNotifications, which
-             * now decides for itself what is worth recording (App\Support\CronLog) and
-             * drops the narration before it ever reaches here. Leaving this on LOG_LEVEL
-             * — `error` in this deployment — would additionally discard the per-run
-             * account summaries, which are not errors and are the whole point of the
-             * change.
-             */
-            'level' => 'debug',
+            'level' => env('LOG_LEVEL', 'debug'),
             'days' => 30,
         ],
 

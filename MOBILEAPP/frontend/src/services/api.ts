@@ -6,10 +6,20 @@ import {
   ApplicationsResponse
 } from '../types/api';
 
-export const login = async (email: string, password: string): Promise<LoginResponse> => {
+/**
+ * Technicians are allowed one live session. If the account is already signed in on another
+ * device the request rejects with a 409 carrying require_confirmation, and the caller has to
+ * re-submit with forceLogin true to end that other session first. Other roles never see it.
+ */
+export const login = async (
+  email: string,
+  password: string,
+  forceLogin: boolean = false
+): Promise<LoginResponse> => {
   const response = await apiClient.post<LoginResponse>('/login', {
     email,
-    password
+    password,
+    force_login: forceLogin
   });
   return response.data;
 };

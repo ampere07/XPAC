@@ -19,7 +19,6 @@ import {
 } from '../services/agentInvoiceService';
 import { usePermissions } from '../hooks/usePermissions';
 import AgentPayoutModal from '../modals/AgentPayoutModal';
-import { ROLE } from '../config/permissions';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 
 /**
@@ -139,16 +138,11 @@ const AgentInvoice: React.FC = () => {
   /**
    * Whether this user may change an invoice's status, or run the generation.
    *
-   * Administrators and superadmins only, resolved through usePermissions so
-   * this page cannot disagree with the bar about who somebody is. The server
-   * enforces it independently; this only decides whether the control is worth
-   * drawing. False until permissions have loaded, so the control never appears
-   * and then vanishes.
+   * One key each (seeded: Administrator and SuperAdmin). The server enforces
+   * the same keys independently; this only decides whether the control is
+   * worth drawing. False until the stored user has loaded, so the control
+   * never appears and then vanishes.
    */
-  // The API demands these keys, so the buttons ask for them rather than for a
-  // role id. The two seeded administrative roles hold both, so nothing changes
-  // for them — a hybrid role granted the keys is no longer locked out, and the
-  // two clients no longer disagree about who may do this.
   const canGenerate = permissionsReady && can('agent-invoices.generate');
   const canEditStatus = permissionsReady && can('agent-invoices.status');
   const canPayOut = permissionsReady && can('agent-invoices.payout');

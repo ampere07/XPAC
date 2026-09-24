@@ -22,6 +22,9 @@ class ApplicationVisitController extends Controller
             }
             
             $visits = $query->get();
+
+            // One query for every agent-id referral in the list.
+            \App\Support\AgentReferral::prime($visits->map(fn ($v) => optional($v->application)->referred_by));
             
             $visitsWithApplicationData = $visits->map(function ($visit) {
                 $application = $visit->application;
@@ -66,7 +69,7 @@ class ApplicationVisitController extends Controller
                     // Shown as a name; the id travels beside it so an edit form can
                     // write the same referral back instead of turning it into a name.
                     'referred_by' => \App\Support\AgentReferral::displayName($application ? $application->referred_by : null),
-                    'referred_by_agent_id' => \App\Support\AgentReferral::agentId($application ? $application->referred_by : null),
+                    'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($application ? $application->referred_by : null),
                     'first_name' => $application ? $application->first_name : null,
                     'middle_initial' => $application ? $application->middle_initial : null,
                     'last_name' => $application ? $application->last_name : null,

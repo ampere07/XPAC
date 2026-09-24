@@ -3,7 +3,6 @@ import { Search, Plus, Edit2, Trash2, Filter, Loader2 } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import AddRouterModelModal from '../modals/AddRouterModelModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { authFetch } from '../config/api';
 import { usePageActions } from '../hooks/usePageActions';
 
 interface RouterModel {
@@ -97,7 +96,10 @@ const RouterModelList: React.FC = () => {
     try {
       console.log('Loading routers from API:', `${API_BASE_URL}/router-models`);
 
-      const response = await authFetch(`${API_BASE_URL}/router-models`, {
+      const response = await fetch(`${API_BASE_URL}/router-models`, {
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking.
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -143,8 +145,9 @@ const RouterModelList: React.FC = () => {
     });
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/router-models/${router.SN}`, {
+      const response = await fetch(`${API_BASE_URL}/router-models/${router.SN}`, {
         method: 'DELETE',
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',

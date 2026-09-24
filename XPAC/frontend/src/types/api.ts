@@ -13,6 +13,8 @@ export interface LoginResponse {
       permissions?: string[] | null;
       /** The section this role lands on after signing in. */
       home?: string | null;
+      /** A custom role saved before per-action keys existed. */
+      permissions_legacy?: boolean;
       organization?: {
         id: number;
         name: string;
@@ -20,6 +22,16 @@ export interface LoginResponse {
     };
     token: string;
   };
+}
+
+/**
+ * Body of the 409 the login endpoint returns when a technician is already signed in on
+ * another device. The login is not completed until it is re-submitted with force_login.
+ */
+export interface SessionConflictResponse {
+  status: string;
+  require_confirmation?: boolean;
+  message: string;
 }
 
 export interface ForgotPasswordResponse {
@@ -51,12 +63,22 @@ export interface UserData {
   role_id: number;
   organization_id?: number | null;
   /**
-   * The role's effective permission keys, resolved server side — see
-   * backend/app/Support/Permissions.php. `['*']` for a SuperAdmin.
+   * The role's effective permission keys, resolved server side (see
+   * backend/app/Support/Permissions.php). `['*']` for a SuperAdmin.
    */
   permissions?: string[] | null;
   /** The section this role lands on after signing in, e.g. "job-order". */
   home?: string | null;
+  /**
+   * Whether `permissions` is the server's resolved list rather than a custom
+   * role's raw stored row (see AuthLike in config/permissions.ts).
+   */
+  permissions_resolved?: boolean;
+  /**
+   * A custom role saved before per-action keys existed; it keeps the bell's
+   * shortcuts (see LEGACY_CUSTOM_REACHABLE in config/permissions.ts).
+   */
+  permissions_legacy?: boolean;
   organization?: {
     id: number;
     name: string;
@@ -69,6 +91,8 @@ export interface User {
   first_name: string;
   middle_initial?: string;
   last_name: string;
+  // Appended by the backend User model (first + middle initial + last).
+  full_name?: string;
   username: string;
   email_address: string;
   contact_number?: string;
@@ -125,21 +149,28 @@ export interface Role {
   description?: string;
   /**
    * The seeded role (1-8) this custom role inherits from, or null for a
-   * standalone one. A "hybrid" role holds its base role's keys — resolved live
-   * on the server, never copied into `permissions` — plus the ones below.
+   * standalone one. Inherited keys are resolved live on the server, never
+   * copied into `permissions`.
    */
   base_role_id?: number | null;
-  /** Only the keys ticked against this role; a hybrid's inherited keys are not here. */
-  permissions?: string;
   /**
-   * What the role effectively holds, as the server resolves it.
-   *
-   * The same list as `permissions` for a role saved from the current modal. For
-   * one saved before the per-action keys existed it also carries the buttons
-   * that page used to grant, so Role Management can show them ticked rather
-   * than revoking them on the next save. Seed the modal from this.
+   * Only the keys ticked against this role; a hybrid's inherited keys are not
+   * here. An array from Laravel's cast, or a JSON / comma-separated string on
+   * a row written before that cast existed.
+   */
+  permissions?: string | string[] | null;
+  /**
+   * What the role effectively holds, as the server resolves it (grandfathered
+   * actions of a role saved before per-action keys included, the inherited
+   * half excluded). Role Management seeds its checkboxes from this.
    */
   effective_permissions?: string[] | null;
+  /**
+   * The permission-model generation the row was last saved under. Below
+   * CURRENT_VERSION (or absent, on a backend without the column) the role was
+   * saved before per-action keys existed.
+   */
+  permissions_version?: number | null;
   created_at: string;
   updated_at: string;
   organization_id?: number | null;

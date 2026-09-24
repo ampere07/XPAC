@@ -15,28 +15,6 @@ interface ModalConfig {
     onCancel?: () => void;
 }
 
-/**
- * A key identifying one attempt to send one blast.
- *
- * Sent with the request so the server can tell a retry of THIS blast from a genuinely new one.
- * Queueing now returns in milliseconds instead of the minute the synchronous send took, which
- * removes the long wait that used to discourage a second click -- so the window for an accidental
- * double submit is wider than it was, not narrower. The key is what stops the second one texting
- * every subscriber again.
- *
- * crypto.randomUUID is unavailable on http:// origins and in older WebViews, hence the fallback;
- * the value only has to be unique per compose session, not cryptographically strong.
- */
-const newIdempotencyKey = (): string => {
-    const cryptoApi = typeof crypto !== 'undefined' ? (crypto as any) : undefined;
-
-    if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
-        return cryptoApi.randomUUID();
-    }
-
-    return `blast-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-};
-
 interface AddSMSBlastModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -53,9 +31,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const messageRef = useRef<HTMLTextAreaElement>(null);
-    // One key per compose session. Held in a ref so a re-render -- the loading percentage ticks
-    // several times a second -- cannot hand the retry a different key than the first attempt used.
-    const idempotencyKeyRef = useRef<string>(newIdempotencyKey());
 
     const [formData, setFormData] = useState({
         message: '',
@@ -118,9 +93,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
 
     useEffect(() => {
         if (isOpen) {
-            // A fresh compose session, so a fresh key: reopening the modal to send the same message
-            // again is a deliberate second blast, and must not be mistaken for a retry of the first.
-            idempotencyKeyRef.current = newIdempotencyKey();
             loadAllData();
         }
     }, [isOpen]);
@@ -240,7 +212,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
 
             const payload: any = {
                 message: formData.message,
-                idempotency_key: idempotencyKeyRef.current,
                 ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
             };
 
@@ -264,22 +235,17 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
             await new Promise(resolve => setTimeout(resolve, 500));
 
             const resp: any = response?.data || {};
-            // The response reports what was QUEUED, not what was sent -- nothing has been sent yet
-            // when it returns. The old check read summary.sent, which no longer exists, and a
-            // missing field compared as 0, so every successful blast would warn "Saved (Not Sent)"
-            // about messages that were about to go out perfectly well.
-            const queuedCount = Number(resp.data?.queued_count ?? resp.summary?.queued ?? 0);
-            // The one case still worth a warning: the target matched nobody, so nothing will ever
-            // be sent and the operator has almost certainly picked the wrong LCPNAP or barangay.
-            const noRecipients = queuedCount === 0;
-            const isProblem = resp.status === 'error' || noRecipients;
+            const summary = resp.summary;
+            // Treat "saved but nothing actually sent" as a warning, not a success.
+            const nothingSent = summary && summary.recipients > 0 && summary.sent === 0;
+            const noRecipients = summary && summary.recipients === 0;
+            const isProblem = resp.status === 'error' || nothingSent || noRecipients;
 
             setModal({
                 isOpen: true,
                 type: isProblem ? 'warning' : 'success',
-                title: isProblem ? 'SMS Blast Saved (No Recipients)' : 'Queued for Sending',
-                message: resp.message
-                    || `SMS Blast queued successfully for ${queuedCount} recipient(s). Processing in background.`,
+                title: isProblem ? 'SMS Blast Saved (Not Sent)' : 'Success',
+                message: resp.message || 'SMS Blast created successfully!',
                 onConfirm: () => {
                     onSave();
                     onClose();
@@ -579,7 +545,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             <div className="max-h-60 overflow-y-auto custom-scrollbar">
                                                 {lcpnapList
                                                     .filter(item => item.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase()))
-                                                    .sort((a, b) => a.lcpnap_name.localeCompare(b.lcpnap_name, undefined, { numeric: true, sensitivity: 'base' }))
                                                     .map((item) => (
                                                         <div
                                                             key={item.id}
@@ -651,7 +616,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             <div className="max-h-60 overflow-y-auto custom-scrollbar">
                                                 {lcpList
                                                     .filter(item => item.lcp_name.toLowerCase().includes(lcpSearch.toLowerCase()))
-                                                    .sort((a, b) => a.lcp_name.localeCompare(b.lcp_name, undefined, { numeric: true, sensitivity: 'base' }))
                                                     .map((item) => (
                                                         <div
                                                             key={item.id}
@@ -723,7 +687,6 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             <div className="max-h-60 overflow-y-auto custom-scrollbar">
                                                 {barangayList
                                                     .filter(item => item.barangay.toLowerCase().includes(barangaySearch.toLowerCase()))
-                                                    .sort((a, b) => a.barangay.localeCompare(b.barangay, undefined, { numeric: true, sensitivity: 'base' }))
                                                     .map((item) => (
                                                         <div
                                                             key={item.id}

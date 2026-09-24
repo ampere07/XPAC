@@ -186,6 +186,32 @@ export const agentOwnsReferral = (
   return createAgentReferralMatcher(fullName, email, agentId)(referredByRaw);
 };
 
+/**
+ * The referral value to hand an ownership matcher, for a record from the API.
+ *
+ * The GOWISER API resolves Referred_By / referred_by to the agent's NAME for
+ * display, and sends what is actually stored beside it: Referred_By_Raw on job
+ * orders, and the agent id (Referred_By_Agent_ID / referred_by_agent_id /
+ * referredByAgentId) wherever it could read one. Matching against the display
+ * name would fall back to the tolerant name test for a referral that names one
+ * account exactly — and two agents sharing a name would each see the other's.
+ * So the stored value wins; the display name is only used when neither was sent.
+ *
+ * The id fields are only emitted when the stored value IS that number, so
+ * returning the id is the same as returning the stored value.
+ */
+export const storedReferralOf = (record: any): string => {
+  if (!record) return '';
+
+  const raw = record.Referred_By_Raw ?? record.referred_by_raw;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') return String(raw);
+
+  const id = record.Referred_By_Agent_ID ?? record.referred_by_agent_id ?? record.referredByAgentId;
+  if (id !== undefined && id !== null && id !== '' && agentReferralId(id) !== null) return String(id);
+
+  return String(record.Referred_By || record.referred_by || record.referredBy || '');
+};
+
 // Normalized onsite status of a job order.
 export const getOnsiteStatus = (jo: any): string =>
   String(jo?.Onsite_Status || jo?.onsite_status || '').toLowerCase().trim();

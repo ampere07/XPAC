@@ -5,7 +5,6 @@ import { API_BASE_URL } from '../config/api';
 import AddPaymentMethodModal from '../modals/AddPaymentMethodModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
-import { authFetch } from '../config/api';
 import { usePageActions } from '../hooks/usePageActions';
 
 interface PaymentMethod {
@@ -151,7 +150,7 @@ const PaymentMethodList: React.FC = () => {
   const loadPaymentMethods = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const response = await authFetch(`${API_BASE_URL}/payment-methods`, {
+      const response = await fetch(`${API_BASE_URL}/payment-methods`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -201,7 +200,7 @@ const PaymentMethodList: React.FC = () => {
     showGlobalModal('loading', 'Deleting', `Removing payment method "${paymentMethod.payment_method}"...`);
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/payment-methods/${paymentMethod.id}`, {
+      const response = await fetch(`${API_BASE_URL}/payment-methods/${paymentMethod.id}`, {
         method: 'DELETE',
         headers: {
           'Accept': 'application/json',

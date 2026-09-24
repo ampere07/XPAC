@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../config/api';
 import { WorkOrderData } from '../types/workOrder';
 
@@ -88,26 +87,6 @@ export const updateWorkOrder = async (id: string | number, workOrderData: Partia
     return response.data;
   } catch (error) {
     console.error('Error updating work order:', error);
-    throw error;
-  }
-};
-
-/**
- * Release a work order to its technician ahead of their queue.
- *
- * Administrator-only on the server, so the flag cannot be flipped by the
- * technician whose queue it governs.
- */
-export const enableWorkOrderForTechnician = async (id: string | number) => {
-  try {
-    const idStr = id.toString();
-    const authData = await AsyncStorage.getItem('authData');
-    const currentUser = authData ? JSON.parse(authData) : null;
-    const payload = currentUser?.email ? { updated_by: currentUser.email } : {};
-    const response = await apiClient.post<ApiResponse<any>>(`/work-orders/${idStr}/enable-technician`, payload);
-    return response.data;
-  } catch (error) {
-    console.error('Error enabling work order for technician:', error);
     throw error;
   }
 };

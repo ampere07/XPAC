@@ -276,42 +276,6 @@ class SmartOltReconciliationController extends Controller
     }
 
     /**
-     * POST /api/smartolt-reconciliation/replace-sn
-     *
-     * Swap the hardware behind one provisioned ONU. Validate, delegate, respond -
-     * every guard, every SmartOLT call and the billing write all live in the service.
-     *
-     * A refusal answers 422 with the reason the operator needs, not a 500: "that
-     * serial is already on ONU 412" and "SmartOLT is rate limiting" are both normal
-     * operating conditions the modal has to be able to show.
-     */
-    public function replaceSn(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'external_id' => ['required', 'string', 'max:190'],
-            // Vendor serials are alphanumeric with the occasional separator. Bounded
-            // and character-restricted here so nothing unexpected reaches the API URL
-            // or the billing column.
-            'new_sn' => ['required', 'string', 'min:4', 'max:64', 'regex:/^[A-Za-z0-9:_\-]+$/'],
-            'technical_detail_id' => ['nullable', 'integer', 'min:1'],
-        ]);
-
-        $result = $this->service->replaceOnuSn(
-            $validated['external_id'],
-            $validated['new_sn'],
-            $validated['technical_detail_id'] ?? null,
-            $this->organizationId($request)
-        );
-
-        return response()->json([
-            'success' => (bool) $result['success'],
-            'skipped' => (bool) ($result['skipped'] ?? false),
-            'message' => $result['message'],
-            'data'    => $result['data'] ?? [],
-        ], $result['success'] ? 200 : 422);
-    }
-
-    /**
      * POST /api/smartolt-reconciliation/undo
      */
     public function undo(Request $request): JsonResponse

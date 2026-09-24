@@ -27,7 +27,13 @@ import DashboardContent from '../components/DashboardContent';
 import AccessDenied from '../components/AccessDenied';
 import apiClient from '../config/api';
 import { usePermissions } from '../hooks/usePermissions';
-import { homeSectionFor, permissionForSection } from '../config/permissions';
+import {
+    SHELL_PREFETCH_KEYS,
+    homeSectionFor,
+    permissionForSection,
+    permissionsAllow,
+    permissionsFor,
+} from '../config/permissions';
 // import UserManagement from './UserManagement';
 // import OrganizationManagement from './OrganizationManagement';
 // import { BillingProvider } from '../contexts/BillingContext';
@@ -67,14 +73,6 @@ import SOAGeneration from './SOAGeneration';
 import Settings from './Settings';
 import PaymentMethodList from './PaymentMethodList';
 import UsageTypeList from './UsageTypeList';
-import VlanList from './VlanList';
-import RadiusQueue from './RadiusQueue';
-import AgentInvoice from './AgentInvoice';
-import ModemRouterLogs from './ModemRouterLogs';
-import BillingReconcileTool from './BillingReconcileTool';
-import XenditReconcileTool from './XenditReconcileTool';
-import MikrotikRadiusTool from './MikrotikRadiusTool';
-import SmartOltTool from './SmartOltTool';
 import WorkCategoryList from './WorkCategoryList';
 import StatusRemarksList from './StatusRemarksList';
 import RouterModelList from './RouterModelList';
@@ -120,6 +118,7 @@ import AgentHistory from './AgentHistory';
 import Achievement from './Achievement';
 import Commission from './Commission';
 import AgentPayout from './AgentPayout';
+import AgentInvoice from './AgentInvoice';
 import Bills from './Bills';
 import Menu from './Menu';
 import ApplicationForm from './ApplicationForm';
@@ -137,14 +136,10 @@ interface DashboardProps {
 
 const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     usePushNotifications();
-    // Technician live-location tracking (feeds the LiveMonitor widget). Only starts for logged-in
-    // technicians, and only after they accept the in-app location disclosure.
+    // Technician live-location tracking (feeds the LiveMonitor widget). Only starts for logged-in technicians.
     useLocationTracking();
     const [userData, setUserData] = useState<any>(null);
     const [activeSection, setActiveSection] = useState('dashboard');
-    // Permissions for the signed-in user. `userData` is loaded below; passing it
-    // in means this does not read AsyncStorage a second time.
-    const { can, home, ready: permissionsReady } = usePermissions(userData);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -153,6 +148,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     const [isTechModalOpen, setIsTechModalOpen] = useState(false);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [billsInitialTab, setBillsInitialTab] = useState<'soa' | 'invoices' | 'payments'>('soa');
+    // Permissions for the signed-in user. `userData` is loaded below; passing it
+    // in means this does not read AsyncStorage a second time.
+    const { can, home, ready: permissionsReady } = usePermissions(userData);
+    /**
+     * Which of the shell providers' lists to load on sign-in. Each is loaded
+     * only for a user the API would serve it to (SHELL_PREFETCH_KEYS); for
+     * anyone else no screen they can open reads it. Worked out from userData
+     * itself, which is set in the same render that mounts the providers, so a
+     * role holding the key starts its fetch exactly when it always has.
+     */
+    const shellPrefetch = useMemo(() => {
+        const held = permissionsFor(userData);
+        return {
+            applications: permissionsAllow(held, SHELL_PREFETCH_KEYS.applications),
+            jobOrders: permissionsAllow(held, SHELL_PREFETCH_KEYS.jobOrders),
+            serviceOrders: permissionsAllow(held, SHELL_PREFETCH_KEYS.serviceOrders),
+            inventory: permissionsAllow(held, SHELL_PREFETCH_KEYS.inventory),
+        };
+    }, [userData]);
     // const [customerInitialSearch, setCustomerInitialSearch] = useState('');
     // const [customerAutoOpenAccountNo, setCustomerAutoOpenAccountNo] = useState('');
     const isDarkMode = false; // Forced light mode as per user request
@@ -165,6 +179,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     }, []);
 
     useEffect(() => {
+        // Set on unmount (sign-out). A /me/permissions answer that lands after
+        // that must not write authData back, or the next launch would find a
+        // "signed-in" user whose session and cookies are already gone.
+        let unmounted = false;
+
         const initializeUserData = async () => {
             try {
                 const authData = await AsyncStorage.getItem('authData');
@@ -172,40 +191,60 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     const user = JSON.parse(authData);
                     setUserData(user);
 
-                    // Where this role lands, from the shared table.
-                    //
-                    // The ladder this replaced had drifted: it read role_id 4
-                    // (Agent) as "technician" and role_id 7 (SuperAdmin) as
-                    // "headtech", so an agent whose role name was missing landed
-                    // on Job Order and a SuperAdmin landed on Application
-                    // Management instead of the dashboard.
-                    setActiveSection(homeSectionFor(user));
+                    // Where this role lands. Seeded roles keep the screen they
+                    // have always opened on (config/permissions MOBILE_ROLE_HOME);
+                    // a custom role lands on a page it holds.
+                    const initialHome = homeSectionFor(user);
+                    setActiveSection(initialHome);
 
                     // Reconcile against the server, which is the authority on
                     // what this role holds. The stored list is a snapshot taken
                     // at sign-in; asking once per launch means a role edited
                     // while somebody is signed in takes effect on their next
-                    // launch rather than their next sign-in.
-                    //
-                    // Failure is not fatal — the stored list, or the role table
-                    // for a seeded role, carries on being used.
-                    try {
-                        const response = await apiClient.get<{
-                            success: boolean;
-                            data: { permissions: string[]; home: string | null };
-                        }>('/me/permissions');
+                    // launch. Not awaited, so the first screen does not wait on
+                    // the network, and failure is not fatal: the stored list, or
+                    // the role table for a seeded role, carries on being used.
+                    apiClient.get<{
+                        success: boolean;
+                        data: { role_id?: number; role?: string; permissions: string[]; home: string | null };
+                    }>('/me/permissions')
+                        .then(async (response) => {
+                            const fresh = response.data?.data;
+                            if (unmounted || !response.data?.success || !Array.isArray(fresh?.permissions)) return;
 
-                        const fresh = response.data?.data;
+                            // Merge into what is stored now, not the launch
+                            // snapshot, and only while the same user is still
+                            // signed in.
+                            const currentRaw = await AsyncStorage.getItem('authData');
+                            if (unmounted || !currentRaw) return;
+                            const current = JSON.parse(currentRaw);
+                            if (current?.id !== user.id) return;
 
-                        if (response.data?.success && Array.isArray(fresh?.permissions)) {
-                            const updated = { ...user, permissions: fresh.permissions, home: fresh.home };
-                            setUserData(updated);
+                            // The role itself may have changed since sign-in; a
+                            // seeded role is answered from the table by role_id,
+                            // so a stale id would keep the old role's screens.
+                            const freshRoleId = Number(fresh.role_id);
+                            const updated = {
+                                ...current,
+                                ...(Number.isFinite(freshRoleId) && freshRoleId > 0 ? { role_id: freshRoleId } : {}),
+                                ...(typeof fresh.role === 'string' && fresh.role !== '' ? { role: fresh.role } : {}),
+                                permissions: fresh.permissions,
+                                home: fresh.home ?? null,
+                            };
                             await AsyncStorage.setItem('authData', JSON.stringify(updated));
-                            setActiveSection(homeSectionFor(updated));
-                        }
-                    } catch (err) {
-                        console.error('Failed to refresh permissions:', err);
-                    }
+                            if (unmounted) return;
+                            setUserData(updated);
+                            // Only move somebody who is still on the screen they
+                            // were first shown.
+                            const nextHome = homeSectionFor(updated);
+                            setActiveSection(prev => (prev === initialHome ? nextHome : prev));
+                        })
+                        .catch((err) => {
+                            // Expected while the backend predates this endpoint
+                            // (404) or the session has lapsed (401): the stored
+                            // list, or the role table, stays in use.
+                            console.warn('Failed to refresh permissions:', err?.response?.status ?? err?.message ?? err);
+                        });
                 }
             } catch (error) {
                 console.error('Error parsing user data:', error);
@@ -215,6 +254,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         };
 
         initializeUserData();
+
+        return () => {
+            unmounted = true;
+        };
     }, []);
 
 
@@ -253,16 +296,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         }
     }, [width]);
 
-    /**
-     * The section guard.
-     *
-     * There is no URL to type here, but a section is still reachable from more
-     * than the tab bar — a push notification's deep link, a button on another
-     * screen, a restored session — so the check belongs at the point the
-     * section is rendered rather than at the point it is listed. It is the same
-     * key the API will demand a moment later.
-     */
     const content = useMemo(() => {
+        /**
+         * The section guard. A section is reachable from more than the tab bar
+         * (a button on another screen, a restored session), so the check sits
+         * where the section is rendered. It is the same key the API demands.
+         */
         if (permissionsReady && !can(permissionForSection(activeSection))) {
             return <AccessDenied section={activeSection} onGoHome={() => handleSectionChange(home)} />;
         }
@@ -277,6 +316,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <Commission />;
             case 'agent-payout':
                 return <AgentPayout />;
+            case 'agent-invoices':
+                return <AgentInvoice />;
             case 'agent-history':
                 return <AgentHistory />;
             case 'achievement':
@@ -303,25 +344,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <PaymentMethodList />;
             case 'usage-type-list':
                 return <UsageTypeList />;
-            // Named for the permission key rather than given a "-list" suffix
-            // like its neighbours, so it needs no SECTION_PERMISSION_OVERRIDES
-            // entry — the section id and the key it is guarded by are one string.
-            case 'vlan-config':
-                return <VlanList />;
-            case 'radius-queue':
-                return <RadiusQueue />;
-            case 'agent-invoices':
-                return <AgentInvoice />;
-            case 'modem-router-logs':
-                return <ModemRouterLogs />;
-            case 'billing-reconcile-tool':
-                return <BillingReconcileTool />;
-            case 'xendit-reconcile-tool':
-                return <XenditReconcileTool />;
-            case 'mikrotik-radius-tool':
-                return <MikrotikRadiusTool />;
-            case 'smartolt-tool':
-                return <SmartOltTool />;
             case 'work-category-list':
                 return <WorkCategoryList />;
             case 'status-remarks-list':
@@ -371,7 +393,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             case 'live-monitor':
                 return <LiveMonitor />;
             case 'applicationManagement':
-                return <ApplicationManagement onNavigate={handleSectionChange} onLogout={onLogout} />;
+                return <ApplicationManagement />;
             case 'applicationVisit':
                 return <ApplicationVisit />;
             case 'activity-logs':
@@ -474,7 +496,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
     };
 
     const handleOpenChat = async () => {
-        const webUrl = 'https://m.me/atssfiber';
+        const webUrl = 'https://m.me/gowiserzc';
         const messengerAppUrl = 'fb-messenger://user-thread/';
         try {
             const canOpenMessenger = await Linking.canOpenURL(messengerAppUrl);
@@ -510,12 +532,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
         //                         <DCNoticeProvider>
         //                             <StaggeredPaymentProvider>
         //                                 <DiscountProvider>
-        <ApplicationProvider>
+        <ApplicationProvider prefetch={shellPrefetch.applications}>
             <CustomerDataProvider>
                 {/* <ApplicationVisitProvider> */}
-                <JobOrderProvider>
-                    <ServiceOrderProvider>
-                        <InventoryProvider>
+                <JobOrderProvider prefetch={shellPrefetch.jobOrders}>
+                    <ServiceOrderProvider prefetch={shellPrefetch.serviceOrders}>
+                        <InventoryProvider prefetchItems={shellPrefetch.inventory}>
                             <View style={{
                                 height: '100%',
                                 flexDirection: 'column',
@@ -543,6 +565,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                                         userRole={userData?.role || ''}
                                         userEmail={userData?.email || ''}
                                         roleId={userData?.role_id}
+                                        auth={userData}
                                     />
                                 )}
 

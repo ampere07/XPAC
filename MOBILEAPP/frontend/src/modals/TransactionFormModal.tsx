@@ -1,23 +1,7 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  ScrollView,
-  Modal,
-  Image,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ImagePicker from 'expo-image-picker';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { Calendar, ChevronDown, ChevronLeft, Minus, Plus, Camera, X } from 'lucide-react-native';
+import { Calendar, ChevronDown, Minus, Plus, Camera, Loader2 } from 'lucide-react';
 import { transactionService } from '../services/transactionService';
-import { getActiveImageSize, ImageSizeSetting } from '../services/imageSettingsService';
+import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { userService } from '../services/userService';
 import { User } from '../types/api';
@@ -55,7 +39,7 @@ interface TransactionFormData {
   orNo: string;
   transactionType: string;
   remarks: string;
-  image: { uri: string; name: string; type: string } | null;
+  image: File | null;
 }
 
 const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
@@ -76,9 +60,17 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     return now.toISOString().split('T')[0];
   };
 
-  // Auth lives in AsyncStorage on RN, so processedBy is filled in by the effect below.
   const [formData, setFormData] = useState<TransactionFormData>(() => {
-    const userEmail = '';
+    const authData = localStorage.getItem('authData');
+    let userEmail = '';
+    if (authData) {
+      try {
+        const userData = JSON.parse(authData);
+        userEmail = userData.email_address || userData.email || '';
+      } catch (e) {
+        console.error('Error parsing auth data:', e);
+      }
+    }
 
     return {
       accountNo: billingRecord?.applicationId || '',
@@ -103,8 +95,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   const [activeImageSize, setActiveImageSize] = useState<ImageSizeSetting | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showPaymentMethodPicker, setShowPaymentMethodPicker] = useState(false);
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
     type: 'success',
@@ -112,11 +102,24 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     message: ''
   });
 
-  // RN has no document/MutationObserver — read the stored theme once on mount.
   useEffect(() => {
-    AsyncStorage.getItem('theme')
-      .then((theme) => setIsDarkMode(theme === 'dark' || theme === null))
-      .catch(() => { });
+    const checkDarkMode = () => {
+      const theme = localStorage.getItem('theme');
+      setIsDarkMode(theme === 'dark' || theme === null);
+    };
+
+    checkDarkMode();
+
+    const observer = new MutationObserver(() => {
+      checkDarkMode();
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -178,14 +181,18 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     // Refresh processedBy from authData when modal opens
     if (isOpen) {
-      AsyncStorage.getItem('authData')
-        .then((authData) => {
-          if (!authData) return;
+      const authData = localStorage.getItem('authData');
+      if (authData) {
+        try {
           const userData = JSON.parse(authData);
           const userEmail = userData.email_address || userData.email || '';
-          if (userEmail) setFormData((prev) => ({ ...prev, processedBy: userEmail }));
-        })
-        .catch((e) => console.error('Error refreshing auth data:', e));
+          if (userEmail) {
+            setFormData(prev => ({ ...prev, processedBy: userEmail }));
+          }
+        } catch (e) {
+          console.error('Error refreshing auth data:', e);
+        }
+      }
     }
   }, [isOpen]);
 
@@ -278,52 +285,52 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     setFormData(prev => ({ ...prev, transactionType: type }));
   };
 
-  const handlePickImage = async () => {
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        setModal({
-          isOpen: true,
-          type: 'warning',
-          title: 'Permission Needed',
-          message: 'Permission to access photos is required to attach payment proof.',
-        });
-        return;
+      let processedFile = file;
+      const originalSize = (file.size / 1024 / 1024).toFixed(2);
+
+      if (activeImageSize && activeImageSize.image_size_value < 100) {
+        try {
+          const resizedFile = await resizeImage(file, activeImageSize.image_size_value);
+
+          if (resizedFile.size < file.size) {
+            processedFile = resizedFile;
+          }
+        } catch (resizeError) {
+          processedFile = file;
+        }
       }
 
-      // The web build resized via canvas; here the picker's quality setting stands in,
-      // scaled from the same configured image-size setting.
-      const quality = activeImageSize && activeImageSize.image_size_value < 100
-        ? Math.max(0.3, activeImageSize.image_size_value / 100)
-        : 0.8;
+      setFormData(prev => ({ ...prev, image: processedFile }));
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality,
-      });
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
 
-      if (result.canceled || !result.assets?.length) return;
+      const previewUrl = URL.createObjectURL(processedFile);
+      setImagePreview(previewUrl);
 
-      const asset = result.assets[0];
-      const name = asset.fileName || asset.uri.split('/').pop() || `payment_proof_${Date.now()}.jpg`;
-      setFormData((prev) => ({
-        ...prev,
-        image: { uri: asset.uri, name, type: asset.mimeType || 'image/jpeg' },
-      }));
-      setImagePreview(asset.uri);
-    } catch (e: any) {
-      setModal({
-        isOpen: true,
-        type: 'error',
-        title: 'Error',
-        message: e?.message || 'Failed to pick image',
-      });
+      if (errors.image) {
+        setErrors(prev => ({ ...prev, image: '' }));
+      }
+    } catch (error) {
+      setFormData(prev => ({ ...prev, image: file }));
+
+      if (imagePreview && imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      setImagePreview(previewUrl);
+
+      if (errors.image) {
+        setErrors(prev => ({ ...prev, image: '' }));
+      }
     }
-  };
-
-  const handleRemoveImage = () => {
-    setFormData((prev) => ({ ...prev, image: null }));
-    setImagePreview(null);
   };
 
   const validateForm = (): boolean => {
@@ -367,11 +374,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           const imageFormData = new FormData();
           const folderName = `transactionform - ${formData.fullName}`;
           imageFormData.append('folder_name', folderName);
-          imageFormData.append(
-            'payment_proof_image',
-            { uri: formData.image.uri, name: formData.image.name, type: formData.image.type } as any,
-            formData.image.name,
-          );
+          imageFormData.append('payment_proof_image', formData.image, formData.image.name);
 
           const uploadResponse = await transactionService.uploadTransactionImage(imageFormData);
 
@@ -391,7 +394,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         }
       }
 
-      const authData = await AsyncStorage.getItem('authData');
+      const authData = localStorage.getItem('authData');
       const currentUser = authData ? JSON.parse(authData) : null;
 
       const payload = {
@@ -462,374 +465,484 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
   if (!isOpen) return null;
 
-  const activeColor = colorPalette?.primary || '#7c3aed';
-
-  const renderInput = (
-    field: keyof TransactionFormData,
-    label: string,
-    required: boolean = false,
-    options: { readOnly?: boolean; multiline?: boolean; keyboardType?: any; prefix?: string; onChange?: (t: string) => void } = {}
-  ) => (
-    <View style={tf.fieldGroup} key={String(field)}>
-      <Text style={tf.label}>
-        {label}{required && <Text style={tf.required}>*</Text>}
-      </Text>
-      <View
-        style={[tf.input, {
-          flexDirection: 'row',
-          alignItems: 'center',
-          backgroundColor: options.readOnly ? '#f3f4f6' : '#ffffff',
-          borderColor: errors[field as string] ? '#ef4444' : '#d1d5db',
-          minHeight: options.multiline ? 84 : 44,
-          paddingVertical: options.multiline ? 8 : 0,
-        }]}
-      >
-        {!!options.prefix && <Text style={{ color: '#4b5563', marginRight: 6 }}>{options.prefix}</Text>}
-        <TextInput
-          value={String((formData as any)[field] ?? '')}
-          onChangeText={options.onChange || ((text) => handleInputChange(field as any, text))}
-          editable={!options.readOnly}
-          multiline={options.multiline}
-          keyboardType={options.keyboardType}
-          textAlignVertical={options.multiline ? 'top' : 'center'}
-          placeholderTextColor="#9ca3af"
-          style={{ flex: 1, fontSize: 14, color: options.readOnly ? '#6b7280' : '#111827', padding: 0 }}
-        />
-      </View>
-      {errors[field as string] ? <Text style={tf.errorText}>{errors[field as string]}</Text> : null}
-    </View>
-  );
-
   return (
-    <Modal visible={isOpen} animationType="slide" onRequestClose={handleCancel}>
-      <View style={tf.container}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+      <div className={`h-full w-full max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
+        }`}>
         {/* Header */}
-        <View style={tf.header}>
-          <Pressable onPress={handleCancel} disabled={loading} style={tf.headerBack}>
-            <ChevronLeft size={26} color={activeColor} />
-          </Pressable>
-          <Text style={tf.headerTitle} numberOfLines={1}>
-            {isEdit ? 'Edit Transaction' : 'Transactions Form'}
-          </Text>
-          <Pressable
-            onPress={handleSave}
-            disabled={loading}
-            style={[tf.saveBtn, { backgroundColor: loading ? '#9ca3af' : activeColor }]}
-          >
-            {loading
-              ? <ActivityIndicator size="small" color="#ffffff" />
-              : <Text style={tf.saveBtnText}>Save</Text>}
-          </Pressable>
-        </View>
-
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={tf.body} keyboardShouldPersistTaps="handled">
-            {/* Account No — fixed to the record this form was opened from */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Account No.<Text style={tf.required}>*</Text></Text>
-              <View style={[tf.input, { backgroundColor: '#f3f4f6', borderColor: errors.accountNo ? '#ef4444' : '#d1d5db', justifyContent: 'center', minHeight: 44 }]}>
-                <Text style={{ fontSize: 14, color: '#6b7280' }} numberOfLines={1}>
-                  {[billingRecord?.applicationId, billingRecord?.customerName, billingRecord?.address].filter(Boolean).join(' | ') || '-'}
-                </Text>
-              </View>
-              {errors.accountNo ? <Text style={tf.errorText}>{errors.accountNo}</Text> : null}
-            </View>
-
-            {renderInput('fullName', 'Full Name', false, { readOnly: true })}
-            {renderInput('contactNo', 'Contact No.', false, { readOnly: true })}
-            {renderInput('plan', 'Plan', false, { readOnly: true })}
-            {renderInput('accountBalance', 'Account Balance', false, { readOnly: true, prefix: '₱' })}
-
-            {/* Payment Date */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Payment Date<Text style={tf.required}>*</Text></Text>
-              <Pressable
-                onPress={() => setShowDatePicker(true)}
-                style={[tf.input, {
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  minHeight: 44,
-                  borderColor: errors.paymentDate ? '#ef4444' : '#d1d5db',
-                }]}
-              >
-                <Text style={{ fontSize: 14, color: formData.paymentDate ? '#111827' : '#9ca3af' }}>
-                  {formData.paymentDate || 'Select date'}
-                </Text>
-                <Calendar size={18} color="#6b7280" />
-              </Pressable>
-              {errors.paymentDate ? <Text style={tf.errorText}>{errors.paymentDate}</Text> : null}
-            </View>
-
-            {/* Received Payment with steppers */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Received Payment<Text style={tf.required}>*</Text></Text>
-              <View
-                style={[tf.input, {
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  minHeight: 44,
-                  paddingVertical: 0,
-                  paddingRight: 0,
-                  borderColor: errors.receivedPayment ? '#ef4444' : '#d1d5db',
-                }]}
-              >
-                <Text style={{ color: '#4b5563', marginRight: 6 }}>₱</Text>
-                <TextInput
-                  value={String(formData.receivedPayment ?? '')}
-                  onChangeText={(text) => {
-                    if (text === '' || /^\d*\.?\d*$/.test(text)) handleInputChange('receivedPayment', text);
-                  }}
-                  keyboardType="decimal-pad"
-                  style={{ flex: 1, fontSize: 14, color: '#111827', padding: 0 }}
-                />
-                <Pressable onPress={() => handleReceivedPaymentChange('decrease')} style={tf.stepperBtn}>
-                  <Minus size={16} color="#4b5563" />
-                </Pressable>
-                <Pressable onPress={() => handleReceivedPaymentChange('increase')} style={tf.stepperBtn}>
-                  <Plus size={16} color="#4b5563" />
-                </Pressable>
-              </View>
-              {errors.receivedPayment ? <Text style={tf.errorText}>{errors.receivedPayment}</Text> : null}
-            </View>
-
-            {renderInput('processedBy', 'Processed By', false, { readOnly: true })}
-
-            {/* Payment Method */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Payment Method<Text style={tf.required}>*</Text></Text>
-              <Pressable
-                onPress={() => setShowPaymentMethodPicker(true)}
-                style={[tf.input, {
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  minHeight: 44,
-                  borderColor: errors.paymentMethod ? '#ef4444' : '#d1d5db',
-                }]}
-              >
-                <Text style={{ fontSize: 14, color: formData.paymentMethod ? '#111827' : '#9ca3af' }}>
-                  {formData.paymentMethod || 'Select Payment Method'}
-                </Text>
-                <ChevronDown size={18} color="#6b7280" />
-              </Pressable>
-              {errors.paymentMethod ? <Text style={tf.errorText}>{errors.paymentMethod}</Text> : null}
-            </View>
-
-            {renderInput('referenceNo', 'Reference No.')}
-            {renderInput('orNo', 'OR No.')}
-
-            {/* Transaction Type */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Transaction Type<Text style={tf.required}>*</Text></Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {['Recurring Fee', 'Installation Fee', 'Security Deposit'].map((type) => {
-                  const isSelected = formData.transactionType === type;
-                  return (
-                    <Pressable
-                      key={type}
-                      onPress={() => handleTransactionTypeChange(type)}
-                      style={{
-                        paddingHorizontal: 14,
-                        paddingVertical: 10,
-                        borderRadius: 8,
-                        backgroundColor: isSelected ? activeColor : '#e5e7eb',
-                      }}
-                    >
-                      <Text style={{ fontSize: 13, fontWeight: '600', color: isSelected ? '#ffffff' : '#374151' }}>
-                        {type}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              {errors.transactionType ? <Text style={tf.errorText}>{errors.transactionType}</Text> : null}
-            </View>
-
-            {renderInput('remarks', 'Remarks', false, { multiline: true })}
-
-            {/* Payment proof */}
-            <View style={tf.fieldGroup}>
-              <Text style={tf.label}>Payment Proof Image</Text>
-              {imagePreview ? (
-                <View style={{ gap: 8 }}>
-                  <Image source={{ uri: imagePreview }} style={tf.preview} resizeMode="cover" />
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    <Pressable onPress={handlePickImage} style={[tf.imageBtn, { borderColor: activeColor }]}>
-                      <Text style={{ color: activeColor, fontWeight: '600', fontSize: 13 }}>Replace</Text>
-                    </Pressable>
-                    <Pressable onPress={handleRemoveImage} style={[tf.imageBtn, { borderColor: '#ef4444' }]}>
-                      <Text style={{ color: '#ef4444', fontWeight: '600', fontSize: 13 }}>Remove</Text>
-                    </Pressable>
-                  </View>
-                </View>
+        <div className={`px-6 py-4 flex items-center justify-between border-b ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-100 border-gray-200'
+          }`}>
+          <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>{isEdit ? 'Edit Transaction' : 'Transactions Form'}</h2>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={handleCancel}
+              className={`px-4 py-2 rounded text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-gray-300 hover:bg-gray-400 text-gray-900'
+                }`}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={loading}
+              className="px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm flex items-center transition-colors"
+              style={{
+                backgroundColor: colorPalette?.primary || '#7c3aed'
+              }}
+              onMouseEnter={(e) => {
+                if (colorPalette?.accent && !loading) {
+                  e.currentTarget.style.backgroundColor = colorPalette.accent;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (colorPalette?.primary) {
+                  e.currentTarget.style.backgroundColor = colorPalette.primary;
+                }
+              }}
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Saving...
+                </>
               ) : (
-                <Pressable onPress={handlePickImage} style={tf.imageDrop}>
-                  <Camera size={32} color="#9ca3af" />
-                  <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>Tap to select an image</Text>
-                </Pressable>
+                'Save'
               )}
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </View>
+            </button>
 
-      {showDatePicker && (
-        <DateTimePicker
-          value={formData.paymentDate ? new Date(`${formData.paymentDate}T00:00:00`) : new Date()}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(event, date) => {
-            setShowDatePicker(false);
-            if (event?.type !== 'set' || !date) return;
-            const pad = (n: number) => String(n).padStart(2, '0');
-            handleInputChange('paymentDate', `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`);
-          }}
-        />
-      )}
+          </div>
+        </div>
 
-      {/* Payment method picker */}
-      <Modal
-        visible={showPaymentMethodPicker}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setShowPaymentMethodPicker(false)}
-      >
-        <View style={tf.sheetOverlay}>
-          <View style={tf.sheet}>
-            <View style={tf.sheetHeader}>
-              <Text style={tf.sheetTitle}>Select Payment Method</Text>
-              <Pressable onPress={() => setShowPaymentMethodPicker(false)} hitSlop={8}>
-                <X size={22} color="#4b5563" />
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 360 }}>
-              {paymentMethods.map((method) => {
-                const selected = formData.paymentMethod === method.payment_method;
+        {/* Form Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+
+          {/* Account No */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Account No.<span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <select
+                value={formData.accountNo}
+                onChange={(e) => handleInputChange('accountNo', e.target.value)}
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              >
+                <option value={billingRecord?.applicationId || ''}>{billingRecord?.applicationId || ''} | {billingRecord?.customerName || ''} | {billingRecord?.address || ''}</option>
+              </select>
+              <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+            </div>
+            {errors.accountNo && <p className="text-red-500 text-xs mt-1">{errors.accountNo}</p>}
+          </div>
+
+          {/* Full Name */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Full Name
+            </label>
+            <input
+              type="text"
+              value={formData.fullName}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-300 text-gray-600'
+                }`}
+            />
+          </div>
+
+          {/* Contact No */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              ContactNo
+            </label>
+            <input
+              type="text"
+              value={formData.contactNo}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-300 text-gray-600'
+                }`}
+            />
+          </div>
+
+          {/* Plan */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Plan<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={formData.plan}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-300 text-gray-600'
+                }`}
+            />
+          </div>
+
+          {/* Account Balance */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Account Balance<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={`₱ ${formData.accountBalance}`}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-not-allowed opacity-75 ${errors.accountBalance ? 'border-red-500' : isDarkMode ? 'border-gray-600 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
+                }`}
+            />
+            {errors.accountBalance && <p className="text-red-500 text-xs mt-1">{errors.accountBalance}</p>}
+          </div>
+
+          {/* Payment Date */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Payment Date<span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="date"
+                value={formData.paymentDate}
+                onChange={(e) => handleInputChange('paymentDate', e.target.value)}
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.paymentDate ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              <Calendar className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                }`} size={20} />
+            </div>
+            {errors.paymentDate && <p className="text-red-500 text-xs mt-1">{errors.paymentDate}</p>}
+          </div>
+
+          {/* Received Payment */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Received Payment<span className="text-red-500">*</span>
+            </label>
+            <div className="flex items-center">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={`₱ ${formData.receivedPayment}`}
+                  onChange={(e) => {
+                    const val = e.target.value.replace('₱ ', '');
+                    if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                      handleInputChange('receivedPayment', val);
+                    }
+                  }}
+                  className={`w-full px-3 py-2 border rounded-l focus:outline-none focus:border-orange-500 ${errors.receivedPayment ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                />
+              </div>
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => handleReceivedPaymentChange('increase')}
+                  className={`px-3 py-1 border text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
+                    } border-l-0`}
+                >
+                  <Plus size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleReceivedPaymentChange('decrease')}
+                  className={`px-3 py-1 border rounded-r text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
+                    } border-l-0 border-t-0`}
+                >
+                  <Minus size={16} />
+                </button>
+              </div>
+            </div>
+            {errors.receivedPayment && <p className="text-red-500 text-xs mt-1">{errors.receivedPayment}</p>}
+          </div>
+
+          {/* Processed By */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Processed By<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={formData.processedBy}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
+                }`}
+            />
+            {errors.processedBy && <p className="text-red-500 text-xs mt-1">{errors.processedBy}</p>}
+          </div>
+
+          {/* Payment Method */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Payment Method<span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <select
+                value={formData.paymentMethod}
+                onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.paymentMethod ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              >
+                <option value="">Select Payment Method</option>
+                {paymentMethods.map((method) => (
+                  <option key={method.id} value={method.payment_method}>
+                    {method.payment_method}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+            </div>
+            {errors.paymentMethod && <p className="text-red-500 text-xs mt-1">{errors.paymentMethod}</p>}
+          </div>
+
+          {/* Reference No */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Reference No.<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={formData.referenceNo}
+              onChange={(e) => handleInputChange('referenceNo', e.target.value)}
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.referenceNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                }`}
+            />
+            {errors.referenceNo && <p className="text-red-500 text-xs mt-1">{errors.referenceNo}</p>}
+          </div>
+
+          {/* OR No */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              OR No.<span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={formData.orNo}
+              onChange={(e) => handleInputChange('orNo', e.target.value)}
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.orNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                }`}
+            />
+            {errors.orNo && <p className="text-red-500 text-xs mt-1">{errors.orNo}</p>}
+          </div>
+
+          {/* Transaction Type */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Transaction Type<span className="text-red-500">*</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {['Recurring Fee', 'Installation Fee', 'Security Deposit'].map((type) => {
+                const isSelected = formData.transactionType === type;
                 return (
-                  <Pressable
-                    key={method.id}
-                    onPress={() => {
-                      handleInputChange('paymentMethod', method.payment_method);
-                      setShowPaymentMethodPicker(false);
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => handleTransactionTypeChange(type)}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${isSelected
+                      ? 'text-white'
+                      : isDarkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    style={isSelected ? {
+                      backgroundColor: colorPalette?.primary || '#7c3aed'
+                    } : undefined}
+                    onMouseEnter={(e) => {
+                      if (isSelected && colorPalette?.accent) {
+                        e.currentTarget.style.backgroundColor = colorPalette.accent;
+                      }
                     }}
-                    style={tf.sheetRow}
+                    onMouseLeave={(e) => {
+                      if (isSelected && colorPalette?.primary) {
+                        e.currentTarget.style.backgroundColor = colorPalette.primary;
+                      }
+                    }}
                   >
-                    <Text style={{ fontSize: 14, color: selected ? activeColor : '#374151', fontWeight: selected ? '600' : '400' }}>
-                      {method.payment_method}
-                    </Text>
-                  </Pressable>
+                    {type}
+                  </button>
                 );
               })}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+            </div>
 
-      {/* Status / progress dialog */}
-      <Modal visible={modal.isOpen || loading} transparent animationType="fade" statusBarTranslucent>
-        <View style={tf.statusOverlay}>
-          <View style={tf.statusCard}>
-            {loading || modal.type === 'loading' ? (
-              <View style={{ alignItems: 'center', gap: 16 }}>
-                <ActivityIndicator size="large" color={activeColor} />
-                <Text style={tf.statusPercent}>{Math.round(uploadProgress)}%</Text>
-              </View>
+            {formData.transactionType === 'Security Deposit' && (
+              <p className="text-orange-500 text-xs mt-2">
+                Note: Security deposits do not affect the account balance or invoices.
+              </p>
+            )}
+            {errors.transactionType && <p className="text-red-500 text-xs mt-1">{errors.transactionType}</p>}
+          </div>
+
+          {/* Remarks */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Remarks
+            </label>
+            <textarea
+              value={formData.remarks}
+              onChange={(e) => handleInputChange('remarks', e.target.value)}
+              rows={3}
+              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 resize-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
+                }`}
+            />
+          </div>
+
+          {/* Image Upload */}
+          <div>
+            <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              Payment Proof Image
+            </label>
+            <div className={`relative w-full border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
+              } ${imagePreview ? 'h-auto' : 'h-48'}`}>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageUpload}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+              />
+              {imagePreview ? (
+                <div className="relative w-full">
+                  <img
+                    src={imagePreview}
+                    alt="Payment Proof"
+                    className="w-full h-auto object-contain block"
+                  />
+                  <div className="absolute bottom-2 right-2 bg-green-500 text-white px-2 py-1 rounded text-xs flex items-center pointer-events-none shadow-md z-20">
+                    <Camera className="mr-1" size={14} />Uploaded
+                  </div>
+                </div>
+              ) : (
+                <div className={`w-full h-full flex flex-col items-center justify-center ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                  <Camera size={32} />
+                  <span className="text-sm mt-2">Click to upload payment proof</span>
+                  {formData.image && (
+                    <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                      }`}>
+                      Selected: {formData.image.name}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {loading && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center">
+          <div className={`rounded-lg p-8 flex flex-col items-center space-y-6 min-w-[320px] ${isDarkMode ? 'bg-gray-800' : 'bg-white'
+            }`}>
+            <Loader2
+              className="w-20 h-20 animate-spin"
+              style={{ color: colorPalette?.primary || '#7c3aed' }}
+            />
+            <div className="text-center">
+              <p className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'
+                }`}>{uploadProgress}%</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modal.isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[60]">
+          <div className={`border rounded-lg p-8 max-w-md w-full mx-4 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
+            }`}>
+            {modal.type === 'loading' ? (
+              <div className="text-center">
+                <div className="flex justify-center mb-4">
+                  <div className="animate-spin rounded-full h-16 w-16 border-b-4" style={{ borderColor: colorPalette?.primary || '#7c3aed' }}></div>
+                </div>
+                <h3 className={`text-xl font-semibold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
+                  }`}>{modal.title}</h3>
+                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                  }`}>{modal.message}</p>
+              </div>
             ) : (
               <>
-                <Text style={tf.statusTitle}>{modal.title}</Text>
-                <Text style={tf.statusMessage}>{modal.message}</Text>
-                <View style={tf.statusActions}>
+                <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'
+                  }`}>{modal.title}</h3>
+                <p className={`mb-6 whitespace-pre-line ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>{modal.message}</p>
+                <div className="flex items-center justify-end gap-3">
                   {modal.type === 'confirm' ? (
                     <>
-                      <Pressable onPress={modal.onCancel} style={tf.statusCancelBtn}>
-                        <Text style={{ color: '#374151', fontWeight: '500' }}>Cancel</Text>
-                      </Pressable>
-                      <Pressable onPress={modal.onConfirm} style={[tf.statusOkBtn, { backgroundColor: activeColor }]}>
-                        <Text style={tf.statusOkText}>Confirm</Text>
-                      </Pressable>
+                      <button
+                        onClick={modal.onCancel}
+                        className={`px-4 py-2 rounded transition-colors ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                          }`}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={modal.onConfirm}
+                        className="px-4 py-2 text-white rounded transition-colors"
+                        style={{
+                          backgroundColor: colorPalette?.primary || '#7c3aed'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (colorPalette?.accent) {
+                            e.currentTarget.style.backgroundColor = colorPalette.accent;
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                        }}
+                      >
+                        Confirm
+                      </button>
                     </>
                   ) : (
-                    <Pressable
-                      onPress={() => {
-                        if (modal.onConfirm) modal.onConfirm();
-                        else setModal({ ...modal, isOpen: false });
+                    <button
+                      onClick={() => {
+                        if (modal.onConfirm) {
+                          modal.onConfirm();
+                        } else {
+                          setModal({ ...modal, isOpen: false });
+                        }
                       }}
-                      style={[tf.statusOkBtn, { backgroundColor: activeColor }]}
+                      className="px-4 py-2 text-white rounded transition-colors"
+                      style={{
+                        backgroundColor: colorPalette?.primary || '#7c3aed'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (colorPalette?.accent) {
+                          e.currentTarget.style.backgroundColor = colorPalette.accent;
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                      }}
                     >
-                      <Text style={tf.statusOkText}>OK</Text>
-                    </Pressable>
+                      OK
+                    </button>
                   )}
-                </View>
+                </div>
               </>
             )}
-          </View>
-        </View>
-      </Modal>
-    </Modal>
+          </div>
+        </div>
+      )}
+    </div>
   );
-});
-
-const tf = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f9fafb' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 12,
-    paddingBottom: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  headerBack: { padding: 4 },
-  headerTitle: { flex: 1, fontSize: 17, fontWeight: '600', color: '#111827' },
-  saveBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, minWidth: 72, alignItems: 'center' },
-  saveBtnText: { color: '#ffffff', fontWeight: '600' },
-  body: { padding: 16, paddingBottom: 80 },
-  fieldGroup: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 },
-  required: { color: '#ef4444' },
-  input: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 12, fontSize: 14 },
-  stepperBtn: { paddingHorizontal: 14, paddingVertical: 12, borderLeftWidth: 1, borderLeftColor: '#d1d5db' },
-  errorText: { color: '#ef4444', fontSize: 11, marginTop: 4 },
-  preview: { width: '100%', height: 200, borderRadius: 8, backgroundColor: '#e5e7eb' },
-  imageBtn: { flex: 1, paddingVertical: 10, borderRadius: 6, borderWidth: 1, alignItems: 'center' },
-  imageDrop: {
-    height: 160,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffffff',
-  },
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
-  sheet: { backgroundColor: '#ffffff', borderRadius: 12, maxHeight: '75%', overflow: 'hidden' },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  sheetTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
-  sheetRow: { paddingHorizontal: 16, paddingVertical: 12 },
-  statusOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  statusCard: { width: '100%', maxWidth: 420, borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff', padding: 24, gap: 12 },
-  statusTitle: { fontSize: 17, fontWeight: '600', color: '#111827' },
-  statusMessage: { fontSize: 14, lineHeight: 20, color: '#374151' },
-  statusPercent: { fontSize: 34, fontWeight: '700', color: '#111827' },
-  statusActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 },
-  statusCancelBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: '#d1d5db' },
-  statusOkBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
-  statusOkText: { color: '#ffffff', fontWeight: '600' },
 });
 
 export default TransactionFormModal;

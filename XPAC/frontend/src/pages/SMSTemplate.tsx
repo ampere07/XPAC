@@ -273,7 +273,8 @@ const SMSTemplate: React.FC = () => {
     'Application',
     'Welcome',
     'Paid',
-    'Due'
+    'Due',
+    'PrepaidPreExpiry'
   ];
 
   const availableVariables = [
@@ -288,7 +289,10 @@ const SMSTemplate: React.FC = () => {
     '{{mobile_number}}',
     '{{soa_date}}',
     '{{portal_url}}',
-    '{{company_name}}'
+    '{{company_name}}',
+    // Substituted by BillingNotificationService for every billing-side template, including the
+    // prepaid pre-expiry notice — it just was never listed here to insert.
+    '{{payment_link}}'
   ];
 
   const insertVariable = (variable: string) => {

@@ -93,7 +93,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const { width, height } = useWindowDimensions();
   const isMobile = width < 768;
   const isShort = height < 700;
-  const { customerDetail, serviceOrders: requests, isLoading: contextLoading, isSupportLoading, fetchSupportData, accountNo, silentRefresh } = useCustomerDataContext();
+  const { customerDetail, serviceOrders: requests, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
   const userAccountNo = customerDetail?.billingAccount?.accountNo || '';
   const balance = Number(customerDetail?.billingAccount?.accountBalance || 0);
   const displayName = customerDetail?.fullName || 'Customer';
@@ -264,10 +264,6 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
     };
     initPage();
 
-    // Service orders are no longer fetched at launch — nothing on the dashboard
-    // shows them — so this screen asks for its own. A no-op once loaded.
-    void fetchSupportData();
-
     const paletteSub = DeviceEventEmitter.addListener('colorPaletteChanged', (newPalette) => {
       setColorPalette(newPalette);
     });
@@ -275,24 +271,16 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
     return () => paletteSub.remove();
   }, []);
 
-  // Covers the case where this screen opened before the main load resolved an
-  // account. A no-op once the records are in.
-  useEffect(() => {
-    if (accountNo) {
-      void fetchSupportData();
-    }
-  }, [accountNo, fetchSupportData]);
-
   const onRefresh = React.useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.allSettled([silentRefresh(), fetchSupportData(true)]);
+      await silentRefresh();
     } catch (error) {
       console.error('Refresh failed:', error);
     } finally {
       setRefreshing(false);
     }
-  }, [silentRefresh, fetchSupportData]);
+  }, [silentRefresh]);
 
   const handleSubmit = async () => {
     if (!details.trim()) {
@@ -366,9 +354,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
       if (response.success) {
         setShowLoadingModal(false);
         setShowSuccessModal(true);
-        // The ticket the customer just filed only appears if the service orders
-        // are re-fetched — silentRefresh no longer carries them.
-        await fetchSupportData(true);
+        await silentRefresh();
         setDetails('');
         setImage4File(null);
       } else {
@@ -482,7 +468,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const handleResumePendingPayment = handleOpenPaymentLink;
 
   const handleOpenChat = async () => {
-    const webUrl = 'https://m.me/atssfiber';
+    const webUrl = 'https://m.me/gowiserzc';
     const messengerAppUrl = 'fb-messenger://user-thread/';
     try {
       const canOpenMessenger = await Linking.canOpenURL(messengerAppUrl);
@@ -565,7 +551,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
           />
         }
         ListEmptyComponent={() => (
-          (contextLoading || isSupportLoading) ? (
+          contextLoading ? (
             <View style={s.emptyState}>
               <ActivityIndicator size="large" color={primaryColor} />
               <Text style={s.emptyText}>Loading records...</Text>

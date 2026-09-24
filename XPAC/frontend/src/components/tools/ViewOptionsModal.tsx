@@ -10,10 +10,9 @@ import type { ColorPalette } from '../../services/settingsColorPaletteService';
  * "View Options" — the operator's control over how a list is grouped, sorted and
  * coloured, in the AppSheet idiom.
  *
- * Three tabs because they are three separate decisions and mixing them into one long
- * form is how the AppSheet original became hard to use: Group By builds a hierarchy,
- * Sort By orders what is inside it, and Colors decides what each distinct value looks
- * like. Edits are held locally until Save, so Cancel is a real cancel.
+ * Three tabs because they are three separate decisions:
+ * Group By builds a hierarchy, Sort By orders what is inside it, and Colors decides
+ * what each distinct value looks like. Edits are held locally until Save, so Cancel is a real cancel.
  */
 
 const SWATCHES = [
@@ -222,10 +221,6 @@ const ViewOptionsModal: React.FC<ViewOptionsModalProps> = ({
           </button>
         </div>
 
-        {/* Filled pills, matching the tab strips on the tools and in the sidebar.
-            An underlined tab was the only one of its kind in the app, and pairing a
-            top radius with a bottom accent border put the rounding and the emphasis at
-            opposite edges of the same control. */}
         <div className={`flex items-center gap-1 p-3 border-b ${divider}`}>
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
@@ -252,7 +247,7 @@ const ViewOptionsModal: React.FC<ViewOptionsModalProps> = ({
 
               {draft.groupBy.length === 0 && (
                 <div className={`text-xs italic py-4 text-center ${muted}`}>
-                  No grouping — the sidebar shows its default slices.
+                  No grouping — the sidebar shows its default tree.
                 </div>
               )}
 

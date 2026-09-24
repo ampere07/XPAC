@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Minus } from 'lucide-react';
-import { API_BASE_URL, authFetch } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 import ModalUITemplate, { useModalTheme } from './ui-modal/ModalUITemplate';
 
 interface Plan {
@@ -8,6 +8,8 @@ interface Plan {
   name: string;
   description?: string;
   price: number;
+  /** Whether the plan is offered on the public application form. */
+  show_in_application?: boolean;
   is_active?: boolean;
   organization_id?: number | null;
   modified_date?: string;
@@ -41,7 +43,8 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    price: 0
+    price: 0,
+    showInApplication: true
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -61,7 +64,10 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
         setFormData({
           name: editingPlan.name,
           description: editingPlan.description || '',
-          price: editingPlan.price || 0
+          price: editingPlan.price || 0,
+          // Plans created before this column existed come back without it; they are visible, so
+          // an absent value has to read as checked rather than as unchecked.
+          showInApplication: editingPlan.show_in_application ?? true
         });
         setModifiedDate(formatDateTime(new Date(editingPlan.modified_date || editingPlan.updated_at || new Date())));
         setModifiedBy(editingPlan.modified_by || 'N/A');
@@ -69,7 +75,9 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
         setFormData({
           name: '',
           description: '',
-          price: 0
+          price: 0,
+          // New plans are offered on the application form by default.
+          showInApplication: true
         });
         setErrors({});
         setModifiedDate(formatDateTime(new Date()));
@@ -137,6 +145,7 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
         name: formData.name.trim(),
         description: formData.description.trim(),
         price: formData.price,
+        show_in_application: formData.showInApplication,
         email_address: userEmail,
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
@@ -147,7 +156,7 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
 
       const method = editingPlan ? 'PUT' : 'POST';
 
-      const response = await authFetch(url, {
+      const response = await fetch(url, {
         method,
         headers: {
           'Accept': 'application/json',
@@ -205,7 +214,8 @@ const AddPlanModal: React.FC<AddPlanModalProps> = ({
     setFormData({
       name: '',
       description: '',
-      price: 0
+      price: 0,
+      showInApplication: true
     });
     setErrors({});
     onClose();
@@ -365,6 +375,27 @@ const PlanFormContent: React.FC<{
           </div>
         </div>
         {errors.price && <p className="text-red-500 text-xs mt-1">{errors.price}</p>}
+      </div>
+
+      <div className="space-y-2">
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={formData.showInApplication}
+            onChange={(e) => setFormData({ ...formData, showInApplication: e.target.checked })}
+            className="mt-0.5 h-4 w-4 rounded cursor-pointer flex-shrink-0"
+            style={colorPalette?.primary ? { accentColor: colorPalette.primary } : undefined}
+          />
+          <span>
+            <span className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Show in Application
+            </span>
+            <span className={`block text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+              Untick to keep this plan off the public application form. Internal-only plans such as
+              VIP or work-from-home packages belong here.
+            </span>
+          </span>
+        </label>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">

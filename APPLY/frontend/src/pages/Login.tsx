@@ -6,7 +6,7 @@ interface LoginFormState {
 }
 
 const Login: React.FC = () => {
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.atssfiber.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -39,11 +39,7 @@ const Login: React.FC = () => {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        // No `credentials: 'include'`. Login returns its token in the response
-        // body and sets no cookie, so there is nothing for credentialed CORS
-        // to carry — only the stricter rules an in-app browser is most likely
-        // to refuse. The token is kept in localStorage and sent back as an
-        // Authorization header, which needs no cookie support at all.
+        credentials: 'include',
         body: JSON.stringify({
           username: formData.username,
           password: formData.password

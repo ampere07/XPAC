@@ -8,6 +8,7 @@ use App\Events\TechnicianLocationUpdated;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class TechnicianLocationController extends Controller
@@ -29,6 +30,10 @@ class TechnicianLocationController extends Controller
      * Receive a GPS update from the authenticated technician and upsert their single
      * live-location row. The technician identity is ALWAYS taken from the auth session,
      * never from the request body, so a technician can only update their own location.
+     *
+     * Idempotent: the live row is an upsert keyed on user_id, and the breadcrumb trail only
+     * accepts a point that is far enough from, or old enough after, the last one — so a client
+     * retry that replays the same coordinates writes nothing new.
      */
     public function update(Request $request)
     {
@@ -38,6 +43,22 @@ class TechnicianLocationController extends Controller
                 'success' => false,
                 'message' => 'Unauthorized'
             ], 401);
+        }
+
+        // Server-side kill switch for GPS ingest (config/features.php), normally on. Checked after
+        // authentication so that when it IS switched off the log names who is still reporting —
+        // that is the signal that an old APK is in the field. Ordered before the role and
+        // validation checks so a disabled deployment does no work per request beyond this read.
+        if (!config('features.location_tracking.enabled')) {
+            Log::info('TechnicianLocation update rejected: tracking disabled', [
+                'user_id' => $user->id,
+                'role_id' => (int) $user->role_id,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Location tracking is currently disabled',
+            ], 503);
         }
 
         if ((int) $user->role_id !== self::TECHNICIAN_ROLE_ID) {
@@ -64,32 +85,49 @@ class TechnicianLocationController extends Controller
         }
 
         try {
-            $location = TechnicianLocation::updateOrCreate(
-                ['user_id' => $user->id],
-                [
-                    'organization_id' => $user->organization_id,
-                    'latitude'        => $request->input('latitude'),
-                    'longitude'       => $request->input('longitude'),
-                    'accuracy'        => $request->input('accuracy'),
-                    'speed'           => $request->input('speed'),
-                    'heading'         => $request->input('heading'),
-                    'status'          => 'online',
-                    'last_updated_at' => Carbon::now(),
-                ]
-            );
+            // The live row and the breadcrumb point describe the SAME reported position, so they
+            // commit together or not at all — otherwise a failure between them leaves a trail
+            // point with no live row behind it, or a live row the trail never recorded.
+            $location = DB::transaction(function () use ($user, $request) {
+                $location = TechnicianLocation::updateOrCreate(
+                    ['user_id' => $user->id],
+                    [
+                        'organization_id' => $user->organization_id,
+                        'latitude'        => $request->input('latitude'),
+                        'longitude'       => $request->input('longitude'),
+                        'accuracy'        => $request->input('accuracy'),
+                        'speed'           => $request->input('speed'),
+                        'heading'         => $request->input('heading'),
+                        'status'          => 'online',
+                        'last_updated_at' => Carbon::now(),
+                    ]
+                );
 
-            // Append to the breadcrumb trail when the tech has moved enough, or on a
-            // periodic heartbeat — keeps trails detailed while moving, sparse while parked.
-            $this->maybeRecordHistory($user, (float) $request->input('latitude'), (float) $request->input('longitude'), $request);
+                // Append to the breadcrumb trail when the tech has moved enough, or on a
+                // periodic heartbeat — keeps trails detailed while moving, sparse while parked.
+                $this->maybeRecordHistory(
+                    $user,
+                    (float) $request->input('latitude'),
+                    (float) $request->input('longitude'),
+                    $request
+                );
+
+                return $location;
+            });
 
             $payload = $this->payload($location, $user);
 
-            // Push the new position to any admin dashboards watching the map.
+            // Push the new position to any admin dashboards watching the map. Deliberately AFTER
+            // the commit: broadcasting a position that then rolled back would put a technician on
+            // the map at a location no longer stored anywhere.
             try {
                 event(new TechnicianLocationUpdated($payload));
             } catch (\Throwable $e) {
                 // Broadcasting must never break the technician's update loop.
-                \Log::warning('TechnicianLocation broadcast failed: ' . $e->getMessage());
+                Log::warning('TechnicianLocation broadcast failed', [
+                    'user_id' => $user->id,
+                    'error'   => $e->getMessage(),
+                ]);
             }
 
             return response()->json([
@@ -97,8 +135,14 @@ class TechnicianLocationController extends Controller
                 'message' => 'Location updated',
                 'data'    => $payload,
             ]);
-        } catch (\Exception $e) {
-            \Log::error('TechnicianLocation update error: ' . $e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('TechnicianLocation update error', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+                'file'    => $e->getFile(),
+                'line'    => $e->getLine(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update location',
@@ -200,10 +244,14 @@ class TechnicianLocationController extends Controller
     private function maybeRecordHistory($user, float $lat, float $lng, Request $request): void
     {
         try {
+            // Only the three columns the decision below needs. The trail table is the largest in
+            // this feature and grows every heartbeat, so this runs on every single GPS update —
+            // selecting the whole row would drag the accuracy/speed/heading payload back for
+            // nothing.
             $last = DB::table('technician_location_history')
                 ->where('user_id', $user->id)
                 ->orderByDesc('recorded_at')
-                ->first();
+                ->first(['latitude', 'longitude', 'recorded_at']);
 
             $shouldRecord = true;
             if ($last) {
@@ -229,8 +277,13 @@ class TechnicianLocationController extends Controller
                 'created_at'      => Carbon::now(),
             ]);
         } catch (\Throwable $e) {
-            // History is best-effort; never fail the live update because of it.
-            \Log::warning('TechnicianLocation history insert failed: ' . $e->getMessage());
+            // History is best-effort; never fail the live update because of it. Safe to swallow
+            // inside the surrounding transaction: MySQL rolls back the failed statement only, not
+            // the whole transaction, so the live-location upsert still commits.
+            Log::warning('TechnicianLocation history insert failed', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
         }
     }
 

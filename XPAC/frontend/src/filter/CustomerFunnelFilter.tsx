@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { planService } from '../services/planService';
 import apiClient from '../config/api';
+import { VIP_OPTIONS, VAT_TYPE_OPTIONS, GENERATION_TYPE_OPTIONS } from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -69,6 +70,12 @@ export const allColumns: Column[] = [
   { key: 'billingAccountUpdatedAt', label: 'Billing Account Updated At', dataType: 'datetime' },
   { key: 'billingAccountUpdatedBy', label: 'Billing Account Updated By', dataType: 'varchar' },
   { key: 'totalPaid', label: 'Total Paid', dataType: 'decimal' },
+  { key: 'vip', label: 'VIP', dataType: 'checklist' },
+  { key: 'vatType', label: 'VAT Type', dataType: 'checklist' },
+  { key: 'generationType', label: 'Generation Type', dataType: 'checklist' },
+  // Only meaningful for Prepaid accounts; Customer.tsx excludes non-prepaid records while
+  // this filter is active.
+  { key: 'prepaidExpiration', label: 'Prepaid Expiration', dataType: 'date' },
 
   // Technical Details Table
   { key: 'username', label: 'Username', dataType: 'varchar' },
@@ -89,6 +96,22 @@ export const allColumns: Column[] = [
   { key: 'techUpdatedBy', label: 'Technical Details Updated By', dataType: 'varchar' },
   { key: 'onlineStatus', label: 'Online Status', dataType: 'checklist' },
   { key: 'sessionGroup', label: 'Group', dataType: 'checklist' },
+
+  // The remaining columns the Customer table can show. Customer.tsx resolves a filter value
+  // through the same getVal() the table sorts by, so these match what the cell displays.
+  //
+  // Two table columns are deliberately NOT repeated here because an entry of their own would
+  // filter differently from what the cell shows:
+  //  - 'Status' renders the connectivity pill, which is derived from the billing status AND the
+  //    session status. Those are already the 'Billing Status' and 'Online Status' entries above,
+  //    and a third entry keyed on the raw billing status would quietly disagree with the pill.
+  //  - 'Expiration Date' is the prepaid expiry, already filterable as 'Prepaid Expiration' above
+  //    — which carries the prepaid-only guard and the local-midnight handling a plain date entry
+  //    would lose.
+  { key: 'customerName', label: 'Full Name', dataType: 'varchar' },
+  { key: 'provider', label: 'Provider', dataType: 'varchar' },
+  { key: 'lcpnapport', label: 'LCPNAPPORT', dataType: 'varchar' },
+  { key: 'mikrotikId', label: 'Mikrotik ID', dataType: 'varchar' },
 ];
 
 const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
@@ -387,6 +410,12 @@ const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
           { label: 'Renter', value: 'renter' },
           { label: 'Owner', value: 'owner' }
         ];
+      } else if (selectedColumn.key === 'vip') {
+        options = VIP_OPTIONS;
+      } else if (selectedColumn.key === 'vatType') {
+        options = VAT_TYPE_OPTIONS;
+      } else if (selectedColumn.key === 'generationType') {
+        options = GENERATION_TYPE_OPTIONS;
       }
 
       const filteredOptions = options.filter(opt =>

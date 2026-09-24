@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { API_BASE_URL, authFetch } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 interface AddPortModalProps {
@@ -107,8 +107,11 @@ const AddPortModal: React.FC<AddPortModalProps> = ({
 
       const method = editingPort ? 'PUT' : 'POST';
 
-      const response = await authFetch(url, {
+      const response = await fetch(url, {
         method,
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking.
+        credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',

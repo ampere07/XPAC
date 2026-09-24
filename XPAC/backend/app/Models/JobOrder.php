@@ -8,6 +8,43 @@ class JobOrder extends Model
 {
     protected $table = 'job_orders';
 
+    /**
+     * The state every newly created PPPoE account starts in.
+     *
+     * A PPPoE account exists from the moment credentials are generated, but
+     * existing is not the same as being entitled to service: the customer has
+     * not paid yet, and nothing about generating a username says they have.
+     * Creating the RADIUS user straight into its plan group would hand out full
+     * bandwidth at the moment a technician filled in a form, which is why the
+     * account is created here and activated somewhere else entirely.
+     *
+     * Activation is downstream and deliberate — ManualRadiusOperationsService
+     * ::reconnectUser, called from the payment pipelines (PaymentWorkerService
+     * and TransactionController) once money has actually landed. That call is
+     * what moves the RADIUS user into the plan group.
+     *
+     * The string matches the RADIUS profile group name and the billing status
+     * vocabulary the rest of the app compares against, so the same value is
+     * correct on job_orders.username_status, technical_details.username_status
+     * and in the RADIUS payload.
+     */
+    public const USERNAME_STATUS_RESTRICTED = 'Restricted';
+
+    /**
+     * The state an account reaches once RADIUS has confirmed it is on its plan group.
+     *
+     * The counterpart to the constant above, and written only after the network says so —
+     * a VIP approval that reconnects successfully, where nothing else would ever move the
+     * account off Restricted. Left unwritten by a failed or queued reconnect, so the column
+     * keeps reading Restricted for exactly as long as the customer really is.
+     *
+     * Deliberately 'Active' rather than the plan name. The column is displayed as a status
+     * on the job order, customer and billing screens and is offered as a filter option
+     * (RelatedDataController builds that list from its distinct values); writing plan names
+     * into it would turn a two-value status into one option per plan.
+     */
+    public const USERNAME_STATUS_ACTIVE = 'Active';
+
     protected $fillable = [
         'application_id',
         'account_id',
@@ -17,6 +54,18 @@ class JobOrder extends Model
         'installation_fee',
         'billing_day',
         'billing_status',
+        'generation_type',
+        // Legacy free-text VAT mode, still written alongside vat_enabled so older readers of the
+        // job order (details view, exports) keep working.
+        'vat_type',
+        'vat_enabled',
+        'withholding_enabled',
+        'withholding_percentage',
+        // VIP captured up front on the JO Assign Form. Copied verbatim onto the billing account
+        // at approval, which is also created with the VIP billing status — same VIP mechanism as
+        // before, just no longer needing a manual edit after approval.
+        'vip_enabled',
+        'vip_expiration',
         'modem_router_sn',
         'router_model',
         'group_name',
@@ -34,9 +83,6 @@ class JobOrder extends Model
         'onsite_status',
         'assigned_email',
         'status_remarks',
-        // The written record of what happened on site. A job order has this one
-        // remarks column and no other — visit notes belong here too. Service
-        // Orders are the ones that carry a separate Visit_Remarks.
         'onsite_remarks',
         'status_remarks_id',
         'address_coordinates',
@@ -61,27 +107,13 @@ class JobOrder extends Model
         'organization_id',
         'technicians',
         'commission_status',
-        // What this job order settled with its referring agent, and the rates
-        // it settled at. Snapshots: an administrator changing either setting
-        // later must not restate a job order already paid.
-        'commission_value',
-        'incentive_value',
-        'agent_paid_at',
-        'agent_paid_to',
-        // Pre-installation visit: the marker, the note taken at the time, and
-        // when it was recorded. Kept apart from onsite_status/onsite_remarks
-        // because a pre-install happens BEFORE the install proper, and writing
-        // it into those would overwrite the record of the install itself.
-        'pre_installed',
-        'pre_remarks',
-        'pre_installed_datetime',
-        // Who recorded it, by email. Stamped by the controller from the signed-in
-        // user, never taken from the request — see JobOrderController::update().
-        'preinstalled_updated_by',
-        // technician_enabled is deliberately NOT fillable: it is the flag that
-        // releases a job order to a technician out of turn, so it must never be
-        // settable through the generic update endpoint a technician also calls.
-        // JobOrderController::enableForTechnician() assigns it directly.
+        // NOT fillable, deliberately: commission_value, incentive_value,
+        // agent_paid_at, agent_paid_to. They record what this job order settled
+        // with its referring agent and are written only by
+        // JobOrderAgentPaymentService via forceFill(). JobOrderController::update()
+        // fills from $request->all(), so making them fillable would let any edit
+        // form clear agent_paid_at (and get the agent paid twice) or 500 on a
+        // database where the 2026_08_14 migration has not run yet.
     ];
 
     protected $dates = [
@@ -98,75 +130,15 @@ class JobOrder extends Model
         'date_installed' => 'datetime',
         'organization_id' => 'integer',
         'technicians' => 'array',
+        'vat_enabled' => 'boolean',
+        'withholding_enabled' => 'boolean',
+        'withholding_percentage' => 'decimal:2',
+        'vip_enabled' => 'boolean',
+        'vip_expiration' => 'datetime',
         'commission_value' => 'decimal:2',
         'incentive_value' => 'decimal:2',
         'agent_paid_at' => 'datetime',
         'agent_paid_to' => 'integer',
-        'technician_enabled' => 'boolean',
-        'pre_installed_datetime' => 'datetime',
-    ];
-
-    /**
-     * Onsite statuses that finish a job order for good.
-     *
-     * Nothing is left for the technician to do, so the queue steps over these
-     * and they are never locked and never offered for release.
-     *
-     * Mirrors CLOSED_ONSITE_STATUSES in the two clients'
-     * utils/technicianJobOrderAccess.ts.
-     */
-    public const TECHNICIAN_QUEUE_CLOSED_ONSITE_STATUSES = [
-        'done',
-        'completed',
-        'failed',
-        'cancelled',
-    ];
-
-    /**
-     * Onsite statuses that defer a job order without closing it.
-     *
-     * A reschedule is work the technician still owes, waiting on a return visit.
-     * It keeps out of the queue's way — it never claims the "next one" slot and
-     * never blocks the job orders behind it — but it is not theirs to pick back
-     * up on their own either: it stays locked until it is the only thing left in
-     * their queue or an administrator releases it.
-     *
-     * Mirrors DEFERRED_ONSITE_STATUSES in the two clients'
-     * utils/technicianJobOrderAccess.ts.
-     */
-    public const TECHNICIAN_QUEUE_DEFERRED_ONSITE_STATUSES = [
-        'reschedule',
-        'rescheduled',
-        're-schedule',
-    ];
-
-    /**
-     * Everything the queue steps over, closed and deferred together.
-     *
-     * This is what decides the ORDER of a technician's list. What decides
-     * whether a record is locked is the closed list alone — see
-     * JobOrderController::isJobOrderLockedForTechnician().
-     */
-    public const TECHNICIAN_QUEUE_EXEMPT_ONSITE_STATUSES = [
-        'done',
-        'completed',
-        'failed',
-        'cancelled',
-        'reschedule',
-        'rescheduled',
-        're-schedule',
-    ];
-
-    /**
-     * The work a technician is actively out on, which leads their list.
-     *
-     * Mirrors IN_PROGRESS_ONSITE_STATUSES in the two clients'
-     * utils/technicianJobOrderAccess.ts.
-     */
-    public const TECHNICIAN_IN_PROGRESS_ONSITE_STATUSES = [
-        'in progress',
-        'inprogress',
-        'in-progress',
     ];
 
     public function application()

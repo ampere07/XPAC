@@ -1,8 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../config/api';
 
 interface ApiResponse<T = any> {
-  success?: boolean;
   data?: T;
   message?: string;
   error?: string;
@@ -39,12 +37,9 @@ interface CreateTransactionResponse {
 }
 
 export const transactionService = {
-  approveTransaction: async (transactionId: string, approvedBy?: string): Promise<ApproveTransactionResponse> => {
+  approveTransaction: async (transactionId: string): Promise<ApproveTransactionResponse> => {
     try {
-      const response = await apiClient.post<ApiResponse>(`/transactions/${transactionId}/approve`, {
-        approved_by: approvedBy,
-        updated_by_user: approvedBy
-      });
+      const response = await apiClient.post<ApiResponse>(`/transactions/${transactionId}/approve`);
       return {
         success: true,
         message: response.data.message || 'Transaction approved successfully',
@@ -55,63 +50,6 @@ export const transactionService = {
       return {
         success: false,
         message: error.response?.data?.message || error.message || 'Failed to approve transaction'
-      };
-    }
-  },
-
-  revertTransaction: async (transactionId: string, revertedBy?: string): Promise<ApproveTransactionResponse> => {
-    try {
-      const response = await apiClient.post<ApiResponse>(`/transactions/${transactionId}/revert`, {
-        reverted_by: revertedBy,
-        updated_by_user: revertedBy
-      });
-      return {
-        success: true,
-        message: response.data.message || 'Transaction reverted successfully',
-        data: response.data
-      };
-    } catch (error: any) {
-      console.error('Error reverting transaction:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || error.message || 'Failed to revert transaction'
-      };
-    }
-  },
-
-  deleteTransaction: async (transactionId: string): Promise<ApiResponse> => {
-    try {
-      const response = await apiClient.delete<ApiResponse>(`/transactions/${transactionId}`);
-      return response.data;
-    } catch (error: any) {
-      console.error('Error deleting transaction:', error);
-      throw error.response?.data || error;
-    }
-  },
-
-  updateStatus: async (transactionId: string, status: string): Promise<ApiResponse> => {
-    try {
-      let currentUserEmail = '';
-      try {
-        const authData = await AsyncStorage.getItem('authData');
-        if (authData) {
-          const parsed = JSON.parse(authData);
-          currentUserEmail = parsed.email_address || parsed.email || parsed.user?.email_address || parsed.user?.email || '';
-        }
-      } catch (e) {
-        console.error('Error getting current user email:', e);
-      }
-
-      const response = await apiClient.put<ApiResponse>(`/transactions/${transactionId}/status`, {
-        status,
-        updated_by_user: currentUserEmail
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Error updating transaction status:', error);
-      return {
-        success: false,
-        message: error.response?.data?.message || error.message || 'Failed to update transaction status'
       };
     }
   },

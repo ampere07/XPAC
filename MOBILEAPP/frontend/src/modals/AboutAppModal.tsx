@@ -106,7 +106,7 @@ const AboutAppModal: React.FC<AboutAppModalProps> = ({ visible, onClose }) => {
                                     />
                                 ) : (
                                     <View style={[styles.logoPlaceholder, { backgroundColor: colorPalette?.primary || '#ef4444' }]}>
-                                        <Text style={styles.logoPlaceholderText}>XPAC</Text>
+                                        <Text style={styles.logoPlaceholderText}>GOWISER</Text>
                                     </View>
                                 )}
                             </View>
@@ -118,7 +118,7 @@ const AboutAppModal: React.FC<AboutAppModalProps> = ({ visible, onClose }) => {
                                 </Text>
                                 <Text style={styles.versionText}>Version {version}</Text>
                                 <Text style={styles.mainDescription}>
-                                    Get ready to upgrade your internet experience with XPAC Telecommunication Services. Enjoy lightning-fast fiber connectivity for homes and businesses. Experience the reliability and speed you deserve. Discover our high-speed internet solutions now!
+                                    Get ready to upgrade your internet experience with GOWISER Telecommunication Services. Enjoy lightning-fast fiber connectivity for homes and businesses. Experience the reliability and speed you deserve. Discover our high-speed internet solutions now!
                                 </Text>
                             </View>
 

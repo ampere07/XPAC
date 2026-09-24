@@ -34,6 +34,15 @@ export const getBillingRecords = async (page: number = 1, perPage: number = 50, 
         applicationId: item.Account_No || '',
         accountNo: item.Account_No || '',
         account_no: item.Account_No || '',
+        // Prepaid accounts only — stays empty for Post Paid. Shown in the customer list row.
+        prepaidExpiration: item.Prepaid_Expires_At || '',
+        // 'Pre Paid' | 'Post Paid'. Needed by TransactionFormModal to decide whether the plan
+        // field is editable, so it must be present on LIST records too, not just detail ones.
+        generationType: item.Generation_Type || '',
+        // A queued plan switch, so the transaction form preselects the plan the customer has
+        // already bought rather than the one they are leaving.
+        pendingPlanId: item.Pending_Plan_Id ?? null,
+        pendingPlanEffectiveAt: item.Pending_Plan_Effective_At || '',
         customerName: item.Full_Name || '',
         firstName: item.First_Name || item.first_name || '',
         middleInitial: item.Middle_Initial || item.middle_initial || '',
@@ -47,6 +56,12 @@ export const getBillingRecords = async (page: number = 1, perPage: number = 50, 
         timestamp: item.Modified_Date || '',
         billingStatus: item.Billing_Status_Name || (item.Billing_Status_ID ? getFallbackBillingStatus(item.Billing_Status_ID) : ''),
         billing_status_id: item.Billing_Status_ID,
+        // VAT and VIP are needed by the customer funnel filter, which runs client-side over
+        // LIST records — without these, the VAT Type and VIP filters would see undefined on
+        // every row. The /billing index already returns all three.
+        vatType: item.Vat_Type || '',
+        vatEnabled: item.Vat_Enabled ?? null,
+        vip_expiration: item.Vip_Expiration || '',
         dateInstalled: item.Date_Installed || '',
         contactNumber: item.Contact_Number || '',
         secondContactNumber: item.Second_Contact_Number || '',
@@ -173,8 +188,21 @@ export const getBillingRecordDetails = async (id: string): Promise<BillingDetail
 
       const detailRecord: BillingDetailRecord = {
         ...basicRecord,
+        generationType: item.Generation_Type || '',
+        prepaidExpiration: item.Prepaid_Expires_At || '',
+        pendingPlanId: item.Pending_Plan_Id ?? null,
+        pendingPlanEffectiveAt: item.Pending_Plan_Effective_At || '',
+        vatType: item.Vat_Type || '',
+        // Null when absent so the UI can fall back to the legacy vatType text for accounts
+        // predating the boolean column.
+        vatEnabled: item.Vat_Enabled ?? null,
+        withholdingEnabled: item.Withholding_Enabled ?? null,
+        withholdingPercentage: item.Withholding_Percentage != null ? Number(item.Withholding_Percentage) : null,
         lcpnapport: item.LCPNAPPORT || '',
         referredBy: item.Referred_By || '',
+        // The id behind the name, so CustomerDetailsEditModal can write the
+        // same referral back instead of re-matching the displayed name.
+        referredByAgentId: item.Referred_By_Agent_ID ?? null,
         referrersAccountNumber: '',
         group: item.Group_ID ? `Group ${item.Group_ID}` : '',
         groupName: item.Group_Name || item.group_name || '',

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE_URL, authFetch } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 import ModalUITemplate, { useModalTheme } from './ui-modal/ModalUITemplate';
 
 interface AddPaymentMethodModalProps {
@@ -144,7 +144,7 @@ const AddPaymentMethodModal: React.FC<AddPaymentMethodModalProps> = ({
 
       const method = editingPaymentMethod ? 'PUT' : 'POST';
 
-      const response = await authFetch(url, {
+      const response = await fetch(url, {
         method,
         headers: {
           'Accept': 'application/json',

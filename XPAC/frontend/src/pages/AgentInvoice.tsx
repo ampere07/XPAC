@@ -4,13 +4,12 @@ import {
     ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, ChevronDown, X
 } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { ROLE, roleIdOf } from '../config/permissions';
 import { agentInvoiceService, AgentInvoiceRecord } from '../services/agentInvoiceService';
 import AgentInvoiceDetails from '../components/AgentInvoiceDetails';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import AgentInvoiceDownloadModal from '../modals/AgentInvoiceDownloadModal';
 import AgentPayoutModal from '../modals/AgentPayoutModal';
-import { usePermissions } from '../hooks/usePermissions';
+import { getAgentAccess } from '../utils/agentAccess';
 
 const hexToRgba = (hex: string, opacity: number) => {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -149,7 +148,8 @@ const StatusSelect: React.FC<{
 };
 
 const AgentInvoice: React.FC = () => {
-    const { can } = usePermissions();
+    // Read once: authData does not change without a reload.
+    const access = useMemo(() => getAgentAccess(), []);
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
     const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -182,29 +182,13 @@ const AgentInvoice: React.FC = () => {
     /**
      * Whether this user may change an invoice's status.
      *
-     * Administrators and superadmins only. Read once — authData does not change
-     * without a reload — and resolved through roleIdOf, which tries role_id and
-     * falls back to the role name, since either can be missing or stale in
-     * storage. That is the same resolution the rest of the app uses, so this
-     * page cannot disagree with the sidebar about who someone is.
-     *
-     * The server enforces the restriction independently; this only decides
-     * whether the control is worth showing.
+     * Administrators and superadmins only, resolved by utils/agentAccess the
+     * same way the sidebar resolves roles, so this page cannot disagree with it
+     * about who someone is. The server enforces the restriction independently;
+     * this only decides whether the control is worth showing.
      */
-    const canEditStatus = useMemo(() => {
-        try {
-            const authData = JSON.parse(localStorage.getItem('authData') || '{}');
-            const roleId = roleIdOf(authData);
-            return roleId === ROLE.ADMINISTRATOR || roleId === ROLE.SUPER_ADMIN;
-        } catch {
-            // Unreadable authData means we cannot show it is allowed, so we do
-            // not offer it. The read-only pill still renders.
-            return false;
-        }
-    }, []);
+    const canEditStatus = access.canChangeInvoiceStatus;
 
-    // Whether this user may generate invoices or change a status. The server is
-    // the authority — this only decides whether the control is worth showing.
     /**
      * The rows grouped by the week they bill, in the order the server sent them.
      *
@@ -811,7 +795,7 @@ const AgentInvoice: React.FC = () => {
                         onNext={selectedIndex >= 0 && selectedIndex < records.length - 1 ? handleNextRecord : undefined}
                         onViewPdf={() => handlePdf(selected, false)}
                         onDownloadPdf={() => handlePdf(selected, true)}
-                        onPayOut={can('agent-invoices.payout') ? () => setPayoutFor(selected) : undefined}
+                        onPayOut={access.canPayOutInvoice ? () => setPayoutFor(selected) : undefined}
                     />
                 </div>
             )}

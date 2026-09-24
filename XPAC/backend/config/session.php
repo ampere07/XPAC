@@ -31,7 +31,11 @@ return [
     |
     */
 
-    'lifetime' => env('SESSION_LIFETIME', 120),
+    // 20160 minutes = 14 days of inactivity before the session itself lapses. The old default
+    // of 120 (2 hours) is what dropped people back to the login screen after a lunch break or
+    // overnight. Even past this window the recaller cookie from Auth::login($user, true)
+    // rebuilds the session transparently, so this is the idle window, not the login lifetime.
+    'lifetime' => env('SESSION_LIFETIME', 20160),
 
     'expire_on_close' => false,
 

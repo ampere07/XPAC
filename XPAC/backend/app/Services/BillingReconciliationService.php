@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\BillingAccount;
-use App\Support\PlanGroup;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -166,14 +165,6 @@ class BillingReconciliationService
         $summary = array_fill_keys(array_keys(self::REASON_LABELS), 0);
         $summary['due'] = 0;
         $summary['ungenerated'] = 0;
-        // Accounts whose linked plan and sold plan genuinely name different plans,
-        // judged on the first word rather than the whole label. Additive: it counts a
-        // condition, it does not reclassify any row's reason.
-        $summary['plan_mismatch'] = 0;
-
-        // Hoisted above the sweep: one read of plan_list serves every chunk, and every
-        // account inside it, instead of a lookup per row.
-        $planIndex = $this->planIndex();
 
         $rows = [];
 
@@ -192,10 +183,6 @@ class BillingReconciliationService
             'bs.status_name as billing_status_name',
             'c.first_name',
             'c.last_name',
-            // What the subscriber was sold, as the application recorded it. Carried so
-            // the audit can tell a genuinely unlinked plan from a label that merely
-            // wears a price suffix — see planIndex() and describePlan().
-            'c.desired_plan',
         ];
 
         if ($this->hasGenerationType()) {
@@ -237,7 +224,7 @@ class BillingReconciliationService
         // repeat rows when an account is created or removed while it runs, and a skipped
         // row here is an unbilled subscriber nobody is told about.
         $query->chunkById(self::ACCOUNT_CHUNK, function ($accounts) use (
-            &$rows, &$summary, $today, $period, $advance, $reasonFilter, $includeOk, $planIndex
+            &$rows, &$summary, $today, $period, $advance, $reasonFilter, $includeOk
         ): void {
             $accountNos = [];
             $accountIds = [];
@@ -273,12 +260,6 @@ class BillingReconciliationService
 
                 $summary[$reason] = ($summary[$reason] ?? 0) + 1;
 
-                $plan = $this->describePlan($account, $planIndex);
-
-                if ($plan['plan_match'] === 'mismatch') {
-                    $summary['plan_mismatch']++;
-                }
-
                 // `ungenerated` is the headline "this cycle lost money" figure, so it
                 // counts only accounts that SHOULD have been billed on the cycle and
                 // were not. An account already invoiced obviously does not qualify, and
@@ -296,7 +277,7 @@ class BillingReconciliationService
                     continue;
                 }
 
-                $rows[] = $this->presentRow($account, $reason, $due, $invoiced, $dismissed, $plan);
+                $rows[] = $this->presentRow($account, $reason, $due, $invoiced, $dismissed);
             }
         }, 'ba.id', 'id');
 
@@ -411,187 +392,6 @@ class BillingReconciliationService
     }
 
     /**
-     * Every plan in the catalogue, indexed by the identities a label can be matched on.
-     *
-     * Read once per audit and passed down into the chunk closure, so a sweep of 4,000
-     * accounts costs one query here rather than one per row. Both indexes are built in
-     * the same pass:
-     *
-     *  - `by_name`  the whole plan_name, lowercased - an exact link
-     *  - `by_word`  the plan_name's first word - the identity the device and the Job
-     *               Order creation path actually use
-     *
-     * A first word claimed by more than one plan is recorded as ambiguous and never
-     * resolved: "SWIFT 1000" and "SWIFT 2000" both reduce to "SWIFT", and guessing
-     * which one a subscriber is on would put a wrong price in front of an operator.
-     *
-     * @return array{by_name: array<string, array<string, mixed>>, by_word: array<string, array<string, mixed>|null>}
-     */
-    private function planIndex(): array
-    {
-        $byName = [];
-        $byWord = [];
-
-        try {
-            $plans = DB::table('plan_list')
-                ->select(['id', 'plan_name', 'price'])
-                ->whereNotNull('plan_name')
-                ->orderBy('id')
-                ->get();
-        } catch (Throwable $e) {
-            // The plan identity block is advisory. Losing it must not take the
-            // worklist down with it.
-            $this->log('warning', 'Could not read the plan catalogue for plan matching.', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return ['by_name' => [], 'by_word' => []];
-        }
-
-        foreach ($plans as $plan) {
-            $name = trim((string) $plan->plan_name);
-
-            if ($name === '') {
-                continue;
-            }
-
-            $entry = [
-                'id' => (int) $plan->id,
-                'plan_name' => $name,
-                'price' => $plan->price === null ? null : (float) $plan->price,
-            ];
-
-            $byName[mb_strtolower($name)] = $entry;
-
-            $word = mb_strtolower(PlanGroup::firstWord($name));
-
-            if ($word === '') {
-                continue;
-            }
-
-            if (!array_key_exists($word, $byWord)) {
-                $byWord[$word] = $entry;
-            } elseif ($byWord[$word] !== null && $byWord[$word]['id'] !== $entry['id']) {
-                // Ambiguous - two priced plans share a first word. Recorded as null so
-                // describePlan() declines to suggest one rather than picking wrong.
-                $byWord[$word] = null;
-            }
-        }
-
-        return ['by_name' => $byName, 'by_word' => $byWord];
-    }
-
-    /**
-     * How this account's linked plan relates to the plan the subscriber was sold.
-     *
-     * This is the fix for the plan half of the audit reporting discrepancies that are
-     * not real. `billing_accounts.plan_id` points at a catalogue row whose name is the
-     * bare group ("SWIFT"), while `customers.desired_plan` carries the label the
-     * application recorded ("SWIFT 1000") - the same suffix Job Order account creation
-     * strips before it picks a User Manager group. Compared whole, those two read as a
-     * disagreement on every single sweep; compared on the first word, they are the same
-     * plan and nothing is reported.
-     *
-     * Deliberately advisory. Nothing here changes the row's `reason` or its
-     * `can_generate` flag: an account with no plan_id still cannot be billed from this
-     * screen, it now simply says which catalogue row would fix it.
-     *
-     *  - `linked`     the linked plan and the sold plan name the same plan
-     *  - `suggested`  no plan is linked, but the sold label resolves to exactly one
-     *  - `mismatch`   both are known and they name genuinely different plans
-     *  - `none`       nothing to compare - no link and no usable sold label
-     *
-     * @param array{by_name: array<string, array<string, mixed>>, by_word: array<string, array<string, mixed>|null>} $index
-     * @return array<string, mixed>
-     */
-    private function describePlan(object $account, array $index): array
-    {
-        $desired = trim((string) ($account->desired_plan ?? ''));
-        $linked = $account->plan_id === null ? null : trim((string) ($account->plan_name ?? ''));
-
-        $result = [
-            'desired_plan' => $desired !== '' ? $desired : null,
-            'plan_match' => 'none',
-            'suggested_plan_id' => null,
-            'suggested_plan_name' => null,
-            'suggested_plan_price' => null,
-        ];
-
-        if ($linked !== null && $linked !== '') {
-            if ($desired === '') {
-                // Linked and nothing to contradict it. Not a discrepancy.
-                $result['plan_match'] = 'linked';
-
-                return $result;
-            }
-
-            $result['plan_match'] = PlanGroup::matches($linked, $desired) ? 'linked' : 'mismatch';
-
-            if ($result['plan_match'] === 'mismatch') {
-                // Name what the sold label points at, so a real mismatch arrives with
-                // the plan that would settle it rather than just a complaint.
-                $match = $this->resolvePlan($desired, $index);
-
-                if ($match !== null) {
-                    $result['suggested_plan_id'] = $match['id'];
-                    $result['suggested_plan_name'] = $match['plan_name'];
-                    $result['suggested_plan_price'] = $match['price'];
-                }
-            }
-
-            return $result;
-        }
-
-        if ($desired === '') {
-            return $result;
-        }
-
-        $match = $this->resolvePlan($desired, $index);
-
-        if ($match === null) {
-            return $result;
-        }
-
-        $result['plan_match'] = 'suggested';
-        $result['suggested_plan_id'] = $match['id'];
-        $result['suggested_plan_name'] = $match['plan_name'];
-        $result['suggested_plan_price'] = $match['price'];
-
-        return $result;
-    }
-
-    /**
-     * The catalogue row a sold plan label names: exact first, then by first word.
-     *
-     * @param array{by_name: array<string, array<string, mixed>>, by_word: array<string, array<string, mixed>|null>} $index
-     * @return array<string, mixed>|null
-     */
-    private function resolvePlan(string $label, array $index): ?array
-    {
-        $exact = $index['by_name'][mb_strtolower(trim($label))] ?? null;
-
-        if ($exact !== null) {
-            return $exact;
-        }
-
-        $bare = $index['by_name'][mb_strtolower(PlanGroup::bare($label))] ?? null;
-
-        if ($bare !== null) {
-            return $bare;
-        }
-
-        $word = mb_strtolower(PlanGroup::firstWord($label));
-
-        if ($word === '') {
-            return null;
-        }
-
-        // null here means the first word is claimed by more than one plan - see
-        // planIndex(). Ambiguity is answered with "no suggestion", never a guess.
-        return $index['by_word'][$word] ?? null;
-    }
-
-    /**
      * @param array<int, string> $accountNos
      * @return array<string, object>
      */
@@ -669,14 +469,8 @@ class BillingReconciliationService
      * @param array<int, object> $dismissed
      * @return array<string, mixed>
      */
-    private function presentRow(
-        object $account,
-        string $reason,
-        bool $due,
-        array $invoiced,
-        array $dismissed,
-        array $plan = []
-    ): array {
+    private function presentRow(object $account, string $reason, bool $due, array $invoiced, array $dismissed): array
+    {
         $name = trim(((string) ($account->first_name ?? '')) . ' ' . ((string) ($account->last_name ?? '')));
         $invoice = $invoiced[(string) $account->account_no] ?? null;
         $dismissal = $dismissed[(int) $account->id] ?? null;
@@ -703,14 +497,6 @@ class BillingReconciliationService
             'last_invoice_date' => $invoice->invoice_date ?? null,
             'dismissed_reason' => $dismissal->reason ?? null,
             'dismissed_at' => $dismissal->created_at ?? null,
-            // Additive plan-identity block. Every existing key above is untouched;
-            // these describe how the linked plan relates to the sold one so the screen
-            // can stop reporting a suffix as a discrepancy. See describePlan().
-            'desired_plan' => $plan['desired_plan'] ?? null,
-            'plan_match' => $plan['plan_match'] ?? 'none',
-            'suggested_plan_id' => $plan['suggested_plan_id'] ?? null,
-            'suggested_plan_name' => $plan['suggested_plan_name'] ?? null,
-            'suggested_plan_price' => $plan['suggested_plan_price'] ?? null,
         ];
     }
 

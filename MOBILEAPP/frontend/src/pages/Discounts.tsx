@@ -22,7 +22,7 @@ import {
   X,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { StandardPage } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import DiscountDetails from '../components/DiscountDetails';
 import DiscountFormModal from '../modals/DiscountFormModal';
 import * as discountService from '../services/discountService';
@@ -206,7 +206,6 @@ const Discounts: React.FC = () => {
   const [createdDateTo, setCreatedDateTo] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
 
   const [cities, setCities] = useState<City[]>([]);
@@ -221,8 +220,6 @@ const Discounts: React.FC = () => {
 
   // Filter sidebar modal
   const [filterModalOpen, setFilterModalOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(25);
   // Detail modal (for non-tablet)
   const [detailModalOpen, setDetailModalOpen] = useState(false);
 
@@ -263,23 +260,6 @@ const Discounts: React.FC = () => {
             null;
           setUserOrgId(orgId);
 
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch (e) {
-                perms = userData.permissions
-                  .split(',')
-                  .map((p: string) => p.trim())
-                  .filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (error) {
         console.error('Error parsing auth data in Discounts:', error);
@@ -288,9 +268,8 @@ const Discounts: React.FC = () => {
     loadAuth();
   }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
   const { can: hasPermission } = usePermissions();
 
   useEffect(() => {
@@ -815,83 +794,282 @@ const Discounts: React.FC = () => {
     );
   };
 
-  const locationLabel = selectedLocation.replace(/^(reg:|city:|brgy:)/, '');
-  const dateLabel = [createdDateFrom || '…', createdDateTo || '…'].join(' → ');
-
   return (
-    <StandardPage<DiscountRecord>
-      data={filteredDiscountRecords}
-      keyExtractor={(item) => item.id}
-      renderItem={(item) => renderItem({ item })}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search Discount records..."
-      // One drawer for both form factors. The tablet used to carry this as a
-      // permanent 260px column and the phone as a bottom sheet; the standard
-      // drawer is the same content, opened the same way on both.
-      drawerContent={
-        <View style={{ flex: 1 }}>
-          <View style={{ padding: 16, paddingTop: 60, borderBottomWidth: 1, borderBottomColor: BORDER }}>
+    <View style={{ flex: 1, backgroundColor: BG, flexDirection: isTablet ? 'row' : 'column' }}>
+      {/* Tablet: Sidebar always visible */}
+      {isTablet && (
+        <View
+          style={{
+            width: 260,
+            backgroundColor: CARD,
+            borderRightWidth: 1,
+            borderRightColor: BORDER,
+          }}
+        >
+          <View
+            style={{
+              padding: 16,
+              borderBottomWidth: 1,
+              borderBottomColor: BORDER,
+            }}
+          >
             <Text style={{ fontSize: 16, fontWeight: '600', color: TEXT }}>Discounts</Text>
           </View>
           {renderFilterSidebar()}
         </View>
-      }
-      drawerActive={selectedLocation !== 'all' || !!createdDateFrom || !!createdDateTo}
-      chips={[
-        ...(selectedLocation !== 'all' ? [{ key: '__location', label: 'Location', value: locationLabel }] : []),
-        ...(createdDateFrom || createdDateTo ? [{ key: '__dates', label: 'Created', value: dateLabel }] : []),
-      ]}
-      onRemoveChip={(key) => {
-        if (key === '__location') setSelectedLocation('all');
-        if (key === '__dates') { setCreatedDateFrom(''); setCreatedDateTo(''); }
-      }}
-      onClearChips={() => {
-        setSelectedLocation('all');
-        setCreatedDateFrom('');
-        setCreatedDateTo('');
-      }}
-      onExport={handleExport}
-      exportDisabled={isLoading || filteredDiscountRecords.length === 0}
-      onRefresh={handleRefresh}
-      refreshDisabled={isLoading}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading}
-      loadingText="Loading discount records..."
-      error={error}
-      onRetry={handleRefresh}
-      emptyText="No discount records found matching your filters"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      detail={
-        selectedDiscount ? (
-          <DiscountDetails
-            discountRecord={selectedDiscount}
-            onClose={() => { setDetailModalOpen(false); setSelectedDiscount(null); }}
-            onApproveSuccess={() => { handleRefresh(); setDetailModalOpen(false); }}
-            onEditSuccess={handleRefresh}
-            onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
-            onNext={currentDiscountIndex < filteredDiscountRecords.length - 1 ? handleNextRecord : undefined}
-          />
-        ) : null
-      }
-      toolbarActions={
-        hasPermission('discounts.add') ? (
-          <TouchableOpacity
-            onPress={() => setIsDiscountFormModalOpen(true)}
-            style={{ width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: primary }}
+      )}
+
+      {/* Main list area */}
+      <View style={{ flex: 1, flexDirection: isTablet ? 'row' : 'column' }}>
+        <View style={{ flex: isTablet && selectedDiscount ? 0.45 : 1 }}>
+          {/* Header */}
+          <View
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              paddingTop: isTablet ? 12 : 60,
+              backgroundColor: CARD,
+              borderBottomWidth: 1,
+              borderBottomColor: BORDER,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
           >
-            <Plus size={18} color="#ffffff" />
-          </TouchableOpacity>
-        ) : null
-      }
-    >
+            {/* Filter button (phone only) */}
+            {!isTablet && (
+              <TouchableOpacity
+                onPress={() => setFilterModalOpen(true)}
+                style={{
+                  padding: 8,
+                  borderWidth: 1,
+                  borderColor: BORDER,
+                  borderRadius: 8,
+                  backgroundColor: CARD,
+                }}
+              >
+                <Filter size={18} color={MUTED} />
+              </TouchableOpacity>
+            )}
+            <View style={{ flex: 1 }}>
+              <GlobalSearch
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                isDarkMode={isDarkMode}
+                colorPalette={colorPalette}
+                placeholder="Search Discount records..."
+              />
+            </View>
+            {hasPermission('discounts.add') && (
+              <TouchableOpacity
+                onPress={() => setIsDiscountFormModalOpen(true)}
+                style={{
+                  padding: 8,
+                  borderRadius: 8,
+                  backgroundColor: primary,
+                }}
+              >
+                <Plus size={18} color="#ffffff" />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={handleExport}
+              disabled={isLoading || filteredDiscountRecords.length === 0}
+              style={{
+                padding: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: primary,
+                backgroundColor: CARD,
+                opacity: isLoading || filteredDiscountRecords.length === 0 ? 0.4 : 1,
+              }}
+            >
+              <Download size={18} color={primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleRefresh}
+              disabled={isLoading}
+              style={{
+                padding: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: primary,
+                backgroundColor: CARD,
+                opacity: isLoading ? 0.4 : 1,
+              }}
+            >
+              <RefreshCw size={18} color={primary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Active filter indicator */}
+          {(selectedLocation !== 'all' || createdDateFrom || createdDateTo) && (
+            <View
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 6,
+                backgroundColor: `${primary}15`,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <Text style={{ fontSize: 12, color: primary }}>
+                {selectedLocation !== 'all'
+                  ? `Filter: ${selectedLocation.replace(/^(reg:|city:|brgy:)/, '')}`
+                  : 'Date filter active'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedLocation('all');
+                  setCreatedDateFrom('');
+                  setCreatedDateTo('');
+                }}
+              >
+                <Text style={{ fontSize: 12, color: primary, fontWeight: '700' }}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* List */}
+          {isLoading ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+              <ActivityIndicator size="large" color={primary} />
+              <Text style={{ color: MUTED, marginTop: 12 }}>Loading discount records...</Text>
+            </View>
+          ) : error ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+              <Text style={{ color: '#ef4444', textAlign: 'center', marginBottom: 16 }}>{error}</Text>
+              <TouchableOpacity
+                onPress={handleRefresh}
+                style={{
+                  paddingHorizontal: 20,
+                  paddingVertical: 10,
+                  backgroundColor: '#e5e7eb',
+                  borderRadius: 8,
+                }}
+              >
+                <Text style={{ color: TEXT, fontWeight: '500' }}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <FlatList
+              data={filteredDiscountRecords}
+              keyExtractor={item => item.id}
+              renderItem={renderItem}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={handleRefresh}
+                  tintColor={primary}
+                />
+              }
+              ListEmptyComponent={
+                <View style={{ padding: 40, alignItems: 'center' }}>
+                  <Text style={{ color: MUTED, textAlign: 'center' }}>
+                    No discount records found matching your filters
+                  </Text>
+                </View>
+              }
+              contentContainerStyle={filteredDiscountRecords.length === 0 ? { flex: 1 } : undefined}
+            />
+          )}
+        </View>
+
+        {/* Tablet inline details panel */}
+        {isTablet && selectedDiscount && (
+          <View style={{ flex: 0.55, borderLeftWidth: 1, borderLeftColor: BORDER }}>
+            <DiscountDetails
+              discountRecord={selectedDiscount}
+              onClose={() => setSelectedDiscount(null)}
+              onApproveSuccess={handleRefresh}
+              onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
+              onNext={
+                currentDiscountIndex < filteredDiscountRecords.length - 1
+                  ? handleNextRecord
+                  : undefined
+              }
+            />
+          </View>
+        )}
+      </View>
+
+      {/* Phone: Detail Modal */}
+      {!isTablet && (
+        <Modal visible={detailModalOpen && !!selectedDiscount} animationType="slide">
+          <View style={{ flex: 1, backgroundColor: CARD }}>
+            {selectedDiscount && (
+              <DiscountDetails
+                discountRecord={selectedDiscount}
+                onClose={() => {
+                  setDetailModalOpen(false);
+                  setSelectedDiscount(null);
+                }}
+                onApproveSuccess={() => {
+                  handleRefresh();
+                  setDetailModalOpen(false);
+                }}
+                onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
+                onNext={
+                  currentDiscountIndex < filteredDiscountRecords.length - 1
+                    ? handleNextRecord
+                    : undefined
+                }
+              />
+            )}
+          </View>
+        </Modal>
+      )}
+
+      {/* Phone: Filter Modal */}
+      {!isTablet && (
+        <Modal visible={filterModalOpen} animationType="slide" transparent>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+            <View
+              style={{
+                height: '80%',
+                backgroundColor: CARD,
+                borderTopLeftRadius: 16,
+                borderTopRightRadius: 16,
+              }}
+            >
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: 16,
+                  borderBottomWidth: 1,
+                  borderBottomColor: BORDER,
+                }}
+              >
+                <Text style={{ fontSize: 16, fontWeight: '600', color: TEXT }}>
+                  Discounts
+                </Text>
+                <TouchableOpacity onPress={() => setFilterModalOpen(false)}>
+                  <X size={20} color={MUTED} />
+                </TouchableOpacity>
+              </View>
+              {renderFilterSidebar()}
+              <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: BORDER }}>
+                <TouchableOpacity
+                  onPress={() => setFilterModalOpen(false)}
+                  style={{
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    backgroundColor: primary,
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text style={{ color: '#ffffff', fontWeight: '600' }}>View Records</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Discount Form Modal */}
       <DiscountFormModal
         isOpen={isDiscountFormModalOpen}
         onClose={() => setIsDiscountFormModalOpen(false)}
@@ -900,7 +1078,7 @@ const Discounts: React.FC = () => {
           setIsDiscountFormModalOpen(false);
         }}
       />
-    </StandardPage>
+    </View>
   );
 };
 

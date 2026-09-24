@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { getApplications } from '../services/applicationService';
-import { usePermissions } from '../hooks/usePermissions';
 import { Application as ApiApplication } from '../types/application';
 
 interface Application {
@@ -24,6 +23,8 @@ interface Application {
     desired_plan?: string;
     promo?: string;
     referred_by?: string;
+    // The agent the stored referral names; referred_by is the display name.
+    referred_by_agent_id?: number | null;
     create_date?: string;
     create_time?: string;
 }
@@ -49,6 +50,12 @@ export const useApplicationContext = () => {
 
 interface ApplicationProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the list on mount. False for a user the API would not
+     * serve it to (see SHELL_PREFETCH_KEYS). An explicit refresh from a screen
+     * still fetches.
+     */
+    prefetch?: boolean;
 }
 
 const transformApplication = (app: ApiApplication): Application => {
@@ -79,29 +86,19 @@ const transformApplication = (app: ApiApplication): Application => {
         desired_plan: app.desired_plan,
         promo: app.promo,
         referred_by: app.referred_by,
+        referred_by_agent_id: (app as any).referred_by_agent_id ?? null,
         create_date: app.create_date,
         create_time: app.create_time
     };
 };
 
-export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ children }) => {
-    // Mounted for every role by Dashboard. Reading /applications needs the
-    // application-management key server side, so anyone else 403s on mount.
-    const { can, ready: permissionsReady } = usePermissions();
+export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ children, prefetch = true }) => {
     const [applications, setApplications] = useState<Application[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
     const fetchApplications = useCallback(async (force = false, silent = false) => {
-        // Checked here rather than only at mount: refreshApplications and
-        // silentRefresh are called from screens of every role, and /applications
-        // is org-wide rather than scoped to the caller, so anyone without the
-        // key collects a 403 instead of a list.
-        if (!permissionsReady || !can('application-management')) {
-            return;
-        }
-
         // If we have data and not forced, skip fetching
         if (!force && applications.length > 0) {
             return;
@@ -152,7 +149,7 @@ export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ childr
         } finally {
             setIsLoading(false);
         }
-    }, [applications.length, permissionsReady, can]);
+    }, [applications.length]);
 
     const refreshApplications = useCallback(async () => {
         await fetchApplications(true, false);
@@ -164,12 +161,12 @@ export const ApplicationProvider: React.FC<ApplicationProviderProps> = ({ childr
 
     // Initial fetch effect
     useEffect(() => {
-        // Only fetch if empty, otherwise let the logic decide. fetchApplications
-        // checks the key itself.
+        if (!prefetch) return;
+        // Only fetch if empty, otherwise let the logic decide
         if (applications.length === 0) {
             fetchApplications(false, false);
         }
-    }, [fetchApplications, applications.length]);
+    }, [prefetch, fetchApplications, applications.length]);
 
     return (
         <ApplicationContext.Provider

@@ -1,9 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, ScrollView, Switch } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Role, ApiResponse } from '../types/api';
 import { roleService } from '../services/userService';
 import ModalUITemplate, { useModalTheme } from './ui-modal/ModalUITemplate';
+import {
+  ACTIONS,
+  ALL_PERMISSIONS,
+  BASE_ROLE_OPTIONS,
+  EXCLUSIVE_PAIRS,
+  WILDCARD,
+  inheritedPermissions,
+  labelFor,
+  parsePermissions,
+  permissionGroups,
+} from '../config/permissions';
 
 interface RoleModalProps {
   isOpen: boolean;
@@ -12,101 +24,73 @@ interface RoleModalProps {
   role?: Role | null;
 }
 
-const SYSTEM_PAGES = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'live-monitor', label: 'Monitoring' },
-  { id: 'customer', label: 'Customer' },
-  { id: 'transaction-list', label: 'Transaction List' },
-  { id: 'transactions-revert', label: 'Revert Requests' },
-  { id: 'payment-portal', label: 'Payment Portal' },
-  { id: 'soa', label: 'Statements' },
-  { id: 'invoice', label: 'Invoice' },
-  { id: 'overdue', label: 'Overdue' },
-  { id: 'so-charge', label: 'SO Charge' },
-  { id: 'dc-notice', label: 'DC Notice' },
-  { id: 'mass-rebate', label: 'Rebates' },
-  { id: 'staggered-payment', label: 'Staggered' },
-  { id: 'discounts', label: 'Discounts' },
-  { id: 'application-management', label: 'Application' },
-  { id: 'job-order', label: 'Job Order' },
-  { id: 'service-order', label: 'Service Order' },
-  { id: 'work-order', label: 'Work Order' },
-  { id: 'lcp-nap-location', label: 'LCP/NAP Location' },
-  { id: 'sms-blast', label: 'SMS Blast' },
-  { id: 'inventory', label: 'Inventory' },
-  { id: 'inventory-category-list', label: 'Inventory Category List' },
-  { id: 'promo-list', label: 'Promo' },
-  { id: 'plan-list', label: 'Plan' },
-  { id: 'location-list', label: 'Location' },
-  { id: 'lcp', label: 'LCP' },
-  { id: 'nap', label: 'NAP' },
-  { id: 'usage-type', label: 'Usage Type' },
-  { id: 'payment-method', label: 'Payment Method' },
-  { id: 'work-category', label: 'Work Category' },
-  { id: 'radius-config', label: 'Radius Config' },
-  { id: 'smart-olt', label: 'SmartOLT Config' },
-  { id: 'sms-config', label: 'SMS Config' },
-  { id: 'sms-template', label: 'SMS Template' },
-  { id: 'email-templates', label: 'Email Templates' },
-  { id: 'pppoe-setup', label: 'PPPoE Setup' },
-  { id: 'concern-config', label: 'Concern Config' },
-  { id: 'billing-config', label: 'Billing Configurations' },
-  { id: 'user-management', label: 'Users Management' },
-  { id: 'tech-users', label: 'Tech Users' },
-  { id: 'team-agent', label: 'Team Agents' },
-  { id: 'organization', label: 'Organization' },
-  { id: 'roles', label: 'Roles Management' },
-  { id: 'disconnected-logs', label: 'Disconnected Logs' },
-  { id: 'reconnection-logs', label: 'Reconnection Logs' },
-  { id: 'sms-logs', label: 'SMS Logs' },
-  { id: 'email-logs', label: 'Email Logs' },
-  { id: 'smart-olt-logs', label: 'Smart OLT Logs' },
-  { id: 'radius-logs', label: 'Radius Logs' },
-  { id: 'system-logs', label: 'System Logs' },
-  { id: 'settings', label: 'Settings' },
-];
+/**
+ * Pages and their sub actions come from config/permissions.ts, so a page added
+ * to the catalog is grantable here without a second edit.
+ */
+const PERMISSION_GROUPS = permissionGroups();
 
-const SUB_PERMISSIONS: Record<string, { id: string; label: string }[]> = {
-  'job-order': [
-    { id: 'job-order.approve', label: 'Approve' },
-    { id: 'job-order.failed', label: 'Failed' },
-    { id: 'job-order.tech-edit', label: 'Tech Edit' },
-    { id: 'job-order.admin-edit', label: 'Admin Edit' },
-    { id: 'job-order.attachment', label: 'Attachment' },
-  ],
-  customer: [
-    { id: 'customer.so-request', label: 'SO Request' },
-    { id: 'customer.details-edit', label: 'Details Edit' },
-    { id: 'customer.attachment', label: 'Attachment' },
-    { id: 'customer.transact', label: 'Transact' },
-  ],
-  'transaction-list': [
-    { id: 'transaction-list.batch-approve', label: 'Batch Approve' },
-    { id: 'transaction-list.approve', label: 'Approve' },
-    { id: 'transaction-list.revert-request', label: 'Revert Request' },
-  ],
-  'mass-rebate': [{ id: 'mass-rebate.add', label: 'Add Rebate' }],
-  'staggered-payment': [{ id: 'staggered-payment.add', label: 'Add Staggered' }],
-  discounts: [{ id: 'discounts.add', label: 'Add Discount' }],
-  'application-management': [
-    { id: 'application-management.move-to-jo', label: 'Move to JO' },
-    { id: 'application-management.quick-status', label: 'Quick Status' },
-  ],
-  'service-order': [
-    { id: 'service-order.tech-edit', label: 'Tech Edit' },
-    { id: 'service-order.admin-edit', label: 'Admin Edit' },
-  ],
+/**
+ * Keys that cannot both be held: one opens the technician's Done form, the
+ * other the administrator's. Ticking one clears the other; when a base role
+ * brings one in, the other is not offered at all.
+ */
+/**
+ * Keys the server accepts (RoleController validates `permissions.*` against
+ * the catalog). A legacy row can still hold keys that are no longer offered;
+ * they grant nothing here, but sending them back would fail the whole save
+ * with a 422, so an old role could not even be renamed.
+ */
+const KNOWN_KEYS = new Set<string>(ALL_PERMISSIONS);
+
+/**
+ * Retired keys and what replaced them (Permissions::RETIRED_ACTIONS). The
+ * server already expands them in `effective_permissions`; this covers the
+ * fallback to the raw column, so a retired key becomes its CRUD triple rather
+ * than being dropped as unknown.
+ */
+const RETIRED_KEYS: Record<string, string[]> = {
+  'ports.manage': ['ports.create', 'ports.edit', 'ports.delete'],
+  'router-models.manage': ['router-models.create', 'router-models.edit', 'router-models.delete'],
+  'status-remarks-list.manage': ['status-remarks-list.create', 'status-remarks-list.edit', 'status-remarks-list.delete'],
 };
 
+const expandRetired = (keys: string[]): string[] =>
+  Array.from(new Set(keys.flatMap(key => RETIRED_KEYS[key] ?? [key])));
+
+const EXCLUSIVE_PARTNER: Record<string, string> = EXCLUSIVE_PAIRS.reduce<Record<string, string>>(
+  (map, [a, b]) => ({ ...map, [a]: b, [b]: a }),
+  {}
+);
+
+/** No base role: a standalone custom role. */
+const NO_BASE = 0;
+
 const RoleForm: React.FC<{
-  formData: any;
+  formData: { role_name: string; description: string };
   handleFieldChange: (name: string, value: string) => void;
-  handlePermissionChange: (pageId: string, checked: boolean) => void;
+  handleBaseRoleChange: (baseRoleId: number) => void;
+  handlePermissionChange: (key: string, checked: boolean) => void;
   errors: Record<string, string>;
+  baseRoleId: number;
   selectedPermissions: string[];
+  inherited: Set<string>;
+  inheritsEverything: boolean;
   primaryColor: string;
-}> = ({ formData, handleFieldChange, handlePermissionChange, errors, selectedPermissions, primaryColor }) => {
+}> = ({
+  formData,
+  handleFieldChange,
+  handleBaseRoleChange,
+  handlePermissionChange,
+  errors,
+  baseRoleId,
+  selectedPermissions,
+  inherited,
+  inheritsEverything,
+  primaryColor,
+}) => {
   const labelStyle = { fontSize: 13, fontWeight: '500' as const, marginBottom: 6, color: '#6b7280' };
+  const helpStyle = { fontSize: 12, color: '#9ca3af', marginTop: 6 };
   const inputStyle = (error?: string) => ({
     width: '100%' as const,
     paddingHorizontal: 14,
@@ -118,6 +102,34 @@ const RoleForm: React.FC<{
     color: '#111827',
     fontSize: 14,
   });
+
+  const baseLabel = BASE_ROLE_OPTIONS.find(option => option.id === baseRoleId)?.label ?? '';
+
+  /** Held because the base role holds it, rather than because it was ticked here. */
+  const isInherited = (key: string) => inheritsEverything || inherited.has(key);
+
+  /** Locked when the base grants it, or grants the key it is exclusive with. */
+  const isLocked = (key: string) =>
+    isInherited(key) || (!!EXCLUSIVE_PARTNER[key] && isInherited(EXCLUSIVE_PARTNER[key]));
+
+  const isChecked = (key: string) => isInherited(key) || selectedPermissions.includes(key);
+
+  const InheritedBadge = () => (
+    <View style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, backgroundColor: '#ede9fe' }}>
+      <Text style={{ fontSize: 10, fontWeight: '600', color: '#7c3aed' }}>Inherited</Text>
+    </View>
+  );
+
+  const renderSwitch = (key: string) => (
+    <Switch
+      value={isChecked(key)}
+      disabled={isLocked(key)}
+      onValueChange={(val) => handlePermissionChange(key, val)}
+      trackColor={{ true: primaryColor, false: '#d1d5db' }}
+      thumbColor="#ffffff"
+      style={isLocked(key) ? { opacity: 0.6 } : undefined}
+    />
+  );
 
   return (
     <View style={{ gap: 20 }}>
@@ -155,42 +167,84 @@ const RoleForm: React.FC<{
         />
       </View>
 
+      {/* The hybrid picker. Choosing one of the eight starts the role from that
+          role's access; the switches below then only add to it. */}
       <View>
-        <Text style={labelStyle}>Permissions (Page Access)</Text>
+        <Text style={labelStyle}>Start From a System Role</Text>
+        <View style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff' }}>
+          <Picker
+            selectedValue={baseRoleId}
+            onValueChange={(v) => handleBaseRoleChange(Number(v))}
+            style={{ color: '#111827' }}
+            dropdownIconColor="#6b7280"
+          >
+            <Picker.Item label="None — pick every page by hand" value={NO_BASE} />
+            {BASE_ROLE_OPTIONS.map(option => (
+              <Picker.Item key={option.id} label={option.label} value={option.id} />
+            ))}
+          </Picker>
+        </View>
+        <Text style={helpStyle}>
+          {baseRoleId === NO_BASE
+            ? 'This role holds exactly what you switch on below.'
+            : inheritsEverything
+              ? `Inherits everything a ${baseLabel} holds, including pages added later. There is nothing left to add.`
+              : `Inherits everything a ${baseLabel} holds (shown on and locked below) and follows that role as it changes. Switch on anything extra this role should also see.`}
+        </Text>
+      </View>
+
+      <View>
+        <Text style={labelStyle}>Permissions</Text>
+        <Text style={[helpStyle, { marginTop: 0, marginBottom: 8 }]}>
+          View opens the page. Each action under it is a button on that page; leave one off and it is hidden for this role.
+        </Text>
         <View style={{ borderWidth: 1, borderRadius: 8, borderColor: '#e5e7eb', overflow: 'hidden' }}>
-          <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
-            {SYSTEM_PAGES.map((page) => {
-              const subs = SUB_PERMISSIONS[page.id];
-              const parentChecked = selectedPermissions.includes(page.id);
-              return (
-                <View key={page.id} style={{ borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={{ fontSize: 14, color: '#374151', flex: 1 }}>{page.label}</Text>
-                    <Switch
-                      value={parentChecked}
-                      onValueChange={(val) => handlePermissionChange(page.id, val)}
-                      trackColor={{ true: primaryColor, false: '#d1d5db' }}
-                      thumbColor="#ffffff"
-                    />
-                  </View>
-                  {subs && parentChecked ? (
-                    <View style={{ marginTop: 8, paddingLeft: 12, gap: 8 }}>
-                      {subs.map((sub) => (
-                        <View key={sub.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <Text style={{ fontSize: 12, color: '#6b7280' }}>{sub.label}</Text>
-                          <Switch
-                            value={selectedPermissions.includes(sub.id)}
-                            onValueChange={(val) => handlePermissionChange(sub.id, val)}
-                            trackColor={{ true: primaryColor, false: '#d1d5db' }}
-                            thumbColor="#ffffff"
-                          />
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
+          <ScrollView style={{ maxHeight: 420 }} nestedScrollEnabled>
+            {PERMISSION_GROUPS.map((group) => (
+              <View key={group.label}>
+                {/* The same grouping the navigation uses. */}
+                <View style={{ paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#f3f4f6' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    {group.label}
+                  </Text>
                 </View>
-              );
-            })}
+                {group.pages.map((pageId) => {
+                  const actions = ACTIONS[pageId] || [];
+                  return (
+                    <View key={pageId} style={{ borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingHorizontal: 14, paddingVertical: 10 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
+                          <Text style={{ fontSize: 14, color: '#374151' }}>{labelFor(pageId)}</Text>
+                          {isInherited(pageId) && <InheritedBadge />}
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 11, color: '#9ca3af', marginRight: 4 }}>View</Text>
+                          {renderSwitch(pageId)}
+                        </View>
+                      </View>
+                      {actions.length > 0 ? (
+                        <View style={{ marginTop: 8, paddingLeft: 12, gap: 6 }}>
+                          {actions.map((actionId) => (
+                            <View key={actionId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                                <Text style={{ fontSize: 12, color: '#6b7280' }}>{labelFor(actionId)}</Text>
+                                {isInherited(actionId) && <InheritedBadge />}
+                                {!isInherited(actionId) && isLocked(actionId) ? (
+                                  <Text style={{ fontSize: 10, color: '#9ca3af', marginLeft: 6 }} numberOfLines={1}>
+                                    {`${baseLabel} holds ${labelFor(EXCLUSIVE_PARTNER[actionId])}`}
+                                  </Text>
+                                ) : null}
+                              </View>
+                              {renderSwitch(actionId)}
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
           </ScrollView>
         </View>
       </View>
@@ -210,7 +264,18 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
     description: '',
   });
 
+  /** The seeded role this one builds on, or NO_BASE for a standalone role. */
+  const [baseRoleId, setBaseRoleId] = useState<number>(NO_BASE);
+
+  /**
+   * Only the keys switched on against this role. A hybrid's inherited keys are
+   * kept out: storing them would freeze a copy of the base role.
+   */
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+
+  const inheritedKeys = useMemo(() => inheritedPermissions(baseRoleId), [baseRoleId]);
+  const inheritsEverything = inheritedKeys.includes(WILDCARD);
+  const inherited = useMemo(() => new Set(inheritedKeys), [inheritedKeys]);
 
   useEffect(() => {
     if (isOpen) {
@@ -220,27 +285,24 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
           description: role.description || '',
         });
 
-        // Handle permissions (could be array from Laravel or string from legacy)
-        let perms: string[] = [];
-        const rolePerms = (role as any).permissions;
-        if (rolePerms) {
-          if (Array.isArray(rolePerms)) {
-            perms = rolePerms;
-          } else if (typeof rolePerms === 'string') {
-            try {
-              const parsed = JSON.parse(rolePerms);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = rolePerms.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setSelectedPermissions(perms);
+        setBaseRoleId(Number(role.base_role_id) || NO_BASE);
+
+        // What the role effectively holds. For a role saved before per-action
+        // keys existed that includes the buttons its pages used to carry;
+        // seeding from the stored column instead would show them off, and the
+        // save would then revoke them. Falls back to the column when the
+        // server did not send the resolved list.
+        setSelectedPermissions(expandRetired(
+          Array.isArray(role.effective_permissions)
+            ? role.effective_permissions
+            : parsePermissions(role.permissions)
+        ));
       } else {
         setFormData({
           role_name: '',
           description: '',
         });
+        setBaseRoleId(NO_BASE);
         setSelectedPermissions([]);
       }
       setErrors({});
@@ -254,46 +316,58 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
     }
   };
 
-  const handlePermissionChange = (pageId: string, checked: boolean) => {
+  /**
+   * Switching base role drops the extras it makes redundant (the new base
+   * already grants them) or impossible (exclusive with what the base grants).
+   */
+  const handleBaseRoleChange = (nextBaseRoleId: number) => {
+    setBaseRoleId(nextBaseRoleId);
+
+    const nextInherited = inheritedPermissions(nextBaseRoleId);
+
+    if (nextInherited.includes(WILDCARD)) {
+      setSelectedPermissions([]);
+      return;
+    }
+
+    const held = new Set(nextInherited);
+    setSelectedPermissions(prev =>
+      prev.filter(key => !held.has(key) && !(EXCLUSIVE_PARTNER[key] && held.has(EXCLUSIVE_PARTNER[key])))
+    );
+  };
+
+  const handlePermissionChange = (key: string, checked: boolean) => {
     setSelectedPermissions((prev) => {
-      let newPermissions = [...prev];
+      let next = [...prev];
 
       if (checked) {
-        if (!newPermissions.includes(pageId)) {
-          newPermissions.push(pageId);
+        if (!next.includes(key)) {
+          next.push(key);
         }
 
-        // If it's a sub-permission, auto-check the parent
-        if (pageId.includes('.')) {
-          const parentId = pageId.split('.')[0];
-          if (!newPermissions.includes(parentId)) {
-            newPermissions.push(parentId);
+        // An action switches its page on too, unless the base already grants it.
+        if (key.includes('.')) {
+          const parentId = key.split('.')[0];
+          if (!next.includes(parentId) && !inherited.has(parentId)) {
+            next.push(parentId);
           }
         }
 
-        // Handle mutual exclusivity for job-order.tech-edit and job-order.admin-edit
-        if (pageId === 'job-order.tech-edit') {
-          newPermissions = newPermissions.filter((id) => id !== 'job-order.admin-edit');
-        } else if (pageId === 'job-order.admin-edit') {
-          newPermissions = newPermissions.filter((id) => id !== 'job-order.tech-edit');
-        }
-
-        // Handle mutual exclusivity for service-order.tech-edit and service-order.admin-edit
-        if (pageId === 'service-order.tech-edit') {
-          newPermissions = newPermissions.filter((id) => id !== 'service-order.admin-edit');
-        } else if (pageId === 'service-order.admin-edit') {
-          newPermissions = newPermissions.filter((id) => id !== 'service-order.tech-edit');
+        // The tech-edit / admin-edit pairs are mutually exclusive.
+        const partner = EXCLUSIVE_PARTNER[key];
+        if (partner) {
+          next = next.filter((id) => id !== partner);
         }
       } else {
-        newPermissions = newPermissions.filter((id) => id !== pageId);
+        next = next.filter((id) => id !== key);
 
-        // If it's a parent, auto-uncheck all sub-permissions
-        if (!pageId.includes('.')) {
-          newPermissions = newPermissions.filter((id) => !id.startsWith(pageId + '.'));
+        // Switching a page off switches its actions off.
+        if (!key.includes('.')) {
+          next = next.filter((id) => !id.startsWith(key + '.'));
         }
       }
 
-      return newPermissions;
+      return next;
     });
   };
 
@@ -313,7 +387,12 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
       const payload: any = {
         role_name: formData.role_name,
         description: formData.description,
-        permissions: selectedPermissions,
+        base_role_id: baseRoleId === NO_BASE ? null : baseRoleId,
+        // Extras only. The server merges these with the base role's keys on
+        // every read.
+        permissions: inheritsEverything
+          ? []
+          : selectedPermissions.filter((key) => !inherited.has(key) && KNOWN_KEYS.has(key)),
       };
 
       try {
@@ -340,7 +419,16 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
         setErrors({ general: response.message || 'Something went wrong' });
       }
     } catch (error: any) {
-      setErrors({ general: error.message || 'An unexpected error occurred' });
+      // Prefer what the server said: a 422 body carries per-field messages.
+      const body = error?.response?.data;
+      const fieldErrors: string[] = body?.errors
+        ? Object.values(body.errors as Record<string, string[]>).flat()
+        : [];
+      const detail = [body?.message, ...fieldErrors, body?.error]
+        .filter(Boolean)
+        .join(' — ');
+
+      setErrors({ general: detail || error.message || 'An unexpected error occurred' });
     } finally {
       setLoading(false);
     }
@@ -362,9 +450,13 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
       <RoleForm
         formData={formData}
         handleFieldChange={handleFieldChange}
+        handleBaseRoleChange={handleBaseRoleChange}
         handlePermissionChange={handlePermissionChange}
         errors={errors}
+        baseRoleId={baseRoleId}
         selectedPermissions={selectedPermissions}
+        inherited={inherited}
+        inheritsEverything={inheritsEverything}
         primaryColor={primaryColor}
       />
     </ModalUITemplate>

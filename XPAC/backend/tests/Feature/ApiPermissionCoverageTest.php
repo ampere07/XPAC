@@ -74,8 +74,8 @@ class ApiPermissionCoverageTest extends TestCase
     /**
      * No endpoint is anonymous unless the table says so in as many words.
      *
-     * This is the property that actually matters: before the table existed, 624
-     * of the 670 endpoints answered anyone at all.
+     * This is the property that actually matters: before the table existed,
+     * nearly every one of the ~740 endpoints answered anyone at all.
      */
     public function test_no_route_is_public_unless_declared(): void
     {
@@ -87,11 +87,13 @@ class ApiPermissionCoverageTest extends TestCase
             }
         }
 
-        // Sign-in, the sign-in screen's own branding calls, the payment
-        // provider's webhook, and the image proxy that <img> tags hit without
-        // a header. Anything else appearing here is a regression.
+        // Sign-in, the sign-in screen's own branding calls, the session probe
+        // the web app makes on boot, the payment provider's webhooks, and the
+        // image proxy that <img> tags hit without a header. Anything else
+        // appearing here is a regression.
         $expected = [
             'GET api/app-version/config',
+            'GET api/auth/session',
             'GET api/cors-test',
             'GET api/form-ui/config',
             'GET api/health',
@@ -101,9 +103,13 @@ class ApiPermissionCoverageTest extends TestCase
             'GET api/settings-color-palette/active',
             'GET api/settings-image-size/active',
             'GET api/system-config/logo',
+            // Read without credentials by the Assign Work Order dropdowns.
+            'GET api/work-categories',
             'GET api/xendit-webhook',
             'POST api/forgot-password',
             'POST api/login',
+            // Must succeed on a lapsed session (the route says so itself).
+            'POST api/logout',
             'POST api/payments/webhook',
             'POST api/xendit-webhook',
         ];
@@ -168,7 +174,8 @@ class ApiPermissionCoverageTest extends TestCase
                     ['PUT', 'api/job-orders/5'],
                     ['GET', 'api/service-orders'],
                     ['GET', 'api/work-orders'],
-                    ['POST', 'api/work-orders'],
+                    // Working a work order is the page; raising one is not.
+                    ['PUT', 'api/work-orders/3'],
                     ['GET', 'api/lcpnap'],
                     ['GET', 'api/plans'],
                     ['POST', 'api/technician-location'],
@@ -186,6 +193,9 @@ class ApiPermissionCoverageTest extends TestCase
                     ['GET', 'api/logs'],
                     ['GET', 'api/debug/users-table'],
                     ['POST', 'api/job-orders/5/approve'],
+                    ['POST', 'api/work-orders'],
+                    ['GET', 'api/monthly-payables'],
+                    ['GET', 'api/expenses-logs'],
                 ],
             ],
             Role::AGENT => [
@@ -207,7 +217,11 @@ class ApiPermissionCoverageTest extends TestCase
                     ['POST', 'api/work-orders'],
                     ['DELETE', 'api/work-orders/3'],
                     ['POST', 'api/commissions/history/1/approve'],
+                    ['POST', 'api/commissions/bonus-history/1/approve'],
+                    ['POST', 'api/commissions/history'],
+                    ['POST', 'api/commissions/bonus-history'],
                     ['GET', 'api/reports'],
+                    ['GET', 'api/dashboard/counts'],
                 ],
             ],
             Role::CUSTOMER => [
@@ -226,6 +240,7 @@ class ApiPermissionCoverageTest extends TestCase
                     ['GET', 'api/commissions'],
                     ['GET', 'api/data-logs'],
                     ['GET', 'api/dashboard/counts'],
+                    ['GET', 'api/prepaid-overrides'],
                 ],
             ],
             Role::INVENTORY_STAFF => [
@@ -250,6 +265,7 @@ class ApiPermissionCoverageTest extends TestCase
             Role::OSP => [
                 'allow' => [
                     ['GET', 'api/work-orders'],
+                    ['POST', 'api/work-orders'],
                     ['PUT', 'api/work-orders/3'],
                     ['GET', 'api/lcpnap'],
                 ],
@@ -274,27 +290,39 @@ class ApiPermissionCoverageTest extends TestCase
                     ['GET', 'api/inventory'],
                     ['GET', 'api/commissions'],
                     ['POST', 'api/agent-invoices/generate'],
-                ],
-                'deny' => [
-                    // Configurations, Users and Settings are SuperAdmin's.
+                    ['POST', 'api/commissions/history/1/approve'],
+                    ['POST', 'api/monthly-payables/generate'],
+                    ['POST', 'api/expenses-logs'],
+                    ['GET', 'api/prepaid-overrides'],
+                    // The mobile Administrator menu opens Configurations,
+                    // Users, Logs and Settings, so the union holds them.
                     ['POST', 'api/plans'],
                     ['DELETE', 'api/promos/2'],
                     ['POST', 'api/roles'],
                     ['GET', 'api/logs'],
-                    ['GET', 'api/debug/users-table'],
-                    ['POST', 'api/setup/initialize'],
-                    ['GET', 'api/login-debug'],
-                    ['POST', 'api/radius-config'],
+                ],
+                'deny' => [
+                    // SuperAdmin-only buttons.
+                    ['POST', 'api/vlans'],
+                    ['DELETE', 'api/transactions/5'],
+                    ['PUT', 'api/transaction-reverts/5/status'],
+                    ['PUT', 'api/prepaid-overrides/5/status'],
+                    ['DELETE', 'api/reports/1'],
                 ],
             ],
             Role::HEAD_TECH => [
                 'allow' => [
                     ['GET', 'api/applications'],
                     ['GET', 'api/job-orders'],
-                    ['POST', 'api/job-orders/5/approve'],
+                    ['PUT', 'api/job-orders/5'],
                     ['GET', 'api/service-orders'],
                     ['GET', 'api/work-orders'],
+                    ['POST', 'api/work-orders'],
                     ['POST', 'api/locations'],
+                    // The customer pane opened from a job order.
+                    ['GET', 'api/customer-detail/ACC-1'],
+                    ['PUT', 'api/customer-detail/ACC-1'],
+                    ['POST', 'api/customers/ACC-1/upload-images'],
                 ],
                 'deny' => [
                     ['GET', 'api/transactions'],
@@ -302,8 +330,10 @@ class ApiPermissionCoverageTest extends TestCase
                     ['GET', 'api/reports'],
                     ['POST', 'api/inventory'],
                     ['POST', 'api/plans'],
-                    ['GET', 'api/soa-records'],
+                    // (soa-records is read by SOADetails, which the job order
+                    // pane opens — see test_overlay_panes_read_but_do_not_write.)
                     ['GET', 'api/commissions'],
+                    ['POST', 'api/job-orders/5/approve'],
                 ],
             ],
         ];
@@ -371,7 +401,7 @@ class ApiPermissionCoverageTest extends TestCase
             ['PUT', 'api/reports/1'],
             ['DELETE', 'api/reports/1'],
             ['PUT', 'api/reports/settings'],
-            ['POST', 'api/commissions/history'],
+            ['POST', 'api/commissions/bonus-history'],
             ['POST', 'api/commissions/history/1/approve'],
             ['POST', 'api/agent-invoices/generate'],
             ['PATCH', 'api/agent-invoices/2/status'],
@@ -443,13 +473,11 @@ class ApiPermissionCoverageTest extends TestCase
         $this->assertTrue($this->permits($legacy, 'DELETE', 'api/plans/1'));
         $this->assertTrue($this->permits($legacy, 'DELETE', 'api/users/1'));
 
-        // The rule reproduces what each page allowed, rather than assuming the
-        // usual three everywhere. Ports drew nothing without `ports.manage`, so
-        // holding the bare page still draws nothing; editing a user was
-        // SuperAdmin's alone, so it is not conjured up either.
-        $this->assertFalse($this->permits($legacy, 'POST', 'api/ports'));
-        $this->assertFalse($this->permits($legacy, 'DELETE', 'api/ports/1'));
-        $this->assertFalse($this->permits($legacy, 'PUT', 'api/users/1'));
+        // GOWISER drew every button on these pages for anyone holding them, so
+        // a legacy row gets all of each page's actions.
+        $this->assertTrue($this->permits($legacy, 'POST', 'api/ports'));
+        $this->assertTrue($this->permits($legacy, 'DELETE', 'api/ports/1'));
+        $this->assertTrue($this->permits($legacy, 'PUT', 'api/users/1'));
         $this->assertTrue($this->permits($legacy, 'POST', 'api/users'));
 
         // Only the pages it actually holds, and only the standard verbs. Writing
@@ -516,24 +544,152 @@ class ApiPermissionCoverageTest extends TestCase
         $this->assertTrue($this->permits($customer, 'POST', 'api/payments/create'));
     }
 
+    /**
+     * The read-only panes the Technician, OSP and Head Technician open from a
+     * job order, a service order, an application or the LCP/NAP map load their
+     * data from the owning page's endpoints. Those reads are allowed; the
+     * writes reachable from the same panes are not widened.
+     */
+    public function test_overlay_panes_read_but_do_not_write(): void
+    {
+        $reads = [
+            ['GET', 'api/billing'],
+            ['GET', 'api/billing/ACC-1'],
+            ['GET', 'api/customer-detail/ACC-1'],
+            ['GET', 'api/invoices/by-account/ACC-1'],
+            ['GET', 'api/invoices/12'],
+            ['GET', 'api/payment-portal-logs/by-account/ACC-1'],
+            ['GET', 'api/payment-portal-logs/12'],
+            ['GET', 'api/statement-of-accounts/by-account/ACC-1'],
+            ['GET', 'api/statement-of-accounts/12'],
+            ['GET', 'api/soa-records'],
+            ['POST', 'api/soa/12/generate-pdf'],
+            ['GET', 'api/transactions/by-account/ACC-1'],
+            ['GET', 'api/transactions/12'],
+            ['GET', 'api/transactions/12/receipt'],
+            ['GET', 'api/staggered-installations/by-account/ACC-1'],
+            ['GET', 'api/discounts/by-account/ACC-1'],
+            ['GET', 'api/disconnected-logs/by-account/ACC-1'],
+            ['GET', 'api/reconnection-logs/by-account/ACC-1'],
+            ['GET', 'api/service-charge-logs/by-account/ACC-1'],
+            ['GET', 'api/inventory-logs/by-item/7'],
+            ['GET', 'api/defective-logs/by-item/7'],
+            ['GET', 'api/applications'],
+            ['GET', 'api/applications/by-account/ACC-1'],
+            ['GET', 'api/applications/12'],
+            ['GET', 'api/job-orders/12'],
+            ['GET', 'api/service-orders/12'],
+        ];
+
+        // Reached only through those panes: enforce refuses them, deliberately.
+        $writes = [
+            ['PUT', 'api/users/5'],
+            ['DELETE', 'api/users/5'],
+            ['POST', 'api/transactions'],
+            ['PUT', 'api/transactions/12'],
+            ['PUT', 'api/transactions/12/status'],
+            ['POST', 'api/transactions/upload-images'],
+            ['POST', 'api/concerns'],
+            ['PUT', 'api/concerns/3'],
+            ['DELETE', 'api/concerns/3'],
+            ['POST', 'api/inventory-logs'],
+        ];
+
+        foreach ([Role::TECHNICIAN, Role::OSP, Role::HEAD_TECH] as $roleId) {
+            $user = $this->user($roleId);
+
+            foreach ($reads as [$method, $uri]) {
+                $this->assertTrue($this->permits($user, $method, $uri), "Role $roleId cannot read $method $uri.");
+            }
+        }
+
+        // Head Technician holds customer.transact (the customer pane's Transact),
+        // so its transaction writes were never overlay-only; the other two are.
+        foreach ([Role::TECHNICIAN, Role::OSP] as $roleId) {
+            foreach ($writes as [$method, $uri]) {
+                $this->assertFalse($this->permits($this->user($roleId), $method, $uri), "Role $roleId gained $method $uri.");
+            }
+        }
+        foreach ([['PUT', 'api/users/5'], ['DELETE', 'api/users/5'], ['PUT', 'api/transactions/12/status'],
+                  ['POST', 'api/concerns'], ['PUT', 'api/concerns/3'], ['DELETE', 'api/concerns/3'],
+                  ['POST', 'api/inventory-logs']] as [$method, $uri]) {
+            $this->assertFalse($this->permits($this->user(Role::HEAD_TECH), $method, $uri), "Head Technician gained $method $uri.");
+        }
+        $this->assertFalse($this->permits($this->user(Role::OSP), 'POST', 'api/applications/12/upload-images'));
+
+        // Neighbours of the widened reads keep their own page.
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/transactions/12/details'));
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/transactions'));
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/billing/accounts/active'));
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/disconnected-logs'));
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/staggered-installations'));
+        $this->assertFalse($this->permits($this->user(Role::OSP), 'GET', 'api/inventory-logs'));
+        $this->assertFalse($this->permits($this->user(Role::OSP), 'POST', 'api/statement-of-accounts/12/generate-pdf'));
+
+        // And the customer portal gains nothing from any of this.
+        $customer = $this->user(Role::CUSTOMER);
+        $this->assertFalse($this->permits($customer, 'GET', 'api/applications'));
+        $this->assertFalse($this->permits($customer, 'GET', 'api/job-orders/12'));
+        $this->assertFalse($this->permits($customer, 'GET', 'api/transactions/12'));
+
+        // Nor does the Agent, who holds the Job Order page to follow their own
+        // referrals but never opens these panes: the billing table, the ledger
+        // and the payment logs stay closed to them. What they read before —
+        // one job order, one application — they still read.
+        $agent = $this->user(Role::AGENT);
+        foreach ([['GET', 'api/billing'], ['GET', 'api/customer-detail/ACC-1'], ['GET', 'api/transactions/12'],
+                  ['GET', 'api/payment-portal-logs'], ['GET', 'api/soa-records'], ['GET', 'api/invoices/12'],
+                  ['GET', 'api/service-orders/12'], ['GET', 'api/inventory-logs/by-item/7']] as [$method, $uri]) {
+            $this->assertFalse($this->permits($agent, $method, $uri), "The Agent gained $method $uri.");
+        }
+        $this->assertTrue($this->permits($agent, 'GET', 'api/job-orders/12'));
+        $this->assertTrue($this->permits($agent, 'GET', 'api/applications/12'));
+
+        // A custom role that works job orders gets the panes; one that only
+        // holds the page, like the Agent, does not.
+        $this->assertTrue($this->permits($this->user(30, ['job-order', 'job-order.tech-edit']), 'GET', 'api/customer-detail/ACC-1'));
+        $this->assertFalse($this->permits($this->user(31, ['job-order']), 'GET', 'api/customer-detail/ACC-1'));
+    }
+
+    /** Category lookup data is for every signed-in form; changing it is not. */
+    public function test_inventory_categories_are_lookup_data(): void
+    {
+        $this->assertNull(ApiPermissionMap::requirementFor('GET', 'api/inventory-categories'));
+        $this->assertNotSame(ApiPermissionMap::PUBLIC_ACCESS, ApiPermissionMap::requirementFor('GET', 'api/inventory-categories'));
+        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'POST', 'api/inventory-categories'));
+        $this->assertTrue($this->permits($this->user(Role::INVENTORY_STAFF), 'POST', 'api/inventory-categories'));
+    }
+
+    /** The mobile Bills screen renders its statement through statement-of-accounts. */
+    public function test_the_customer_renders_their_statement_pdf_on_either_path(): void
+    {
+        $customer = $this->user(Role::CUSTOMER);
+
+        $this->assertTrue($this->permits($customer, 'POST', 'api/statement-of-accounts/12/generate-pdf'));
+        $this->assertTrue($this->permits($customer, 'POST', 'api/soa/12/generate-pdf'));
+        $this->assertTrue($this->permits($this->user(Role::ADMINISTRATOR), 'POST', 'api/statement-of-accounts/12/generate-pdf'));
+    }
+
     /** Holding a Job Order key is not a licence to rewrite subscriber records. */
     public function test_job_order_editing_does_not_confer_customer_editing(): void
     {
-        $headTech = $this->user(Role::HEAD_TECH);
+        $editor = $this->user(40, ['job-order', 'job-order.admin-edit']);
 
-        $this->assertTrue(Permissions::allows($headTech, 'job-order.admin-edit'));
-        $this->assertFalse($this->permits($headTech, 'PUT', 'api/customer-detail/ACC-1'));
+        $this->assertTrue(Permissions::allows($editor, 'job-order.admin-edit'));
+        $this->assertFalse($this->permits($editor, 'PUT', 'api/customer-detail/ACC-1'));
 
         // The Customer page's own key is what grants it.
         $this->assertTrue($this->permits($this->user(Role::ADMINISTRATOR), 'PUT', 'api/customer-detail/ACC-1'));
     }
 
-    /** The live technician map belongs to Monitoring, not to every field role. */
-    public function test_technician_positions_are_limited_to_monitoring(): void
+    /**
+     * The live technician map is guarded by TechnicianLocationController itself
+     * (Administrator, SuperAdmin, Head Technician); the table only asks for a
+     * session, and never lets the reading of it go anonymous.
+     */
+    public function test_technician_positions_need_a_session(): void
     {
-        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/technician-locations'));
-        $this->assertFalse($this->permits($this->user(Role::AGENT), 'GET', 'api/technician-locations'));
-        $this->assertTrue($this->permits($this->user(Role::ADMINISTRATOR), 'GET', 'api/technician-locations'));
+        $this->assertNull(ApiPermissionMap::requirementFor('GET', 'api/technician-locations'));
 
         // A technician still posts their own position.
         $this->assertTrue($this->permits($this->user(Role::TECHNICIAN), 'POST', 'api/technician-location'));

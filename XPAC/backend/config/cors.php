@@ -16,10 +16,8 @@ return [
     'allowed_methods' => ['*'],
 
     'allowed_origins' => [
-        'https://sync.atssfiber.ph',
-        'https://backend.atssfiber.ph',
-        'http://localhost:3000',
-        'http://127.0.0.1:3000'
+        'https://sync.gowiser.ph',
+        'https://backend.gowiser.ph',
     ],
 
     'allowed_origins_patterns' => [],

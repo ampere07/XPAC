@@ -1,9 +1,10 @@
 {
   "expo": {
-    "name": "XPAC",
-    "slug": "atss",
-    "scheme": "atss-app",
-    "version": "2.5.68",
+    "name": "GOWISER",
+    "slug": "gowiser",
+    "owner": "gowiserphs-team",
+    "scheme": "gowiser-app",
+    "version": "2.5.61",
     "orientation": "portrait",
     "icon": "./assets/applogo.png",
     "userInterfaceStyle": "light",
@@ -16,7 +17,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.atss.sync",
+      "bundleIdentifier": "com.gowiserzc.sync",
       "entitlements": {
         "aps-environment": "production"
       },
@@ -25,7 +26,7 @@
       }
     },
     "android": {
-      "name": "XPAC",
+      "name": "GOWISER",
       "icon": "./assets/applogo.png",
       "allowBackup": false,
       "adaptiveIcon": {
@@ -34,7 +35,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.atss.sync",
+      "package": "com.gowiserzc.sync",
       "launchMode": "singleTask",
       "googleServicesFile": "./google-services.json",
       "config": {
@@ -50,15 +51,15 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.RECORD_AUDIO",
-        "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO"
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -67,16 +68,6 @@
     "plugins": [
       "@react-native-community/datetimepicker",
       "expo-web-browser",
-      [
-        "expo-location",
-        {
-          "locationWhenInUsePermission": "Allow XPAC to access your location so dispatch can see your live position while you are on duty.",
-          "locationAlwaysAndWhenInUsePermission": "Allow XPAC to access your location in the background so dispatch can keep seeing your live position while you are on duty.",
-          "isIosBackgroundLocationEnabled": true,
-          "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
-        }
-      ],
       [
         "expo-notifications",
         {
@@ -90,21 +81,32 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow XPAC to access your photos to select job order images.",
-          "savePhotosPermission": "Allow XPAC to save taken photos to your phone gallery."
+          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
+          "savePhotosPermission": "Allow GOWISER to save taken photos to your phone gallery."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow XPAC to access your photos to select job order images.",
-          "cameraPermission": "Allow XPAC to access your camera to take job order pictures."
+          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
+          "cameraPermission": "Allow GOWISER to access your camera to take job order pictures."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "GOWISER shares your location with dispatch so they can see which technician is nearest a job while you are on duty.",
+          "locationAlwaysAndWhenInUsePermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "locationAlwaysPermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ]
     ],
     "extra": {
       "eas": {
-        "projectId": "0002ea40-23dc-4f5d-98da-82c2ab259bfa"
+        "projectId": "2fbf2341-d65d-471d-b13a-f5731b27b88e"
       }
     }
   }

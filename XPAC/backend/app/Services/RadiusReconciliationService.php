@@ -4,20 +4,19 @@ namespace App\Services;
 
 use App\Models\ActivityLog;
 use App\Models\RadiusConfig;
-use App\Services\PppoeUsernameService;
-use App\Support\PlanGroup;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
  * Reconciliation engine between the Mikrotik User Manager (RADIUS) devices and
- * the AKMIIS billing database.
+ * the Go Wiser billing database.
  *
  * Ported from the standalone `syncradius.php` utility, with three material changes
- * demanded by AKMIIS running MORE THAN ONE RADIUS server:
+ * demanded by this deployment running MORE THAN ONE RADIUS server:
  *
  *  1. Every read and every mutation is scoped to a target: a single radius_config
  *     id, or the sentinel 'all' which merges every configured device.
@@ -31,11 +30,9 @@ use Throwable;
  * `radius_config` via RadiusServerResolver, and the billing database comes from the
  * framework connection. Nothing here reads or writes a secret to the log.
  *
- * Transport note: device I/O runs over the native RouterOS API socket (RouterosApiService,
- * ports 8728/8729), not REST. The `/rest/user-manage/...` strings that remain are this
- * service's INTERNAL routing keys — callDevice() translates each into a User Manager API
- * command — kept so the mutation sites and their activity_logs reversal snapshots did not
- * have to be rewritten alongside the transport.
+ * Endpoint note: the User Manager session collection is `/rest/user-manage/session`.
+ * That is what the live devices answer on and what ManualRadiusOperationsService
+ * already uses; `/rest/user-manage/active-user` does not exist on this RouterOS build.
  */
 class RadiusReconciliationService
 {
@@ -99,7 +96,6 @@ class RadiusReconciliationService
         'restrict',
         'disconnect',
         'delete',
-        'align_username',
     ];
 
     private const LOG_CHANNEL       = 'radiusrelated';
@@ -138,54 +134,6 @@ class RadiusReconciliationService
     // =========================================================================
 
     /**
-     * Analyze and classify the configured RADIUS devices.
-     *
-     * If two configs share the same IP address, the subsequent one is not a new
-     * server, but a fallback/failover transport for that server (e.g. API SSL port 8729
-     * vs plain 8728).
-     *
-     * @return array<int, array{config: RadiusConfig, id: int, server_number: int, is_fallback: bool, fallback_for: ?int, label: string}>
-     */
-    public function classifiedConfigs(?int $organizationId = null): array
-    {
-        $configs = $this->resolver->orderedConfigs($organizationId)->values();
-        $classified = [];
-        $serverNumber = 0;
-        $ipMap = [];
-
-        foreach ($configs as $config) {
-            $ip = trim((string) $config->ip);
-            if (isset($ipMap[$ip])) {
-                $primaryNum = $ipMap[$ip]['server_number'];
-                $classified[(int) $config->id] = [
-                    'config'        => $config,
-                    'id'            => (int) $config->id,
-                    'server_number' => $primaryNum,
-                    'is_fallback'   => true,
-                    'fallback_for'  => $primaryNum,
-                    'label'         => "Server #{$primaryNum} Fallback ({$config->ip})",
-                ];
-            } else {
-                $serverNumber++;
-                $ipMap[$ip] = [
-                    'server_number' => $serverNumber,
-                    'primary_id'    => (int) $config->id,
-                ];
-                $classified[(int) $config->id] = [
-                    'config'        => $config,
-                    'id'            => (int) $config->id,
-                    'server_number' => $serverNumber,
-                    'is_fallback'   => false,
-                    'fallback_for'  => null,
-                    'label'         => "Server #{$serverNumber} ({$config->ip})",
-                ];
-            }
-        }
-
-        return $classified;
-    }
-
-    /**
      * The RADIUS devices this operator may target, safe for transport to the UI.
      *
      * Never includes the device password — the UI only ever needs to name a server,
@@ -195,23 +143,19 @@ class RadiusReconciliationService
      */
     public function getServers(?int $organizationId = null): array
     {
-        $classified = $this->classifiedConfigs($organizationId);
+        $configs = $this->resolver->orderedConfigs($organizationId);
 
-        return array_values(array_map(function (array $item): array {
-            /** @var RadiusConfig $config */
-            $config = $item['config'];
+        return $configs->values()->map(function (RadiusConfig $config, int $index): array {
             return [
-                'id'           => $item['id'],
-                'position'     => $item['server_number'],
-                'label'        => $item['label'],
-                'ip'           => $config->ip,
-                'port'         => $config->port,
-                'ssl_type'     => $config->ssl_type ?: 'https',
-                'username'     => $config->username,
-                'is_fallback'  => $item['is_fallback'],
-                'fallback_for' => $item['fallback_for'],
+                'id'       => (int) $config->id,
+                'position' => $index + 1,
+                'label'    => 'Server #' . ($index + 1) . ' (' . $config->ip . ')',
+                'ip'       => $config->ip,
+                'port'     => $config->port,
+                'ssl_type' => $config->ssl_type ?: 'https',
+                'username' => $config->username,
             ];
-        }, $classified));
+        })->all();
     }
 
     /**
@@ -244,14 +188,10 @@ class RadiusReconciliationService
      */
     private function labelFor(RadiusConfig $config, ?int $organizationId = null): string
     {
-        $classified = $this->classifiedConfigs($organizationId);
-        $cid = (int) $config->id;
+        $configs = $this->resolver->orderedConfigs($organizationId)->values();
+        $position = $configs->search(fn (RadiusConfig $c): bool => (int) $c->id === (int) $config->id);
 
-        if (isset($classified[$cid])) {
-            return $classified[$cid]['label'];
-        }
-
-        return 'Server (' . $config->ip . ')';
+        return 'Server #' . (($position === false ? 0 : $position) + 1) . ' (' . $config->ip . ')';
     }
 
     // =========================================================================
@@ -304,111 +244,27 @@ class RadiusReconciliationService
         $sessionsByServer = [];
         $serverMeta       = [];
 
-        if ($isCombined) {
-            // Group configs by IP. For each IP, query the primary endpoint first;
-            // only query the fallback config if the primary endpoint fails to read users.
-            $configsByIp = [];
-            foreach ($configs as $config) {
-                $ip = trim((string) $config->ip);
-                $configsByIp[$ip][] = $config;
-            }
+        foreach ($configs as $config) {
+            $serverKey = (int) $config->id;
+            $label     = $this->labelFor($config, $organizationId);
 
-            foreach ($configsByIp as $ip => $ipConfigs) {
-                $primaryConfig = $ipConfigs[0];
-                $primaryId     = (int) $primaryConfig->id;
-                $primaryLabel  = $this->labelFor($primaryConfig, $organizationId);
+            $serverMeta[$serverKey] = [
+                'id'    => $serverKey,
+                'label' => $label,
+                'ip'    => $config->ip,
+            ];
 
-                $targetConfig = $primaryConfig;
-                $targetId     = $primaryId;
-                $targetLabel  = $primaryLabel;
+            $users = $this->fetchUsers($config, $trace, $errors, $label);
+            $radiusByServer[$serverKey]   = $users;
+            $sessionsByServer[$serverKey] = $this->fetchSessions($config, $trace, $errors, $label);
 
-                // Try reading users from the primary endpoint
-                $primaryErrors = [];
-                $primaryTrace  = [];
-                $users = $this->fetchUsers($primaryConfig, $primaryTrace, $primaryErrors, $primaryLabel);
-
-                // If primary endpoint failed and fallback config(s) exist for this IP, try fallback
-                if ($primaryErrors !== [] && count($ipConfigs) > 1) {
-                    $fallbackSucceeded = false;
-                    for ($i = 1; $i < count($ipConfigs); $i++) {
-                        $fallbackConfig = $ipConfigs[$i];
-                        $fallbackId     = (int) $fallbackConfig->id;
-                        $fallbackLabel  = $this->labelFor($fallbackConfig, $organizationId);
-
-                        $this->trace(
-                            $trace,
-                            "{$primaryLabel} failed to read users (" . implode(', ', $primaryErrors) . "); attempting fallback endpoint {$fallbackLabel}...",
-                            'WARNING'
-                        );
-
-                        $fallbackErrors = [];
-                        $fallbackTrace  = [];
-                        $fallbackUsers  = $this->fetchUsers($fallbackConfig, $fallbackTrace, $fallbackErrors, $fallbackLabel);
-
-                        if ($fallbackErrors === []) {
-                            $targetConfig      = $fallbackConfig;
-                            $targetId          = $fallbackId;
-                            $targetLabel       = $fallbackLabel;
-                            $users             = $fallbackUsers;
-                            $trace             = array_merge($trace, $fallbackTrace);
-                            $fallbackSucceeded = true;
-                            break;
-                        } else {
-                            $this->trace(
-                                $trace,
-                                "{$fallbackLabel} also failed: " . implode(', ', $fallbackErrors),
-                                'WARNING'
-                            );
-                        }
-                    }
-
-                    if (!$fallbackSucceeded) {
-                        $trace  = array_merge($trace, $primaryTrace);
-                        $errors = array_merge($errors, $primaryErrors);
-                    }
-                } else {
-                    $trace  = array_merge($trace, $primaryTrace);
-                    $errors = array_merge($errors, $primaryErrors);
-                }
-
-                $serverMeta[$targetId] = [
-                    'id'    => $targetId,
-                    'label' => $targetLabel,
-                    'ip'    => $targetConfig->ip,
-                ];
-
-                $sessions = $this->fetchSessions($targetConfig, $trace, $errors, $targetLabel);
-                $radiusByServer[$targetId]   = $users;
-                $sessionsByServer[$targetId] = $sessions;
-
-                $serverMeta[$targetId]['user_count']    = count($users);
-                $serverMeta[$targetId]['session_count'] = count($sessions);
-            }
-        } else {
-            foreach ($configs as $config) {
-                $serverKey = (int) $config->id;
-                $label     = $this->labelFor($config, $organizationId);
-
-                $serverMeta[$serverKey] = [
-                    'id'    => $serverKey,
-                    'label' => $label,
-                    'ip'    => $config->ip,
-                ];
-
-                $users = $this->fetchUsers($config, $trace, $errors, $label);
-                $radiusByServer[$serverKey]   = $users;
-                $sessionsByServer[$serverKey] = $this->fetchSessions($config, $trace, $errors, $label);
-
-                $serverMeta[$serverKey]['user_count']    = count($users);
-                $serverMeta[$serverKey]['session_count'] = count($sessionsByServer[$serverKey]);
-            }
+            $serverMeta[$serverKey]['user_count']    = count($users);
+            $serverMeta[$serverKey]['session_count'] = count($sessionsByServer[$serverKey]);
         }
 
         // ---- 2. Cross-server duplicate detection -----------------------------
         // Only meaningful in combined mode; in single-server mode a username can
         // appear at most once so the map is always empty.
-        // A duplicate requires the account to exist across distinct server IP addresses
-        // (same IP on different ports is a primary/fallback relationship, not a duplicate server).
         $usernameServers = [];
         foreach ($radiusByServer as $sid => $users) {
             foreach (array_keys($users) as $username) {
@@ -417,17 +273,7 @@ class RadiusReconciliationService
         }
         $duplicateUsernames = array_keys(array_filter(
             $usernameServers,
-            function (array $sids) use ($serverMeta): bool {
-                if (count($sids) <= 1) {
-                    return false;
-                }
-                $distinctIps = [];
-                foreach ($sids as $sid) {
-                    $ip = $serverMeta[$sid]['ip'] ?? (string) $sid;
-                    $distinctIps[$ip] = true;
-                }
-                return count($distinctIps) > 1;
-            }
+            static fn (array $sids): bool => count($sids) > 1
         ));
 
         if ($duplicateUsernames !== []) {
@@ -481,28 +327,15 @@ class RadiusReconciliationService
         }
 
         // Active in billing but absent from every targeted device.
-        $pppoeHelper = new PppoeUsernameService();
         foreach ($billing as $username => $bill) {
             if (isset($seen[$username])) {
                 continue;
             }
 
-            $formatCheck = $pppoeHelper->validateUsernameFormat($username, [
-                'first_name'     => $bill['first_name'] ?? '',
-                'middle_initial' => $bill['middle_initial'] ?? '',
-                'last_name'      => $bill['last_name'] ?? '',
-                'mobile_number'  => $bill['mobile_number'] ?? '',
-                'lcp'            => $bill['lcp'] ?? '',
-                'nap'            => $bill['nap'] ?? '',
-                'port'           => $bill['port'] ?? '',
-                'lcpnap'         => $bill['lcpnap'] ?? '',
-            ]);
-
             $rows[] = [
                 'username'          => $username,
                 'account_no'        => $bill['account_no'],
                 'customer_name'     => $bill['customer_name'],
-                'account_id'        => $bill['account_id'],
                 'state'             => self::STATE_MISSING_RADIUS,
                 'server_id'         => null,
                 'server_label'      => '—',
@@ -519,21 +352,17 @@ class RadiusReconciliationService
                 'session_ip'        => null,
                 'session_mac'       => null,
                 'duplicate_servers' => [],
-                'is_format_valid'   => $formatCheck['valid'],
-                'format_issue'      => $formatCheck['reason'],
-                'suggested_username'=> $formatCheck['suggested'],
             ];
         }
 
-        $distinctServerCount = count($radiusByServer);
-        $summary = $this->summarize($rows, $distinctServerCount, count($billing), count($duplicates));
+        $summary = $this->summarize($rows, $configs->count(), count($billing), count($duplicates));
 
         $this->trace(
             $trace,
             sprintf(
                 'Reconciliation complete in %sms across %d device(s): %d row(s), %d duplicate account(s).',
                 round((microtime(true) - $started) * 1000, 2),
-                $distinctServerCount,
+                $configs->count(),
                 count($rows),
                 count($duplicates)
             ),
@@ -661,25 +490,10 @@ class RadiusReconciliationService
             $state = self::STATE_SYNCED;
         }
 
-        $formatCheck = (new PppoeUsernameService())->validateUsernameFormat(
-            $username,
-            $bill ? [
-                'first_name'     => $bill['first_name'] ?? '',
-                'middle_initial' => $bill['middle_initial'] ?? '',
-                'last_name'      => $bill['last_name'] ?? '',
-                'mobile_number'  => $bill['mobile_number'] ?? '',
-                'lcp'            => $bill['lcp'] ?? '',
-                'nap'            => $bill['nap'] ?? '',
-                'port'           => $bill['port'] ?? '',
-                'lcpnap'         => $bill['lcpnap'] ?? '',
-            ] : null
-        );
-
         return [
             'username'          => $username,
             'account_no'        => $bill['account_no'] ?? null,
             'customer_name'     => $bill['customer_name'] ?? null,
-            'account_id'        => $bill['account_id'] ?? null,
             'state'             => $state,
             'server_id'         => $server['id'],
             'server_label'      => $server['label'],
@@ -696,9 +510,6 @@ class RadiusReconciliationService
             'session_ip'        => $session['ip'] ?? null,
             'session_mac'       => $session['mac'] ?? null,
             'duplicate_servers' => $isDuplicate ? array_values($onServers) : [],
-            'is_format_valid'   => $formatCheck['valid'],
-            'format_issue'      => $formatCheck['reason'],
-            'suggested_username'=> $formatCheck['suggested'],
         ];
     }
 
@@ -791,18 +602,12 @@ class RadiusReconciliationService
                 'td.id as td_id',
                 'td.username',
                 'td.pppoe_password',
-                'td.lcp',
-                'td.nap',
-                'td.port',
-                'td.lcpnap',
                 'ba.id as account_id',
                 'ba.account_no',
                 'ba.billing_status_id',
                 'c.id as customer_id',
                 'c.first_name',
-                'c.middle_initial',
                 'c.last_name',
-                'c.contact_number_primary',
                 'c.desired_plan',
             ]);
 
@@ -828,14 +633,6 @@ class RadiusReconciliationService
                     'account_no'        => $row->account_no,
                     'customer_id'       => $row->customer_id !== null ? (int) $row->customer_id : null,
                     'customer_name'     => trim(($row->first_name ?? '') . ' ' . ($row->last_name ?? '')) ?: null,
-                    'first_name'        => (string) ($row->first_name ?? ''),
-                    'middle_initial'    => (string) ($row->middle_initial ?? ''),
-                    'last_name'         => (string) ($row->last_name ?? ''),
-                    'mobile_number'     => (string) ($row->contact_number_primary ?? ''),
-                    'lcp'               => (string) ($row->lcp ?? ''),
-                    'nap'               => (string) ($row->nap ?? ''),
-                    'port'              => (string) ($row->port ?? ''),
-                    'lcpnap'            => (string) ($row->lcpnap ?? ''),
                     'billing_status_id' => $row->billing_status_id,
                     'pppoe_password'    => (string) ($row->pppoe_password ?? ''),
                     'plan_label'        => $planLabel,
@@ -1138,133 +935,6 @@ class RadiusReconciliationService
         );
 
         return $this->success("Billing password for '{$username}' now matches the RADIUS device.");
-    }
-
-    /**
-     * Update a subscriber's PPPoE username in the database (technical_details and job_orders)
-     * and automatically sync the rename to MikroTik User Manager if present.
-     *
-     * @param string $currentUsername
-     * @param string $newUsername
-     * @param int|null $organizationId
-     * @param int|null $serverId
-     * @return array<string, mixed>
-     */
-    public function alignUsername(string $currentUsername, string $newUsername, ?int $organizationId = null, ?int $serverId = null): array
-    {
-        $currentUsername = trim($currentUsername);
-        $newUsername     = trim($newUsername);
-
-        if ($currentUsername === '') {
-            return $this->failure('Current username is required.');
-        }
-
-        if ($newUsername === '') {
-            return $this->failure('New username cannot be empty.');
-        }
-
-        if ($currentUsername === $newUsername) {
-            return $this->skipped("Username is already '{$newUsername}'.");
-        }
-
-        $technical = DB::table('technical_details')->where('username', $currentUsername)->first();
-        if ($technical === null) {
-            return $this->failure("No billing record found with the PPPoE username '{$currentUsername}'.");
-        }
-
-        if ($organizationId !== null && $technical->organization_id !== null && (int)$technical->organization_id !== $organizationId) {
-            return $this->failure("Subscriber record belongs to another organization.");
-        }
-
-        // Check uniqueness of new username
-        $conflictTech = DB::table('technical_details')
-            ->where('username', $newUsername)
-            ->where('id', '!=', $technical->id)
-            ->exists();
-
-        if ($conflictTech) {
-            return $this->failure("The username '{$newUsername}' is already used by another account in technical details.");
-        }
-
-        $jobOrders = DB::table('job_orders')
-            ->where('account_id', $technical->account_id)
-            ->get();
-
-        $previous = [
-            'technical_details' => [
-                'id'       => (int) $technical->id,
-                'username' => $technical->username,
-            ],
-            'job_orders_count' => $jobOrders->count(),
-        ];
-
-        try {
-            DB::transaction(function () use ($technical, $newUsername): void {
-                DB::table('technical_details')
-                    ->where('id', $technical->id)
-                    ->lockForUpdate()
-                    ->update([
-                        'username'   => $newUsername,
-                        'updated_at' => now(),
-                    ]);
-
-                DB::table('job_orders')
-                    ->where('account_id', $technical->account_id)
-                    ->lockForUpdate()
-                    ->update([
-                        'pppoe_username' => $newUsername,
-                        'username'       => $newUsername,
-                        'updated_at'     => now(),
-                    ]);
-            });
-
-            // Automated MikroTik User Manager sync (outside DB transaction per Rule 4.3)
-            $routerRenamed = false;
-            $located = $this->locateUser($currentUsername, $serverId, null, $organizationId);
-            if ($located['success'] && isset($located['config']) && isset($located['user'])) {
-                /** @var RadiusConfig $config */
-                $config = $located['config'];
-                $currentRad = $located['user'];
-                try {
-                    $routerApi = app(RouterosApiService::class);
-                    $renamed = $routerApi->updateUser($config, (string) $currentRad['id'], ['name' => $newUsername]);
-                    if ($renamed) {
-                        $routerRenamed = true;
-                        // Disconnect active session if online so it re-authenticates with new credentials
-                        $this->disconnectSession($currentUsername, (int) $config->id, $organizationId);
-                    }
-                } catch (Throwable $re) {
-                    $this->log('warning', "Failed to rename account '{$currentUsername}' on MikroTik router.", [
-                        'error' => $re->getMessage(),
-                    ]);
-                }
-            }
-
-            $this->recordLog(
-                'align_username',
-                "Aligned PPPoE username from '{$currentUsername}' to '{$newUsername}' on database" . ($routerRenamed ? " and MikroTik router." : "."),
-                $newUsername,
-                $previous,
-                ['technical_details' => ['id' => $technical->id, 'username' => $newUsername]],
-                $located['config']->id ?? null,
-                true,
-                ['account_id' => $technical->account_id, 'old_username' => $currentUsername, 'router_renamed' => $routerRenamed]
-            );
-
-            // Invalidate snapshot cache so the table refreshes
-            Cache::forget(self::SNAPSHOT_PREFIX . self::SERVER_ALL);
-
-            $msg = $routerRenamed
-                ? "PPPoE username successfully aligned and updated to '{$newUsername}' on database and MikroTik router."
-                : "PPPoE username successfully aligned and updated to '{$newUsername}' on database.";
-
-            return $this->success($msg);
-        } catch (Throwable $e) {
-            $this->log('error', "Failed to align username from '{$currentUsername}' to '{$newUsername}'.", [
-                'error' => $e->getMessage()
-            ]);
-            return $this->failure("Database error while updating username: " . $e->getMessage());
-        }
     }
 
     /**
@@ -1638,10 +1308,6 @@ class RadiusReconciliationService
             return $this->failure('One or both of the named RADIUS servers do not exist.');
         }
 
-        if (trim((string) $keepConfig->ip) === trim((string) $removeConfig->ip)) {
-            return $this->failure("Cannot resolve duplicate: both configurations point to the same IP ({$keepConfig->ip}). One is a fallback connection, not a separate server.");
-        }
-
         $keepLabel   = $this->labelFor($keepConfig, $organizationId);
         $removeLabel = $this->labelFor($removeConfig, $organizationId);
 
@@ -1743,9 +1409,6 @@ class RadiusReconciliationService
                     'delete'              => $itemServerId === null
                         ? $this->failure("'{$username}' cannot be deleted without naming the server it lives on.")
                         : $this->deleteFromRadius($username, $item['rad_id'] ?? null, $itemServerId, $organizationId),
-                    'align_username'      => empty($item['suggested_username'])
-                        ? $this->skipped("No suggested username available to align '{$username}'.")
-                        : $this->alignUsername($username, (string) $item['suggested_username'], $organizationId, $itemServerId),
                     default               => $this->failure("Unknown bulk operation '{$operation}'."),
                 };
 
@@ -2066,7 +1729,6 @@ class RadiusReconciliationService
         try {
             $outcome = match ($entry->action) {
                 'sync_password'                        => $this->undoPasswordSync($previous),
-                'align_username'                       => $this->undoAlignUsername($previous, $username),
                 'sync_group_billing'                   => $this->undoBillingGroup($previous),
                 'sync_group_mikrotik', 'restrict'      => $this->undoDeviceGroup($username, $previous, $serverId, $organizationId),
                 'add_user'                             => $this->undoAdd($username, $serverId, $organizationId),
@@ -2135,52 +1797,6 @@ class RadiusReconciliationService
         });
 
         return $this->success('The previous billing password was restored.');
-    }
-
-    /**
-     * Reversal for align_username.
-     *
-     * @param array<string, mixed> $previous
-     * @param string $currentUsername
-     * @return array<string, mixed>
-     */
-    private function undoAlignUsername(array $previous, string $currentUsername): array
-    {
-        $technical = is_array($previous['technical_details'] ?? null) ? $previous['technical_details'] : null;
-
-        if ($technical === null || empty($technical['username'])) {
-            return $this->failure('The snapshot holds no previous username state to restore.');
-        }
-
-        $oldUsername = $technical['username'];
-        $techId      = (int) $technical['id'];
-
-        try {
-            DB::transaction(function () use ($techId, $oldUsername): void {
-                DB::table('technical_details')
-                    ->where('id', $techId)
-                    ->lockForUpdate()
-                    ->update(['username' => $oldUsername, 'updated_at' => now()]);
-
-                $techRow = DB::table('technical_details')->where('id', $techId)->first();
-                if ($techRow) {
-                    DB::table('job_orders')
-                        ->where('account_id', $techRow->account_id)
-                        ->lockForUpdate()
-                        ->update([
-                            'pppoe_username' => $oldUsername,
-                            'username'       => $oldUsername,
-                            'updated_at'     => now(),
-                        ]);
-                }
-            });
-
-            Cache::forget(self::SNAPSHOT_PREFIX . self::SERVER_ALL);
-
-            return $this->success("The previous username '{$oldUsername}' was restored.");
-        } catch (Throwable $e) {
-            return $this->failure("Failed to restore username to '{$oldUsername}': " . $e->getMessage());
-        }
     }
 
     /**
@@ -2386,14 +2002,7 @@ class RadiusReconciliationService
     // =========================================================================
 
     /**
-     * Call one RADIUS device over the native RouterOS API.
-     *
-     * The (method, path, payload) tuple is retained as this service's internal calling
-     * convention — every mutation site already speaks it, and the reversal snapshots in
-     * activity_logs are written around it — but it is now TRANSLATED into RouterosApiService
-     * calls rather than issued as REST. `status` keeps its HTTP-like shape so callers and
-     * the trace stay readable: 200 for a successful read, 204 for a successful mutation,
-     * 0 when the device could not be reached at all.
+     * Call one RADIUS device, trying its configured protocol then the alternate.
      *
      * Always outside a database transaction — every caller here either takes no
      * transaction at all or closes it before reaching this method.
@@ -2410,223 +2019,59 @@ class RadiusReconciliationService
         ?array &$trace = null,
         string $label = ''
     ): array {
-        $method  = strtoupper($method);
-        $payload = $payload ?? [];
-        $api     = app(RouterosApiService::class);
+        $lastError = 'No RADIUS endpoint responded.';
 
-        try {
-            if (!$api->connect($config)) {
-                $error = $api->getLastError() !== '' ? $api->getLastError() : 'No RADIUS endpoint responded.';
+        foreach ($this->resolver->baseUrlsFor($config) as $baseUrl) {
+            try {
+                $request = Http::withOptions(['verify' => false])
+                    ->withBasicAuth($config->username, $config->password)
+                    ->connectTimeout(self::CONNECT_TIMEOUT)
+                    ->timeout(self::REQUEST_TIMEOUT)
+                    ->acceptJson();
 
-                if ($trace !== null) {
-                    $this->trace($trace, trim($label . ' ' . $config->ip . ' unreachable: ' . $error), 'ERROR');
+                $url = $baseUrl . $path;
+
+                $response = match (strtoupper($method)) {
+                    'GET'    => $request->get($url),
+                    'PUT'    => $request->put($url, $payload ?? []),
+                    'PATCH'  => $request->patch($url, $payload ?? []),
+                    'POST'   => $request->post($url, $payload ?? []),
+                    'DELETE' => $request->delete($url),
+                    default  => throw new \InvalidArgumentException("Unsupported HTTP method '{$method}'."),
+                };
+
+                if ($response->successful()) {
+                    if ($trace !== null) {
+                        $this->trace($trace, trim($label . ' ' . strtoupper($method) . ' ' . $path) . ' → HTTP ' . $response->status(), 'DEBUG');
+                    }
+                    return ['success' => true, 'status' => $response->status(), 'data' => $response->json(), 'error' => ''];
                 }
 
-                $this->log('error', 'RADIUS device unreachable.', [
-                    'radius_config_id' => $config->id,
-                    'radius_ip'        => $config->ip,
-                    'method'           => $method,
-                    'path'             => $path,
-                    'error'            => $error,
-                ]);
+                $lastError = 'HTTP ' . $response->status() . ' — ' . $this->briefBody($response->body());
 
-                return ['success' => false, 'status' => 0, 'data' => null, 'error' => $error];
-            }
-
-            $outcome = $this->dispatchDeviceCall($api, $config, $method, $path, $payload);
-        } catch (Throwable $e) {
-            $outcome = ['success' => false, 'status' => 0, 'data' => null, 'error' => $e->getMessage()];
-        }
-
-        if ($trace !== null) {
-            $this->trace(
-                $trace,
-                trim($label . ' ' . $method . ' ' . $path) . ' → ' . ($outcome['success'] ? 'OK ' . $outcome['status'] : $outcome['error']),
-                $outcome['success'] ? 'DEBUG' : 'WARNING'
-            );
-        }
-
-        if (!$outcome['success']) {
-            $this->log('error', 'RADIUS device call failed.', [
-                'radius_config_id' => $config->id,
-                'radius_ip'        => $config->ip,
-                'method'           => $method,
-                'path'             => $path,
-                'error'            => $outcome['error'],
-            ]);
-        }
-
-        return $outcome;
-    }
-
-    /**
-     * Translate one (method, path, payload) tuple into a RouterosApiService call.
-     *
-     * @param array<string, mixed> $payload
-     * @return array{success: bool, status: int, data: mixed, error: string}
-     */
-    private function dispatchDeviceCall(
-        RouterosApiService $api,
-        RadiusConfig $config,
-        string $method,
-        string $path,
-        array $payload
-    ): array {
-        $route = strtok($path, '?');
-        $route = $route === false ? $path : $route;
-        $route = rtrim($route, '/');
-
-        // Reads
-        if ($method === 'GET') {
-            if ($route === '/rest/user-manage/user') {
-                $name = $this->pathQueryValue($path, 'name');
-                $rows = $name !== null
-                    ? array_values(array_filter(
-                        [$api->findUser($config, $name)],
-                        static fn ($row): bool => $row !== null
-                    ))
-                    : $api->getAllUsers($config);
-
-                return $this->deviceSuccess(array_map([$this, 'restShapeUser'], $rows));
-            }
-
-            if ($route === '/rest/user-manage/session') {
-                $user     = $this->pathQueryValue($path, 'user');
-                $sessions = $api->getActiveSessions($config, $user);
-
-                return $this->deviceSuccess(array_map([$this, 'restShapeSession'], $sessions));
+                // The device answered; a different protocol will not change its verdict.
+                if ($trace !== null) {
+                    $this->trace($trace, trim($label . ' ' . strtoupper($method) . ' ' . $path) . ' → ' . $lastError, 'WARNING');
+                }
+                return ['success' => false, 'status' => $response->status(), 'data' => $response->json(), 'error' => $lastError];
+            } catch (Throwable $e) {
+                // Connection or TLS failure — worth retrying on the alternate protocol.
+                $lastError = $e->getMessage();
+                if ($trace !== null) {
+                    $this->trace($trace, trim($label . ' ' . $baseUrl . ' unreachable: ' . $lastError), 'ERROR');
+                }
             }
         }
 
-        // Create
-        if ($method === 'PUT' && $route === '/rest/user-manage/user') {
-            $created = $api->addUser(
-                $config,
-                (string) ($payload['name'] ?? ''),
-                (string) ($payload['password'] ?? ''),
-                (string) ($payload['group'] ?? ''),
-                ($payload['disabled'] ?? 'false') === 'true' || ($payload['disabled'] ?? false) === true
-            );
+        $this->log('error', 'RADIUS device unreachable.', [
+            'radius_config_id' => $config->id,
+            'radius_ip'        => $config->ip,
+            'method'           => strtoupper($method),
+            'path'             => $path,
+            'error'            => $lastError,
+        ]);
 
-            if (!$created) {
-                return $this->deviceFailure($api);
-            }
-
-            $user = $api->findUser($config, (string) ($payload['name'] ?? ''));
-
-            return ['success' => true, 'status' => 204, 'data' => $user !== null ? $this->restShapeUser($user) : null, 'error' => ''];
-        }
-
-        // Update by RouterOS id, e.g. /rest/user-manage/user/*1A
-        if ($method === 'PATCH' && strpos($route, '/rest/user-manage/user/') === 0) {
-            $radiusId = rawurldecode(substr($route, strlen('/rest/user-manage/user/')));
-
-            if (!$api->updateUser($config, $radiusId, $payload)) {
-                return $this->deviceFailure($api);
-            }
-
-            return ['success' => true, 'status' => 204, 'data' => null, 'error' => ''];
-        }
-
-        // Removals — the REST collection used POST .../remove with a `numbers` id.
-        if ($method === 'POST' && $route === '/rest/user-manage/user/remove') {
-            if (!$api->removeUser($config, (string) ($payload['numbers'] ?? ''))) {
-                return $this->deviceFailure($api);
-            }
-
-            return ['success' => true, 'status' => 204, 'data' => null, 'error' => ''];
-        }
-
-        if ($method === 'POST' && $route === '/rest/user-manage/session/remove') {
-            if (!$api->killSession($config, (string) ($payload['numbers'] ?? ''))) {
-                return $this->deviceFailure($api);
-            }
-
-            return ['success' => true, 'status' => 204, 'data' => null, 'error' => ''];
-        }
-
-        return [
-            'success' => false,
-            'status'  => 0,
-            'data'    => null,
-            'error'   => "Unsupported RADIUS operation '{$method} {$path}'.",
-        ];
-    }
-
-    /**
-     * @param array<int, mixed> $data
-     * @return array{success: bool, status: int, data: mixed, error: string}
-     */
-    private function deviceSuccess(array $data): array
-    {
-        return ['success' => true, 'status' => 200, 'data' => $data, 'error' => ''];
-    }
-
-    /**
-     * @return array{success: bool, status: int, data: mixed, error: string}
-     */
-    private function deviceFailure(RouterosApiService $api): array
-    {
-        $error = $api->getLastError();
-
-        return [
-            'success' => false,
-            'status'  => $api->isConnected() ? 400 : 0,
-            'data'    => null,
-            'error'   => $error !== '' ? $error : 'The RADIUS device rejected the operation.',
-        ];
-    }
-
-    /**
-     * Read one query-string value out of an internal route path.
-     */
-    private function pathQueryValue(string $path, string $key): ?string
-    {
-        $query = parse_url($path, PHP_URL_QUERY);
-
-        if (!is_string($query) || $query === '') {
-            return null;
-        }
-
-        parse_str($query, $parsed);
-
-        $value = $parsed[$key] ?? null;
-
-        return is_string($value) && $value !== '' ? $value : null;
-    }
-
-    /**
-     * Re-shape a normalised API user into the REST field names this service parses.
-     *
-     * @param array<string, mixed> $user
-     * @return array<string, mixed>
-     */
-    private function restShapeUser(array $user): array
-    {
-        return [
-            '.id'      => (string) ($user['.id'] ?? ''),
-            'name'     => (string) ($user['username'] ?? ''),
-            'group'    => (string) ($user['group'] ?? ''),
-            'disabled' => !empty($user['disabled']) ? 'true' : 'false',
-            'password' => (string) ($user['password'] ?? ''),
-        ];
-    }
-
-    /**
-     * @param array<string, mixed> $session
-     * @return array<string, mixed>
-     */
-    private function restShapeSession(array $session): array
-    {
-        return [
-            '.id'                => (string) ($session['.id'] ?? ''),
-            'user'               => (string) ($session['username'] ?? ''),
-            'user-address'       => (string) ($session['ip'] ?? ''),
-            'calling-station-id' => (string) ($session['mac'] ?? ''),
-            'upload'             => $session['upload'] ?? 0,
-            'download'           => $session['download'] ?? 0,
-            'uptime'             => (string) ($session['uptime'] ?? ''),
-        ];
+        return ['success' => false, 'status' => 0, 'data' => null, 'error' => $lastError];
     }
 
     /**
@@ -2636,31 +2081,27 @@ class RadiusReconciliationService
      */
     private function findUserOnConfig(RadiusConfig $config, string $username): ?array
     {
-        $username = trim($username);
+        $response = $this->callDevice($config, 'GET', '/rest/user-manage/user?name=' . urlencode($username));
 
-        try {
-            $user = app(RouterosApiService::class)->findUser($config, $username);
-        } catch (Throwable $e) {
-            $this->log('error', 'RADIUS account lookup failed.', [
-                'radius_config_id' => $config->id,
-                'radius_ip'        => $config->ip,
-                'username'         => $username,
-                'error'            => $e->getMessage(),
-            ]);
-
+        if (!$response['success'] || !is_array($response['data'])) {
             return null;
         }
 
-        if ($user === null) {
-            return null;
+        foreach ($response['data'] as $user) {
+            if (!is_array($user)) {
+                continue;
+            }
+            if (strcasecmp(trim((string) ($user['name'] ?? '')), $username) === 0) {
+                return [
+                    'id'       => (string) ($user['.id'] ?? ''),
+                    'group'    => trim((string) ($user['group'] ?? '')),
+                    'disabled' => ($user['disabled'] ?? 'false') === 'true' || ($user['disabled'] ?? false) === true,
+                    'password' => (string) ($user['password'] ?? ''),
+                ];
+            }
         }
 
-        return [
-            'id'       => $user['.id'],
-            'group'    => $user['group'],
-            'disabled' => $user['disabled'],
-            'password' => $user['password'],
-        ];
+        return null;
     }
 
     /**
@@ -2704,20 +2145,28 @@ class RadiusReconciliationService
      */
     private function killSessions(RadiusConfig $config, string $username): int
     {
-        try {
-            return app(RouterosApiService::class)->killSessionsForUser($config, $username);
-        } catch (Throwable $e) {
-            // Cutting sessions is a follow-up to a change that already landed; a device
-            // that will not answer here must not turn that change into a reported failure.
-            $this->log('warning', 'Could not terminate live sessions.', [
-                'radius_config_id' => $config->id,
-                'radius_ip'        => $config->ip,
-                'username'         => $username,
-                'error'            => $e->getMessage(),
-            ]);
+        $response = $this->callDevice($config, 'GET', '/rest/user-manage/session?user=' . urlencode($username));
 
+        if (!$response['success'] || !is_array($response['data'])) {
             return 0;
         }
+
+        $killed = 0;
+        foreach ($response['data'] as $session) {
+            if (!is_array($session) || empty($session['.id'])) {
+                continue;
+            }
+
+            $removal = $this->callDevice($config, 'POST', '/rest/user-manage/session/remove', [
+                'numbers' => (string) $session['.id'],
+            ]);
+
+            if ($removal['success']) {
+                $killed++;
+            }
+        }
+
+        return $killed;
     }
 
     // =========================================================================
@@ -2725,30 +2174,44 @@ class RadiusReconciliationService
     // =========================================================================
 
     /**
-     * Two group names agree if they name the same plan.
-     *
-     * Delegated to {@see PlanGroup::matches()}, which settles it on the *first word*
-     * of each label — the same reduction Job Order account creation applies when it
-     * picks the User Manager group to create a subscriber in. That is the fix for
-     * `group_mismatch` being raised against healthy accounts: the device stores
-     * "SWIFT", billing stores "SWIFT 1000", and a whole-label comparison called that
-     * a discrepancy on every sweep. Whole-label and bare-group agreement are still
-     * accepted, so nothing that matched before stops matching.
+     * Two group names agree if they match outright, or once the priced billing
+     * label is reduced to its bare group ("LITE - P699.00" -> "LITE").
      */
     private function groupsAgree(string $radGroup, string $billLabel): bool
     {
-        return PlanGroup::matches($radGroup, $billLabel);
+        $radGroup  = trim($radGroup);
+        $billLabel = trim($billLabel);
+
+        if ($radGroup === '' && $billLabel === '') {
+            return true;
+        }
+
+        if (strcasecmp($radGroup, $billLabel) === 0) {
+            return true;
+        }
+
+        $billBare = $this->bareGroup($billLabel);
+        $radBare  = $this->bareGroup($radGroup);
+
+        return strcasecmp($radGroup, $billBare) === 0 || strcasecmp($radBare, $billBare) === 0;
     }
 
     /**
      * Reduce a priced plan label to the bare group name the device stores.
-     *
-     * @see PlanGroup::bare() the shared implementation; this stays as the name the
-     *      rest of this service calls it by.
      */
     private function bareGroup(string $label): string
     {
-        return PlanGroup::bare($label);
+        $label = trim($label);
+
+        if ($label === '') {
+            return '';
+        }
+
+        if (str_contains($label, ' - ')) {
+            return trim(explode(' - ', $label, 2)[0]);
+        }
+
+        return trim(strtok($label, ' ') ?: $label);
     }
 
     /**

@@ -1,7 +1,7 @@
 <?php
 /**
  * Cache Clearing Script
- * Access: https://backend.atssfiber.ph/clear-cache.php?key=@tss2025clear
+ * Access: https://backend.gowiser.ph/clear-cache.php?key=@tss2025clear
  */
 
 define('CLEAR_KEY', '@tss2025clear');

@@ -5,6 +5,7 @@ import LocationMap from '../components/Map/LocationMap';
 import CameraFileInput from '../components/Form/CameraFileInput';
 import SearchableSelect from '../components/Form/SearchableSelect';
 import TermsModal from '../components/TermsModal';
+import { trackPixelEvent } from '../utils/metaPixel';
 
 interface Region {
   id: number;
@@ -91,10 +92,10 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
     onEditModeChange,
     requireFields = true
   } = props;
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.atssfiber.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
-  const COVERAGE_CENTER = { lat: 14.6076, lng: 121.1521 }; // Norzagaray, Bulacan
-  const COVERAGE_RADIUS = 20000; // 25km in meters - covers Norzagaray area
+  const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
+  const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
 
   const [showMapModal, setShowMapModal] = useState(false);
   const [mapCenter, setMapCenter] = useState(COVERAGE_CENTER);
@@ -376,15 +377,10 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
       formData.append('contact_information', contactInformation);
       formData.append('submit_modal', submitModal);
 
-      // Saving the form's layout is an administrator action, and the endpoint
-      // now requires the token to prove it. Reading the settings stays public,
-      // because the form itself has to render for an applicant who is not
-      // signed in.
       const response = await fetch(`${apiBaseUrl}/api/form-ui/settings`, {
         method: 'POST',
         headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') ?? ''}`
+          'Accept': 'application/json'
         },
         body: formData
       });
@@ -728,14 +724,10 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
     try {
       setIsSubmitting(true);
 
-      // No `credentials: 'include'` on purpose. This endpoint is stateless —
-      // it reads no cookie and no session — so sending credentials achieved
-      // nothing except to promote the request to credentialed CORS, which is
-      // the stricter mode and the first thing an in-app browser (Messenger's
-      // above all) restricts. Plain CORS is what the request actually needs.
       const response = await fetch(`${apiBaseUrl}/api/application/store`, {
         method: 'POST',
         body: submissionData,
+        credentials: 'include',
         headers: {
           'Accept': 'application/json'
         }
@@ -750,7 +742,29 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
         throw new Error(errorData.message || 'Failed to submit application');
       }
 
-      const result = await response.json();
+      /*
+       * Meta Pixel conversion — fired only once the application is actually in the
+       * database. ApplicationController::store returns 201 with the saved row (and
+       * its DB-assigned id) solely after $application->save() and DB::commit(); a
+       * 422 validation failure or a 500 rollback never carries an id. Requiring the
+       * id therefore means no event is reported for a submission that was not saved.
+       *
+       * Parsing is wrapped: a malformed body must not turn a submission the server
+       * did save into an error alert for the applicant.
+       */
+      let applicationId: number | undefined;
+      try {
+        const result = await response.json();
+        applicationId = result?.application?.id;
+      } catch (parseError) {
+        console.warn('Could not read saved application id from response:', parseError);
+      }
+
+      if (applicationId) {
+        trackPixelEvent('CompleteRegistration', {}, {
+          eventID: `application-${applicationId}`,
+        });
+      }
 
       setIsSubmitting(false);
       setShowSuccessModal(true);
@@ -761,6 +775,31 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
 
       if (error instanceof Error) {
         errorMessage = error.message;
+      }
+
+      /*
+       * A TypeError from fetch() ("Failed to fetch") is a NETWORK-level failure —
+       * the request never completed, or its response could not be read. It does
+       * NOT mean the server rejected the application: the server may well have
+       * saved it and simply been unable to reply in time.
+       *
+       * Telling the applicant "Failed" in that case is actively harmful — they
+       * resubmit, and the `applications` table ends up with duplicates minutes
+       * apart. So this says plainly that the outcome is unknown and asks them to
+       * check before trying again, rather than asserting a failure we cannot know
+       * has occurred.
+       */
+      const isNetworkFailure =
+        error instanceof TypeError ||
+        /failed to fetch|networkerror|network request failed|load failed/i.test(errorMessage);
+
+      if (isNetworkFailure) {
+        errorMessage =
+          'We could not confirm whether your application went through — the connection '
+          + 'dropped before we got a reply.\n\n'
+          + 'Your application may already have been received. Please check your email for a '
+          + 'confirmation before submitting again, so you do not send it twice. '
+          + 'If nothing arrives within a few minutes, please resubmit or contact us.';
       }
 
       setSubmitErrorMessage(errorMessage);
@@ -1873,7 +1912,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
                 onClick={() => {
                   setShowSuccessModal(false);
                   handleReset();
-                  window.location.href = 'https://sync.atssfiber.ph';
+                  window.location.href = 'https://sync.gowiser.ph';
                 }}
                 className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >

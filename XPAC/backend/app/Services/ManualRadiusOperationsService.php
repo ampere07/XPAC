@@ -3,11 +3,10 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
-use App\Support\CronLog;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Http;
 use Throwable;
 use Exception;
-use App\Models\RadiusConfig;
 use App\Models\DisconnectedLog;
 use App\Models\ReconnectionLog;
 
@@ -44,21 +43,11 @@ class ManualRadiusOperationsService
             // Try to get active session ID before it's gone
             $sessionId = null;
             if (!empty($username)) {
-                $sessionApi = app(RouterosApiService::class);
+                $sessPath = "/rest/user-manage/session?user=" . urlencode($username);
                 foreach ($radiusEndpoints as $endpoint) {
-                    $sessionConfig = $this->configFor($endpoint);
-                    if (!$sessionConfig) {
-                        continue;
-                    }
-
-                    try {
-                        $sessResult = $sessionApi->getActiveSessions($sessionConfig, $username);
-                    } catch (Throwable $sessEx) {
-                        $this->writeLog("[SESSION] Error reading sessions on {$endpoint['url']}: " . $sessEx->getMessage());
-                        continue;
-                    }
-
-                    if (!empty($sessResult) && !empty($sessResult[0]['.id'])) {
+                    $fullUrl = $endpoint['url'] . $sessPath;
+                    $sessResult = $this->callApiWithRetry($fullUrl, 'GET', null, $endpoint['username'], $endpoint['password']);
+                    if ($sessResult && is_array($sessResult) && isset($sessResult[0]['.id'])) {
                         $sessionId = $sessResult[0]['.id'];
                         $this->writeLog("[SESSION] Found session ID for logging: $sessionId");
                         break;
@@ -170,21 +159,11 @@ class ManualRadiusOperationsService
             // Try to get active session ID before it's gone
             $sessionId = null;
             if (!empty($username)) {
-                $sessionApi = app(RouterosApiService::class);
+                $sessPath = "/rest/user-manage/session?user=" . urlencode($username);
                 foreach ($radiusEndpoints as $endpoint) {
-                    $sessionConfig = $this->configFor($endpoint);
-                    if (!$sessionConfig) {
-                        continue;
-                    }
-
-                    try {
-                        $sessResult = $sessionApi->getActiveSessions($sessionConfig, $username);
-                    } catch (Throwable $sessEx) {
-                        $this->writeLog("[SESSION] Error reading sessions on {$endpoint['url']}: " . $sessEx->getMessage());
-                        continue;
-                    }
-
-                    if (!empty($sessResult) && !empty($sessResult[0]['.id'])) {
+                    $fullUrl = $endpoint['url'] . $sessPath;
+                    $sessResult = $this->callApiWithRetry($fullUrl, 'GET', null, $endpoint['username'], $endpoint['password']);
+                    if ($sessResult && is_array($sessResult) && isset($sessResult[0]['.id'])) {
                         $sessionId = $sessResult[0]['.id'];
                         $this->writeLog("[SESSION] Found session ID for logging: $sessionId");
                         break;
@@ -261,6 +240,18 @@ class ManualRadiusOperationsService
 
     /**
      * Reconnect user to RADIUS and update database
+     *
+     * Optional param `preserveBillingStatus` (bool, default false): leave billing_status_id
+     * exactly as the caller committed it instead of forcing it to Active.
+     *
+     * A plain reconnect means "this customer paid, put them back in service", so writing Active
+     * is right for every payment-driven caller and stays the default. It is wrong for VIP: a VIP
+     * carries its own billing status (id 7), which is what makes billing generation skip the
+     * account and what vip:check-expiration sweeps on. Forcing Active here would silently strip
+     * both the moment the account was comped — the account would keep getting invoiced and its
+     * vip_expiration would never be enforced. Callers that own the status pass true.
+     *
+     * The RADIUS side is identical either way: the user is moved into their plan group.
      */
     public function reconnectUser(array $params): array
     {
@@ -269,9 +260,13 @@ class ManualRadiusOperationsService
             $username = $params['username'] ?? '';
             $rawPlan = $params['plan'] ?? '';
             $updatedBy = $params['updatedBy'] ?? 'System';
+            $preserveBillingStatus = (bool) ($params['preserveBillingStatus'] ?? false);
 
             $this->writeLog("=== RECONNECT USER START ===");
             $this->writeLog("Account: $accountNo | Username: $username | Raw Plan: $rawPlan");
+            if ($preserveBillingStatus) {
+                $this->writeLog("[MODE] preserveBillingStatus — RADIUS group only, billing status left as committed by caller");
+            }
 
             if (empty($username)) {
                 throw new Exception("Username is required for reconnect operation");
@@ -373,7 +368,8 @@ class ManualRadiusOperationsService
                     $radiusEndpoints,
                     $username,
                     $cleanPlan,
-                    'Active',
+                    // null = do not touch billing_status_id; see preserveBillingStatus above.
+                    $preserveBillingStatus ? null : 'Active',
                     true, // isDisconnectAction
                     $accountNo,
                     $updatedBy
@@ -507,34 +503,23 @@ class ManualRadiusOperationsService
                 $accountNo,
                 $oldUsername,
                 $newUsername,
-                $updatedBy
+                $updatedBy,
+                $newPassword
             );
 
             // Step 2: Update RADIUS credentials
-            $radiusFailureReason = null;
             $radiusSuccess = $this->updateRadiusCredentials(
                 $radiusEndpoints,
                 $oldUsername,
                 $newUsername,
-                $newPassword,
-                $radiusFailureReason,
-                $accountNo
+                $newPassword
             );
 
             if (!$radiusSuccess) {
                 // DB username was already updated, but RADIUS could not be reached/updated.
                 // Report failure so the caller queues the RADIUS rename for automatic retry.
-                //
-                // The reason is carried through verbatim rather than flattened into
-                // "failed to connect": the queue stores this text as last_error, and it
-                // is the only record of whether the server was down, the account was
-                // missing, or the device refused the name.
                 $this->writeLog("[WARNING] Database was updated, but RADIUS update failed. Will be queued for retry.");
-                throw new Exception(
-                    $radiusFailureReason !== null
-                        ? "RADIUS credential update failed for '{$oldUsername}': {$radiusFailureReason}"
-                        : "Failed to connect to RADIUS server or update credentials for user '{$oldUsername}'"
-                );
+                throw new Exception("Failed to connect to RADIUS server or update credentials for user '{$oldUsername}'");
             }
 
             $this->writeLog("[SUCCESS] Credentials updated successfully");
@@ -585,15 +570,11 @@ class ManualRadiusOperationsService
             }
             $endpoint = $located['endpoint'];
 
-            // Step 2: Set disabled=yes on the server where the account was found
-            $config = $this->configFor($endpoint);
-            if (!$config) {
-                throw new Exception("No radius_config record behind {$endpoint['url']}");
-            }
-
-            $api = app(RouterosApiService::class);
-            if (!$api->setUserDisabled($config, $located['id'], true)) {
-                throw new Exception("Failed to update disabled status in RADIUS: " . $api->getLastError());
+            // Step 2: Patch user to set disabled=yes on the server where it was found
+            $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $located['id'];
+            $result = $this->callApiWithRetry($targetUrl, 'PATCH', ['disabled' => 'true'], $endpoint['username'], $endpoint['password']);
+            if ($result === false) {
+                throw new Exception("Failed to update disabled status in RADIUS");
             }
             $this->writeLog("[DISABLE] Set disabled=yes for '$username' at {$endpoint['url']}");
 
@@ -645,15 +626,11 @@ class ManualRadiusOperationsService
             }
             $endpoint = $located['endpoint'];
 
-            // Step 2: Set disabled=no on the server where the account was found
-            $config = $this->configFor($endpoint);
-            if (!$config) {
-                throw new Exception("No radius_config record behind {$endpoint['url']}");
-            }
-
-            $api = app(RouterosApiService::class);
-            if (!$api->setUserDisabled($config, $located['id'], false)) {
-                throw new Exception("Failed to update disabled status in RADIUS: " . $api->getLastError());
+            // Step 2: Patch user to set disabled=no on the server where it was found
+            $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $located['id'];
+            $result = $this->callApiWithRetry($targetUrl, 'PATCH', ['disabled' => 'false'], $endpoint['username'], $endpoint['password']);
+            if ($result === false) {
+                throw new Exception("Failed to update disabled status in RADIUS");
             }
             $this->writeLog("[ENABLE] Set disabled=no for '$username' at {$endpoint['url']}");
 
@@ -683,317 +660,73 @@ class ManualRadiusOperationsService
     /**
      * Update RADIUS credentials (username and password)
      */
-    public function updateRadiusCredentials(
-        array $radiusEndpoints,
-        string $oldUsername,
-        string $newUsername,
-        ?string $newPassword = null,
-        ?string &$failureReason = null,
-        ?string $accountNo = null
-    ): bool {
+    public function updateRadiusCredentials(array $radiusEndpoints, string $oldUsername, string $newUsername, ?string $newPassword = null): bool
+    {
         $this->writeLog("[CREDENTIALS] Attempting RADIUS update: '$oldUsername' -> '$newUsername'");
 
-        // Every name this account may answer to on the device, most likely first.
-        // The queued params freeze the name as it was when the job was created,
-        // but the database rename runs before the RADIUS leg — so after a failed
-        // first attempt the device may hold the old name while the database holds
-        // the new one. Looking for only one of them is what made a retry conclude
-        // the account had vanished.
-        $candidates = $this->candidateUsernames($accountNo, $oldUsername, $newUsername);
-        $this->writeLog("[CREDENTIALS] Looking for: " . implode(', ', array_map(
-            static fn (string $name): string => "'{$name}'",
-            $candidates
-        )));
-
         $totalSuccessCount = 0;
-        $alreadyNamedCount = 0;
-        $unreachableCount = 0;
-        $absentCount = 0;
-        $rejectedCount = 0;
-        $reasons = [];
-        $failureReason = null;
-
-        $api = app(RouterosApiService::class);
 
         foreach ($radiusEndpoints as $index => $endpoint) {
             $serverName = "Server #" . ($index + 1) . " ({$endpoint['url']})";
             $this->writeLog("[CREDENTIALS] Processing $serverName");
 
-            $config = $this->configFor($endpoint);
+            // 1. Find the user on THIS specific server to get the correct ID
+            $userPath = "/rest/user-manage/user/" . urlencode($oldUsername);
+            $findResult = $this->callApiWithRetry($endpoint['url'] . $userPath, 'GET', null, $endpoint['username'], $endpoint['password']);
 
-            if (!$config) {
-                $this->writeLog("[CREDENTIALS] [SKIP] No radius_config record behind $serverName");
-                $reasons[] = "$serverName: no radius_config record";
-                continue;
-            }
-
-            // 0. Reach the device FIRST, so an unreachable server is never confused
-            //    with a server that simply does not carry this account. findUser()
-            //    answers null for both, and reporting the second as the first is
-            //    what sent renames round a retry ladder they could never finish.
-            if (!$api->connect($config)) {
-                $error = $api->getLastError() !== '' ? $api->getLastError() : 'no endpoint responded';
-                $this->writeLog("[CREDENTIALS] [UNREACHABLE] $serverName - $error");
-                $reasons[] = "$serverName unreachable: $error";
-                $unreachableCount++;
-                continue;
-            }
-
-            // 1. Find the account on THIS specific server, under whichever of its
-            //    known names the device still holds, to get the correct ID.
-            $findResult = null;
-            $matchedName = '';
-
-            foreach ($candidates as $candidate) {
-                $findResult = $api->findUser($config, $candidate);
-
-                if ($findResult !== null) {
-                    $matchedName = $candidate;
-                    break;
-                }
-            }
-
-            // 2. Present under none of its names: this server does not carry the
-            //    account at all. That is a different problem from an unreachable
-            //    server, and no amount of retrying will change it.
-            if ($findResult === null) {
-                $this->writeLog("[CREDENTIALS] [SKIP] Account not present on $serverName under any known name");
-                $reasons[] = "$serverName: account absent under all known names";
-                $absentCount++;
+            if (!$findResult || !isset($findResult['.id'])) {
+                $this->writeLog("[CREDENTIALS] [SKIP] User '$oldUsername' not found on $serverName");
                 continue;
             }
 
             $radiusId = $findResult['.id'];
-            $deviceName = (string) ($findResult['username'] ?? '');
-            $this->writeLog("[CREDENTIALS] Found on $serverName as '$deviceName' (matched '$matchedName', id $radiusId)");
+            $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $radiusId;
 
-            // 3. The device already carries the target name — an earlier attempt
-            //    landed, or the rename only changes capitalisation, which the
-            //    device treats as the same name. Either way there is nothing to
-            //    rename, and only a password may still need applying.
-            if ($deviceName === $newUsername) {
-                $this->writeLog("[CREDENTIALS] [ALREADY DONE] $serverName already carries '$newUsername'");
-                $this->applyPasswordIfGiven($api, $config, $radiusId, $newPassword, $serverName);
-                $alreadyNamedCount++;
-                continue;
-            }
-
-            // 4. DISABLE user temporarily to prevent instant auto-reconnect during rename
+            // 2. DISABLE user temporarily to prevent instant auto-reconnect during rename
             $this->writeLog("[CREDENTIALS] Temporarily disabling user to clear sessions...");
-            $api->setUserDisabled($config, $radiusId, true);
+            $this->callApiWithRetry($targetUrl, 'PATCH', ['disabled' => 'true'], $endpoint['username'], $endpoint['password']);
 
-            // 5. KILL active sessions for the name the device actually holds, which
-            //    is not always the name the job was queued with.
-            $api->killSessionsForUser($config, $deviceName !== '' ? $deviceName : $matchedName);
-
+            // 3. KILL active sessions for the OLD username
+            $sessPath = "/rest/user-manage/session?user=" . urlencode($oldUsername);
+            $sessions = $this->callApiWithRetry($endpoint['url'] . $sessPath, 'GET', null, $endpoint['username'], $endpoint['password']);
+            
+            if ($sessions && is_array($sessions)) {
+                foreach ($sessions as $session) {
+                    if (isset($session['.id'])) {
+                        $this->callApiWithRetry($endpoint['url'] . "/rest/user-manage/session/" . $session['.id'], 'DELETE', null, $endpoint['username'], $endpoint['password']);
+                    }
+                }
+            }
+            
             // Small pause for RADIUS to stabilize
             sleep(1);
 
-            // 6. UPDATE credentials (Rename)
+            // 4. UPDATE credentials (Rename)
             $payload = ['name' => $newUsername];
             if (!empty($newPassword)) {
                 $payload['password'] = $newPassword;
             }
 
             $this->writeLog("[CREDENTIALS] Applying rename in RADIUS...");
-            $patchApplied = $api->updateUser($config, $radiusId, $payload);
-            $patchError = $patchApplied ? '' : $api->getLastError();
+            $patchResult = $this->callApiWithRetry($targetUrl, 'PATCH', $payload, $endpoint['username'], $endpoint['password']);
 
-            // 7. RE-ENABLE the user. Addressed by the RADIUS id, which survives the rename,
-            //    so the account is never left disabled because its name has moved on.
+            // 5. RE-ENABLE the user
             $this->writeLog("[CREDENTIALS] Re-enabling user...");
-            $api->setUserDisabled($config, $radiusId, false);
+            $this->callApiWithRetry($targetUrl, 'PATCH', ['disabled' => 'false'], $endpoint['username'], $endpoint['password']);
 
-            if ($patchApplied) {
+            if ($patchResult !== false) {
                 $this->writeLog("[CREDENTIALS] [SUCCESS] Updated credentials on $serverName");
                 $totalSuccessCount++;
-                continue;
             }
-
-            // The set was refused. Ask the device what it holds now: a reply lost
-            // after the change was applied looks identical to a rejection from
-            // here, and only the device can tell the two apart.
-            $after = $api->findUser($config, $newUsername);
-
-            if ($after !== null && (string) ($after['.id'] ?? '') === (string) $radiusId) {
-                $this->writeLog("[CREDENTIALS] [SUCCESS] Rename did land on $serverName despite the error reply");
-                $totalSuccessCount++;
-                continue;
-            }
-
-            $this->writeLog("[CREDENTIALS] [FAILED] Rename rejected on $serverName - " . $patchError);
-            $reasons[] = "$serverName rejected the rename: " . ($patchError !== '' ? $patchError : 'no reason given');
-            $rejectedCount++;
         }
 
-        if ($totalSuccessCount > 0 || $alreadyNamedCount > 0) {
-            return true;
-        }
-
-        // Name the real problem. The queue decides how long to keep trying from
-        // this text, and "could not reach the server" deserves a retry while
-        // "the account is on no server" never will.
-        if ($unreachableCount > 0) {
-            $failureReason = "could not reach any RADIUS server holding '$oldUsername' ("
-                . implode('; ', $reasons) . ')';
-        } elseif ($rejectedCount > 0) {
-            $failureReason = "RADIUS rejected the rename of '$oldUsername' to '$newUsername' ("
-                . implode('; ', $reasons) . ')';
-        } elseif ($absentCount > 0) {
-            $failureReason = "'$oldUsername' is on no RADIUS server under either its old or new name"
-                . " — nothing to rename (" . implode('; ', $reasons) . ')';
-        } else {
-            $failureReason = "no RADIUS server was usable for '$oldUsername' ("
-                . ($reasons === [] ? 'no endpoints configured' : implode('; ', $reasons)) . ')';
-        }
-
-        return false;
+        return $totalSuccessCount > 0;
     }
 
     /**
-     * Every name this account may still be known by on a RADIUS device, ordered
-     * by how likely the device is to hold it.
-     *
-     * The queued name comes first: if the RADIUS leg failed outright, that is what
-     * the device still has. The database name comes next, because the database is
-     * renamed BEFORE the RADIUS call, so on any retry it already holds the new
-     * name — and if the device was renamed too, this is what finds it. The target
-     * name comes last as a backstop for an account whose database row never moved.
-     *
-     * Matching on the device is case-insensitive, so names differing only in case
-     * are collapsed here rather than costing a second lookup.
-     *
-     * @return array<int, string>
+     * Update database credentials (username and optional password)
      */
-    private function candidateUsernames(?string $accountNo, string $oldUsername, string $newUsername): array
-    {
-        $ordered = array_merge(
-            [$oldUsername],
-            $this->databaseUsernames($accountNo, $oldUsername),
-            [$newUsername]
-        );
-
-        $candidates = [];
-        $seen = [];
-
-        foreach ($ordered as $name) {
-            $name = trim((string) $name);
-
-            if ($name === '') {
-                continue;
-            }
-
-            $key = strtolower($name);
-
-            if (isset($seen[$key])) {
-                continue;
-            }
-
-            $seen[$key] = true;
-            $candidates[] = $name;
-        }
-
-        return $candidates;
-    }
-
-    /**
-     * The PPPoE usernames the database currently holds for this account.
-     *
-     * technical_details is the record of truth and is read both by account_no and
-     * through billing_accounts, because the column is populated inconsistently.
-     * job_orders.pppoe_username is read as a last resort for accounts whose
-     * technical_details row is missing or was never filled in.
-     *
-     * @return array<int, string>
-     */
-    private function databaseUsernames(?string $accountNo, string $oldUsername): array
-    {
-        $names = [];
-
-        if (!empty($accountNo)) {
-            $technical = DB::table('technical_details')
-                ->where('account_no', $accountNo)
-                ->value('username');
-
-            if (!empty($technical)) {
-                $names[] = (string) $technical;
-                $this->writeLog("[CREDENTIALS] [DB] technical_details (account_no $accountNo) holds '{$technical}'");
-            }
-
-            $account = DB::table('billing_accounts')->where('account_no', $accountNo)->first();
-
-            if ($account) {
-                $byId = DB::table('technical_details')
-                    ->where('account_id', $account->id)
-                    ->value('username');
-
-                if (!empty($byId)) {
-                    $names[] = (string) $byId;
-                    $this->writeLog("[CREDENTIALS] [DB] technical_details (account_id {$account->id}) holds '{$byId}'");
-                }
-
-                $jobOrder = DB::table('job_orders')
-                    ->where('account_id', $account->id)
-                    ->orderByDesc('id')
-                    ->value('pppoe_username');
-
-                if (!empty($jobOrder)) {
-                    $names[] = (string) $jobOrder;
-                    $this->writeLog("[CREDENTIALS] [DB] job_orders holds '{$jobOrder}'");
-                }
-            }
-        }
-
-        // No account number on the job: the queued name is the only way back to the row.
-        if ($names === [] && $oldUsername !== '') {
-            $byUsername = DB::table('technical_details')
-                ->where('username', $oldUsername)
-                ->value('username');
-
-            if (!empty($byUsername)) {
-                $names[] = (string) $byUsername;
-            }
-        }
-
-        if ($names === []) {
-            $this->writeLog('[CREDENTIALS] [DB] No stored username found; using the queued names only');
-        }
-
-        return $names;
-    }
-
-    /**
-     * Set the password on an account whose name is already correct.
-     *
-     * Reached when a rename turns out to have landed already: the name needs no
-     * work, but a password supplied with it still does.
-     *
-     * @param RadiusConfig $config
-     */
-    private function applyPasswordIfGiven(
-        RouterosApiService $api,
-        $config,
-        string $radiusId,
-        ?string $newPassword,
-        string $serverName
-    ): void {
-        if (empty($newPassword)) {
-            return;
-        }
-
-        if ($api->updateUser($config, $radiusId, ['password' => $newPassword])) {
-            $this->writeLog("[CREDENTIALS] Password applied on $serverName");
-
-            return;
-        }
-
-        $this->writeLog("[CREDENTIALS] [WARNING] Password not applied on $serverName - " . $api->getLastError());
-    }
-
-    /**
-     * Update database credentials (username only)
-     */
-    private function updateDatabaseCredentials(string $accountNo, string $oldUsername, string $newUsername, string $updatedBy): void
+    private function updateDatabaseCredentials(string $accountNo, string $oldUsername, string $newUsername, string $updatedBy, ?string $newPassword = null): void
     {
         $rowsUpdated = 0;
         $accountId = null;
@@ -1042,15 +775,20 @@ class ManualRadiusOperationsService
         // If technical_details was updated successfully, also sync job_orders
         if ($rowsUpdated > 0) {
             if ($accountId) {
+                $joUpdate = [
+                    'pppoe_username' => $newUsername,
+                    'username' => $newUsername,
+                    'updated_at' => now()
+                ];
+                if (!empty($newPassword)) {
+                    $joUpdate['pppoe_password'] = $newPassword;
+                }
+
                 $joUpdated = DB::table('job_orders')
                     ->where('account_id', $accountId)
-                    ->update([
-                        'pppoe_username' => $newUsername,
-                        'username' => $newUsername,
-                        'updated_at' => now()
-                    ]);
+                    ->update($joUpdate);
                 
-                $this->writeLog("[DB] Synced job_orders username & pppoe_username for Account ID: $accountId ($joUpdated rows affected)");
+                $this->writeLog("[DB] Synced job_orders username, pppoe_username & password for Account ID: $accountId ($joUpdated rows affected)");
             } else {
                 $this->writeLog("[WARNING] Could not determine account_id to sync job_orders table");
             }
@@ -1074,42 +812,34 @@ class ManualRadiusOperationsService
      */
     private function findRadiusUser(array $radiusEndpoints, string $username): ?array
     {
-        $api = app(RouterosApiService::class);
+        $userPath = "/rest/user-manage/user/" . urlencode($username);
 
         foreach ($radiusEndpoints as $index => $endpoint) {
             $serverName = "Server #" . ($index + 1) . " ({$endpoint['url']})";
             $this->writeLog("[LOOKUP] Searching for '$username' on $serverName");
 
-            $config = $this->configFor($endpoint);
-
-            if (!$config) {
-                $this->writeLog("[LOOKUP] No radius_config record behind $serverName — skipping");
-                continue;
-            }
-
             try {
-                $result = $api->findUser($config, $username);
+                $result = $this->callApiWithRetry(
+                    $endpoint['url'] . $userPath,
+                    'GET',
+                    null,
+                    $endpoint['username'],
+                    $endpoint['password']
+                );
             } catch (Throwable $e) {
                 // A failure on this server must not stop us from checking the others.
                 $this->writeLog("[LOOKUP] Error querying $serverName: " . $e->getMessage() . " — continuing to next server");
                 continue;
             }
 
-            if ($result !== null) {
-                $currentGroup = $result['group'];
+            if ($result && isset($result['.id'])) {
+                $currentGroup = $result['group'] ?? '';
                 $this->writeLog("[LOOKUP] Found '$username' on $serverName (ID: {$result['.id']} | Group: '$currentGroup')");
                 return [
                     'id' => $result['.id'],
                     'group' => $currentGroup,
-                    'disabled' => $result['disabled'],
                     'endpoint' => $endpoint,
                 ];
-            }
-
-            $error = $api->getLastError();
-            if ($error !== '') {
-                $this->writeLog("[LOOKUP] $serverName unreachable: $error — continuing to next server");
-                continue;
             }
 
             $this->writeLog("[LOOKUP] '$username' not found on $serverName — trying next");
@@ -1120,13 +850,43 @@ class ManualRadiusOperationsService
     }
 
     /**
+     * The group a username currently sits in on the live RADIUS servers.
+     *
+     * A read-only window onto findRadiusUser() for callers that need to know the
+     * network's actual state before deciding to change it — the restricted-status
+     * enforcement command in particular, which must not issue a restrict for a
+     * user already restricted, and must not act at all on a user it could not
+     * confirm.
+     *
+     * Null means "no server could tell us", which covers both a missing user and
+     * an unreachable fleet. The two are deliberately not distinguished here
+     * because the correct response to either is the same: do nothing and report
+     * it. A caller that treated "not found" as "no group, restrict it" would turn
+     * a RADIUS outage into a mass disconnection.
+     */
+    public function findUserGroup(string $username): ?string
+    {
+        if (trim($username) === '') {
+            return null;
+        }
+
+        $located = $this->findRadiusUser($this->getRadiusEndpoints(), $username);
+
+        return $located === null ? null : (string) ($located['group'] ?? '');
+    }
+
+    /**
      * Core RADIUS operations (disconnect/reconnect)
+     *
+     * $dbStatus is the billing_status name to write once the RADIUS side is done, or NULL to
+     * leave billing_status_id alone because the caller already owns it. See
+     * {@see reconnectUser()}'s preserveBillingStatus param for the case that needs NULL.
      */
     private function radiusOps(
         array $radiusEndpoints,
         string $username,
         string $targetGroup,
-        string $dbStatus,
+        ?string $dbStatus,
         bool $isDisconnectAction,
         string $accountNo = '',
         string $updatedBy = 'System'
@@ -1155,20 +915,20 @@ class ManualRadiusOperationsService
             $needsPatch = ($currentRadiusGroup !== $targetGroup);
             if ($needsPatch) {
                 $this->writeLog("[PATCH] Mismatch ('$currentRadiusGroup' != '$targetGroup'). Applying '$targetGroup' on {$endpoint['url']}...");
+                $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $radiusId;
+                $result = $this->callApiWithRetry(
+                    $targetUrl,
+                    'PATCH',
+                    ['group' => $targetGroup],
+                    $endpoint['username'],
+                    $endpoint['password']
+                );
 
-                $config = $this->configFor($endpoint);
-
-                if ($config) {
-                    $api = app(RouterosApiService::class);
-
-                    if ($api->setUserGroup($config, $radiusId, $targetGroup)) {
-                        $this->writeLog("[PATCH] Success at {$endpoint['url']}");
-                        $patchHappened = true;
-                    } else {
-                        $this->writeLog("[PATCH] Failed at {$endpoint['url']} - " . $api->getLastError());
-                    }
+                if ($result !== false) {
+                    $this->writeLog("[PATCH] Success at {$endpoint['url']}");
+                    $patchHappened = true;
                 } else {
-                    $this->writeLog("[PATCH] Failed at {$endpoint['url']} - no radius_config record behind this endpoint");
+                    $this->writeLog("[PATCH] Failed at {$endpoint['url']}");
                 }
             } else {
                 $this->writeLog("[PATCH] User already in group '$targetGroup' — no patch needed");
@@ -1195,7 +955,14 @@ class ManualRadiusOperationsService
         }
 
         // Update database (local status) regardless — the queue handles RADIUS retry.
-        $this->updateDatabaseStatus($accountNo, $username, $dbStatus, $updatedBy);
+        // Unless the caller owns the billing status (NULL), in which case writing one here would
+        // overwrite a status that was just committed deliberately — e.g. stripping VIP (id 7)
+        // back to Active on a VIP reconnect.
+        if ($dbStatus !== null) {
+            $this->updateDatabaseStatus($accountNo, $username, $dbStatus, $updatedBy);
+        } else {
+            $this->writeLog("[DB] Billing status left untouched — owned by caller");
+        }
 
         return $radiusApplied;
     }
@@ -1261,89 +1028,78 @@ class ManualRadiusOperationsService
      */
     private function killUserSession(array $radiusEndpoints, string $username, bool $useFailover = true): void
     {
-        $api = app(RouterosApiService::class);
-        $killedAnywhere = 0;
+        $sessPath = "/rest/user-manage/session?user=" . urlencode($username);
+        $sessions = null;
+        $activeEndpoint = null;
 
+        // Find active sessions
         foreach ($radiusEndpoints as $endpoint) {
-            $config = $this->configFor($endpoint);
+            $fullUrl = $endpoint['url'] . $sessPath;
+            $result = $this->callApiWithRetry(
+                $fullUrl,
+                'GET',
+                null,
+                $endpoint['username'],
+                $endpoint['password']
+            );
 
-            if (!$config) {
-                continue;
+            if ($result && is_array($result)) {
+                $sessions = $result;
+                $activeEndpoint = $endpoint;
+                $this->writeLog("[SESSION] Found " . count($sessions) . " active session(s) on {$endpoint['url']}");
+                break;
             }
+        }
 
-            try {
-                $killed = $api->killSessionsForUser($config, $username);
-            } catch (Throwable $e) {
-                $this->writeLog("[SESSION] Error cutting sessions on {$endpoint['url']}: " . $e->getMessage());
-                continue;
-            }
+        if (!$sessions || empty($sessions)) {
+            $this->writeLog("[SESSION] No active session found");
+            return;
+        }
 
-            if ($killed > 0) {
-                $killedAnywhere += $killed;
-                $this->writeLog("[KILL] Terminated {$killed} session(s) for '$username' on {$endpoint['url']}");
-
-                // FAILOVER LOGIC: the account lives on exactly one server, so stop at the
-                // one that had the live session instead of hitting the rest.
-                if ($useFailover) {
-                    return;
+        // Kill sessions - FAILOVER LOGIC: only kill on the server where we found the session
+        foreach ($sessions as $session) {
+            if (isset($session['.id'])) {
+                $sessionId = $session['.id'];
+                
+                if ($useFailover && $activeEndpoint) {
+                    // Only kill on the active endpoint
+                    $delUrl = $activeEndpoint['url'] . "/rest/user-manage/session/" . $sessionId;
+                    $result = $this->callApiWithRetry(
+                        $delUrl,
+                        'DELETE',
+                        null,
+                        $activeEndpoint['username'],
+                        $activeEndpoint['password']
+                    );
+                    if ($result !== false) {
+                        $this->writeLog("[KILL] Terminated session ID $sessionId on {$activeEndpoint['url']}");
+                    }
+                } else {
+                    // Legacy: Kill on all endpoints
+                    foreach ($radiusEndpoints as $endpoint) {
+                        $delUrl = $endpoint['url'] . "/rest/user-manage/session/" . $sessionId;
+                        $this->callApiWithRetry(
+                            $delUrl,
+                            'DELETE',
+                            null,
+                            $endpoint['username'],
+                            $endpoint['password']
+                        );
+                        $this->writeLog("[KILL] Terminated session ID $sessionId on {$endpoint['url']}");
+                    }
                 }
             }
         }
-
-        if ($killedAnywhere === 0) {
-            $this->writeLog("[SESSION] No active session found");
-        }
     }
 
     /**
-     * Can any configured RADIUS server actually be worked with right now?
-     *
-     * AutoDisconnectService has always called this to decide whether to apply a
-     * restriction immediately or defer it to the retry queue — but the method did not
-     * exist. PHP raised `Error: Call to undefined method`, which implements Throwable and
-     * so was swallowed by that caller's `catch (Throwable)`, and the probe therefore
-     * answered "unreachable" on every single run. Nothing was ever restricted at the
-     * decision point; every disconnection silently took the queued path and logged
-     * "RADIUS server unreachable during auto-disconnect" even while RADIUS was healthy.
-     *
-     * "Reachable" deliberately means a completed API login, not an open socket. The
-     * RouterOS API port accepts a TCP connection and then answers nothing a non-API
-     * client can use, so a socket test reports success against a device that cannot be
-     * worked with — the exact false signal that made this fault so hard to see.
-     *
-     * Goes through the shared connection layer like every other RADIUS call, so it picks
-     * up the saved-then-alternate transport order and the circuit breaker: a server
-     * already known to be down costs no socket and no timeout here either, and the
-     * connection this opens is pooled for the operation that follows it.
-     */
-    public function isRadiusReachable(): bool
-    {
-        $api = app(RouterosApiService::class);
-
-        foreach (RadiusConfig::orderBy('id')->get() as $config) {
-            if ($api->ping($config)) {
-                return true;
-            }
-
-            $this->writeLog("[REACHABILITY] {$config->ip} did not answer: " . $api->getLastError());
-        }
-
-        return false;
-    }
-
-    /**
-     * Get RADIUS endpoint configurations.
-     *
-     * Each entry carries the RadiusConfig record the native RouterOS API client operates
-     * on, alongside the `url`/`username`/`password` keys the existing log lines and the
-     * public updateRadiusCredentials() signature still read. `url` is now a human label
-     * for the device, not a REST base URL — nothing appends a path to it any more.
-     *
-     * @return array<int, array{config: RadiusConfig, url: string, username: string, password: string}>
+     * Get RADIUS endpoint configurations
      */
     private function getRadiusEndpoints(): array
     {
-        $radiusConfigs = RadiusConfig::orderBy('id')->get();
+        $radiusConfigs = DB::table('radius_config')
+            ->orderBy('id')
+            ->get();
 
         if ($radiusConfigs->isEmpty()) {
             throw new Exception("No RADIUS configurations found");
@@ -1352,8 +1108,7 @@ class ManualRadiusOperationsService
         $endpoints = [];
         foreach ($radiusConfigs as $config) {
             $endpoints[] = [
-                'config'   => $config,
-                'url'      => "{$config->ip} (Config #{$config->id})",
+                'url' => "{$config->ssl_type}://{$config->ip}:{$config->port}",
                 'username' => $config->username,
                 'password' => $config->password
             ];
@@ -1363,31 +1118,134 @@ class ManualRadiusOperationsService
     }
 
     /**
-     * The RadiusConfig behind an endpoint entry.
+     * Lightweight connectivity + authentication probe against the configured RADIUS servers.
      *
-     * updateRadiusCredentials() is public and may still be handed endpoint arrays built
-     * elsewhere, so an entry without a `config` key is resolved back to its record by IP
-     * rather than failing the operation.
+     * Returns true as soon as ANY configured server answers an authenticated request
+     * (this mirrors the failover used by the disconnect/restrict operations, which try
+     * every server). Returns false when no server can be reached for a connection-related
+     * reason — connection timeout, network error, or authentication failure (HTTP 401/403) —
+     * so callers can queue the operation for later retry instead of aborting.
+     *
+     * Any HTTP response that is not an auth failure (including a 404 for the throwaway probe
+     * username) proves the server is up and the credentials are valid, so it counts as reachable.
      */
-    private function configFor(array $endpoint): ?RadiusConfig
+    public function isRadiusReachable(): bool
     {
-        if (isset($endpoint['config']) && $endpoint['config'] instanceof RadiusConfig) {
-            return $endpoint['config'];
+        try {
+            $radiusEndpoints = $this->getRadiusEndpoints();
+        } catch (Throwable $e) {
+            $this->writeLog("[PING] Unable to load RADIUS endpoints: " . $e->getMessage());
+            return false;
         }
 
-        $host = $endpoint['ip'] ?? null;
+        // Harmless read-only lookup of a username that will never exist; a live server
+        // returns 404/empty, an unreachable one throws, and bad credentials return 401/403.
+        $probePath = "/rest/user-manage/user/__gowiser_healthcheck__";
 
-        if ($host === null && isset($endpoint['url'])) {
-            // Tolerates both the old "https://host:port" shape and the current label.
-            $host = parse_url((string) $endpoint['url'], PHP_URL_HOST)
-                ?: trim(explode(' ', (string) $endpoint['url'])[0]);
+        foreach ($radiusEndpoints as $index => $endpoint) {
+            // Try the configured protocol first, then the alternate (same strategy as callApiWithRetry).
+            $urlsToTry = [$endpoint['url']];
+            if (str_starts_with($endpoint['url'], 'https://')) {
+                $urlsToTry[] = str_replace('https://', 'http://', $endpoint['url']);
+            } elseif (str_starts_with($endpoint['url'], 'http://')) {
+                $urlsToTry[] = str_replace('http://', 'https://', $endpoint['url']);
+            }
+
+            foreach ($urlsToTry as $baseUrl) {
+                try {
+                    $response = Http::withBasicAuth($endpoint['username'], $endpoint['password'])
+                        ->connectTimeout(2)
+                        ->timeout(4)
+                        ->withOptions(['verify' => false])
+                        ->get($baseUrl . $probePath);
+
+                    $status = $response->status();
+
+                    // Rejected credentials => treat as NOT reachable so the operation is queued.
+                    if ($status === 401 || $status === 403) {
+                        $this->writeLog("[PING] Authentication failure (HTTP {$status}) at {$baseUrl}");
+                        continue;
+                    }
+
+                    $this->writeLog("[PING] RADIUS reachable at {$baseUrl} (HTTP {$status})");
+                    return true;
+                } catch (Throwable $e) {
+                    $this->writeLog("[PING] Connection error at {$baseUrl}: " . $e->getMessage());
+                }
+            }
         }
 
-        if (empty($host)) {
-            return null;
+        $this->writeLog("[PING] No RADIUS server reachable on any configured endpoint/protocol.");
+        return false;
+    }
+
+    /**
+     * Call API with retry logic
+     * Tries both HTTPS and HTTP protocols per URL (same strategy as RadiusStatusSyncService)
+     */
+    private function callApiWithRetry(
+        string $url,
+        string $method,
+        ?array $payload,
+        string $username,
+        string $password,
+        int $retries = 1
+    ) {
+        // Build list of URLs to try: configured protocol first, then alternate
+        // This mirrors RadiusStatusSyncService which tries both protocols per config
+        $urlsToTry = [$url];
+        if (str_starts_with($url, 'https://')) {
+            $urlsToTry[] = str_replace('https://', 'http://', $url);
+        } elseif (str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
+            $urlsToTry[] = str_replace('http://', 'https://', $url);
         }
 
-        return RadiusConfig::where('ip', $host)->orderBy('id')->first();
+        foreach ($urlsToTry as $tryUrl) {
+            for ($attempt = 1; $attempt <= $retries; $attempt++) {
+                try {
+                    $this->writeLog("[API] Attempt $attempt/$retries: $method $tryUrl");
+
+                    $response = Http::withBasicAuth($username, $password)
+                        ->connectTimeout(2)
+                        ->timeout(4)
+                        ->withOptions(['verify' => false]);
+
+                    switch (strtoupper($method)) {
+                        case 'GET':
+                            $response = $response->get($tryUrl);
+                            break;
+                        case 'POST':
+                            $response = $response->post($tryUrl, $payload);
+                            break;
+                        case 'PATCH':
+                            $response = $response->patch($tryUrl, $payload);
+                            break;
+                        case 'DELETE':
+                            $response = $response->delete($tryUrl);
+                            break;
+                        default:
+                            return false;
+                    }
+
+                    if ($response->successful()) {
+                        $data = $response->json();
+                        return $data;
+                    } else {
+                        $this->writeLog("[API] HTTP Error {$response->status()}: " . $response->body());
+                    }
+
+                } catch (Exception $e) {
+                    $this->writeLog("[API] Exception on attempt $attempt: " . $e->getMessage());
+
+                    if ($attempt < $retries) {
+                        sleep(1);
+                    }
+                }
+            }
+        }
+
+        $this->writeLog("[API] Request failed after trying all protocols and attempts.");
+        return false;
     }
 
     /**
@@ -1395,13 +1253,6 @@ class ManualRadiusOperationsService
      */
     private function writeLog(string $message): void
     {
-        // Errors and run summaries only - see App\Support\CronLog. This is a raw
-        // file write, so LOG_LEVEL never reached it and the narration accumulated
-        // no matter how the channels were configured.
-        if (!CronLog::shouldWrite($message)) {
-            return;
-        }
-
         $timestamp = now()->format('Y-m-d H:i:s');
         $logMessage = "[{$timestamp}] [{$this->logName}] {$message}";
         
@@ -1417,12 +1268,7 @@ class ManualRadiusOperationsService
         }
         
         // Also log to Laravel default log
-        // Only faults are mirrored, and as ->error(). Every line used to be
-        // duplicated into laravel.log at info level, which doubled the volume
-        // and misreported the severity of all of it.
-        if (CronLog::isError($message)) {
-            Log::channel('single')->error("[{$this->logName}] {$message}");
-        }
+        Log::channel('single')->info("[{$this->logName}] {$message}");
     }
 
     /**
@@ -1441,26 +1287,27 @@ class ManualRadiusOperationsService
             // Get RADIUS configurations
             $radiusEndpoints = $this->getRadiusEndpoints();
             
-            $api = app(RouterosApiService::class);
-
             $deleteCount = 0;
             foreach ($radiusEndpoints as $endpoint) {
-                $config = $this->configFor($endpoint);
+                // Construct path using username directly as requested
+                $targetPath = "/rest/user-manage/user/" . urlencode($username);
+                $targetUrl = $endpoint['url'] . $targetPath;
+                
+                $this->writeLog("[DELETE] Calling endpoint: $targetUrl");
 
-                if (!$config) {
-                    $this->writeLog("[DELETE] No radius_config record behind {$endpoint['url']} — skipping");
-                    continue;
-                }
-
-                $this->writeLog("[DELETE] Calling endpoint: {$endpoint['url']}");
-
-                // removeUser() is idempotent: an account already absent from this server is
-                // reported as success, so re-running a delete never fails on a clean device.
-                if ($api->removeUser($config, $username)) {
+                $delResult = $this->callApiWithRetry(
+                    $targetUrl,
+                    'DELETE',
+                    null, // No payload for delete request
+                    $endpoint['username'],
+                    $endpoint['password']
+                );
+                
+                if ($delResult !== false) {
                     $this->writeLog("[DELETE] Successfully deleted user '$username' from {$endpoint['url']}");
                     $deleteCount++;
                 } else {
-                    $this->writeLog("[DELETE] Failed to delete user '$username' from {$endpoint['url']} - " . $api->getLastError());
+                    $this->writeLog("[DELETE] Failed to delete user '$username' from {$endpoint['url']} (or user already deleted)");
                 }
             }
 

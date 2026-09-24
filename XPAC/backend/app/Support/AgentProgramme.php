@@ -4,6 +4,7 @@ namespace App\Support;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
@@ -41,6 +42,35 @@ class AgentProgramme
             Log::warning('[Agent] Ignoring an unreadable agent.start_date: ' . $e->getMessage());
             return null;
         }
+    }
+
+    /** @var bool|null  cached answer for hasPreInstallColumns() */
+    private static ?bool $preInstallColumns = null;
+
+    /**
+     * Does job_orders carry the pre-installation columns?
+     *
+     * GOWISER: the upstream agent module also counts a referral whose job order
+     * is marked pre-installed (`job_orders.pre_installed`, `pre_remarks`, ...).
+     * GOWISER has no pre-install workflow and does not add those columns, so
+     * every query that reads them asks here first and simply skips that branch
+     * when they are absent. Should the columns ever be added, the pre-install
+     * rules switch on by themselves with no code change.
+     *
+     * Cached per process; a failure to inspect the schema reads as "absent",
+     * which is the behaviour GOWISER has always had.
+     */
+    public static function hasPreInstallColumns(): bool
+    {
+        if (self::$preInstallColumns === null) {
+            try {
+                self::$preInstallColumns = Schema::hasColumn('job_orders', 'pre_installed');
+            } catch (Throwable $e) {
+                self::$preInstallColumns = false;
+            }
+        }
+
+        return self::$preInstallColumns;
     }
 
     /**

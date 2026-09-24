@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import apiClient from '../config/api';
 import { planService } from '../services/planService';
+import { VIP_OPTIONS, VAT_TYPE_OPTIONS, GENERATION_TYPE_OPTIONS } from '../utils/billingFilterOptions';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -62,7 +63,8 @@ export const allColumns: Column[] = [
   { key: 'visitWithOther', label: 'Visit With(Other)', dataType: 'varchar' },
   { key: 'onsiteStatus', label: 'Onsite Status', dataType: 'checklist' },
   { key: 'onsiteRemarks', label: 'Onsite Remarks', dataType: 'varchar' },
-  { key: 'updatedAt', label: 'Modified Date', dataType: 'datetime' },
+  { key: 'modifiedDate', label: 'Modified Date', dataType: 'datetime' },
+  { key: 'updatedAt', label: 'Updated At', dataType: 'datetime' },
   { key: 'modifiedBy', label: 'Modified By', dataType: 'varchar' },
   { key: 'connectionType', label: 'Connection Type', dataType: 'varchar' },
   { key: 'assignedEmail', label: 'Assigned Email', dataType: 'varchar' },
@@ -82,6 +84,42 @@ export const allColumns: Column[] = [
   { key: 'fullName', label: 'Full Name of Client', dataType: 'varchar' },
   { key: 'address', label: 'Full Address of Client', dataType: 'varchar' },
   { key: 'computedTime', label: '_Computed Time', dataType: 'datetime' },
+  { key: 'vip', label: 'VIP', dataType: 'checklist' },
+  { key: 'vatType', label: 'VAT Type', dataType: 'checklist' },
+  { key: 'generationType', label: 'Generation Type', dataType: 'checklist' },
+  // Read from the job order's billing account; only meaningful for Prepaid job orders, and
+  // JobOrder.tsx excludes non-prepaid ones while this filter is active.
+  { key: 'prepaidExpiration', label: 'Prepaid Expiration', dataType: 'date' },
+
+  // The remaining columns the Job Order table can show. JobOrder.tsx resolves each of these in
+  // getVal(), so a filter matches exactly what the cell displays.
+  //
+  // The table's 'Expiration Date' column is deliberately NOT repeated: it is the prepaid expiry,
+  // already filterable as 'Prepaid Expiration' above — which carries the prepaid-only guard a
+  // plain date entry would lose.
+  { key: 'timestamp', label: 'Timestamp', dataType: 'datetime' },
+  { key: 'installationFee', label: 'Installation Fee', dataType: 'decimal' },
+  { key: 'groupName', label: 'Group Name', dataType: 'varchar' },
+  { key: 'location', label: 'Location', dataType: 'varchar' },
+  { key: 'secondContactNumber', label: 'Second Contact Number', dataType: 'varchar' },
+  { key: 'pppoeUsername', label: 'PPPoE Username', dataType: 'varchar' },
+  { key: 'pppoePassword', label: 'PPPoE Password', dataType: 'varchar' },
+  { key: 'contractLink', label: 'Contract Link', dataType: 'varchar' },
+  { key: 'startTimestamp', label: 'Start Timestamp', dataType: 'datetime' },
+  { key: 'endTimestamp', label: 'End Timestamp', dataType: 'datetime' },
+  { key: 'duration', label: 'Duration', dataType: 'varchar' },
+  { key: 'createdAt', label: 'Created At', dataType: 'datetime' },
+  { key: 'createdByUserEmail', label: 'Created By User Email', dataType: 'varchar' },
+  { key: 'updatedByUserEmail', label: 'Updated By User Email', dataType: 'varchar' },
+  // Attachment columns. A text filter here answers the question the table is actually asked —
+  // "which job orders have this evidence attached at all" — since an empty value never matches.
+  { key: 'clientSignatureUrl', label: 'Client Signature URL', dataType: 'varchar' },
+  { key: 'setupImageUrl', label: 'Setup Image URL', dataType: 'varchar' },
+  { key: 'speedtestImageUrl', label: 'Speedtest Image URL', dataType: 'varchar' },
+  { key: 'signedContractImageUrl', label: 'Signed Contract Image URL', dataType: 'varchar' },
+  { key: 'boxReadingImageUrl', label: 'Box Reading Image URL', dataType: 'varchar' },
+  { key: 'routerReadingImageUrl', label: 'Router Reading Image URL', dataType: 'varchar' },
+  { key: 'portLabelImageUrl', label: 'Port Label Image URL', dataType: 'varchar' },
 ];
 
 const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
@@ -368,6 +406,12 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
         ];
       } else if (selectedColumn.key === 'lcpnapport') {
         options = [];
+      } else if (selectedColumn.key === 'vip') {
+        options = VIP_OPTIONS;
+      } else if (selectedColumn.key === 'vatType') {
+        options = VAT_TYPE_OPTIONS;
+      } else if (selectedColumn.key === 'generationType') {
+        options = GENERATION_TYPE_OPTIONS;
       }
 
       const filteredOptions = options.filter(opt =>

@@ -5,8 +5,8 @@
     "appManager.array.apps": [
         {
             "id": "1000001",
-            "key": "8ctWR5PdV1dgM5h6RTGioI8k1hPbl8ImM3P6K3cne5v",
-            "secret": "KsCIAKjsPEWMDj2vWCWs7qYwkXZBUugVfcRjZyPRhJo",
+            "key": "8a84OUseLCGQAtaEeANi04muzz1HYsjfaYsz3d6KMAK",
+            "secret": "szxUAz9MQ5hTRAIC7MJfI4PfoghnK5LmQE9hoyuLIFt",
             "maxConnections": -1,
             "enableClientMessages": true,
             "enabled": true,
@@ -16,8 +16,16 @@
         }
     ],
     "cors.credentials": true,
-    "cors.origin": ["*"],
-    "cors.methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "cors.origin": [
+        "*"
+    ],
+    "cors.methods": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+        "OPTIONS"
+    ],
     "cors.allowedHeaders": [
         "Origin",
         "Content-Type",

@@ -550,41 +550,29 @@ class MonitorController extends Controller
                 ]);
             }
 
-            // 8) EXPENSES (your real table is expenses_log; category_id exists)
+            // 8) EXPENSES — table is `expenses_logs` (plural) and the date column is
+            // `date`. This block previously read `expenses_log`.`expense_date`, neither
+            // of which exists, so the action always errored. category_id is real as of
+            // the Expenses module migration.
             if ($action === 'expenses_mon') {
-                // Read straight off expenses_logs. Three things were wrong here
-                // and each of them was a 500 on its own, which is why this
-                // widget has never returned anything:
-                //
-                //   • the table is `expenses_logs`, not `expenses_log` — see
-                //     the migration and ExpensesLogController, which both use
-                //     the plural;
-                //   • there is no `category_id`. The category is a plain string
-                //     column on the row (`category`), so there is nothing to
-                //     join expenses_category on — the join is dropped rather
-                //     than repointed;
-                //   • the date column is `date`, not `expense_date`.
-                //
-                // Nothing caught it because the web never asks for this widget:
-                // `expenses_mon` exists only in the mobile client's catalog.
                 $qb = DB::table('expenses_logs');
                 $applyOrg($qb, 'expenses_logs');
-                $qb->select(
-                    DB::raw("COALESCE(NULLIF(TRIM(expenses_logs.category), ''), 'Unknown') as label"),
-                    DB::raw("SUM(COALESCE(expenses_logs.amount,0)) as value")
-                );
+                $qb->leftJoin('expenses_category', 'expenses_logs.category_id', '=', 'expenses_category.id')
+                    ->select(
+                        // Rows predating categories carry only the free-text `category`
+                        // string; without that middle fallback they would all collapse
+                        // into a single "Unknown" slice.
+                        DB::raw("COALESCE(expenses_category.category_name, NULLIF(expenses_logs.category, ''), 'Unknown') as label"),
+                        DB::raw("SUM(COALESCE(expenses_logs.amount,0)) as value")
+                    );
+
+                // Raw query builder, so the model's SoftDeletes scope does not apply here.
+                $qb->whereNull('expenses_logs.deleted_at');
 
                 $applyScope($qb, 'expenses_logs.date');
-                // Grouped on the select alias so a blank category and a NULL one
-                // fall into one "Unknown" bucket rather than two.
-                //
-                // The alias rather than the expression repeated: this server runs
-                // with ONLY_FULL_GROUP_BY, and MySQL does not recognise a
-                // repeated COALESCE/NULLIF as matching the one in the SELECT —
-                // it rejects the query with 1055 "'category' isn't in GROUP BY".
-                // Grouping by the alias is a MySQL extension, which is safe here:
-                // this application is MySQL-only.
-                $qb->groupBy(DB::raw('label'))
+                // Grouped by the alias, not by category_name: the label expression reads
+                // expenses_logs.category too, which ONLY_FULL_GROUP_BY would otherwise reject.
+                $qb->groupBy('label')
                     ->orderByDesc('value');
 
                 return response()->json(['status' => 'success', 'data' => $qb->get(), 'barangays' => $response['barangays']]);
@@ -662,7 +650,13 @@ class MonitorController extends Controller
                 $ranked = $ranked->map(function ($row) {
                     $row->label = \App\Support\AgentReferral::displayName($row->label);
                     return $row;
-                });
+                })
+                    // An agent referred both by id (picker) and by their typed
+                    // name would otherwise appear as two bars with one label.
+                    ->groupBy('label')
+                    ->map(fn ($rows, $label) => (object) ['label' => $label, 'value' => (int) $rows->sum('value')])
+                    ->sortByDesc('value')
+                    ->values();
 
                 return response()->json(['status' => 'success', 'data' => $ranked, 'barangays' => $response['barangays']]);
             }
@@ -847,6 +841,50 @@ class MonitorController extends Controller
                         }
                     }
 
+                    // 2b. Daily JO/SO counts for the widget.
+                    //
+                    // Counted on OVERLAP with the view window: a task that began yesterday and was
+                    // finished today belongs to today, so start_time alone is not enough to place
+                    // it. Re-filtered against the window rather than just counting $allTasks,
+                    // because the queries above deliberately pull in ANY task with a NULL end_time
+                    // regardless of date (the timeline needs those to spot work in progress) — so
+                    // counting $allTasks directly would let an abandoned task from weeks ago
+                    // inflate today's figure. Tasks with no start_time are excluded: they are
+                    // assigned but never begun, so nothing was done.
+                    $completedTaskStatuses = ['done', 'completed', 'resolved'];
+                    $tasksInWindow = $allTasks->filter(function ($t) use ($viewStart, $timeBound, $completedTaskStatuses) {
+                        if (empty($t->start_time)) {
+                            return false;
+                        }
+                        try {
+                            $taskStart = \Carbon\Carbon::parse($t->start_time, 'Asia/Manila');
+                            $isCompleted = in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
+                            $taskEnd = $t->end_time
+                                ? \Carbon\Carbon::parse($t->end_time, 'Asia/Manila')
+                                : ($isCompleted ? $taskStart->copy() : $timeBound->copy());
+                        } catch (\Throwable $ex) {
+                            return false;
+                        }
+                        return $taskStart->lte($timeBound) && $taskEnd->gte($viewStart);
+                    });
+
+                    // Finished work only. A task the technician is still on is genuine work in
+                    // progress and the timeline below still bills its time, but it is not
+                    // something they completed, and the board reads these badges as a completed
+                    // tally. So an in-progress task deliberately shows working time against
+                    // "JO: 0" — that mismatch is the intended reading, not a bug to reconcile.
+                    //
+                    // JO carries the outcome on onsite_status and SO on visit_status, both aliased
+                    // to `status` by the queries above. 'resolved' and 'completed' are accepted
+                    // next to 'done' so a status written in either vocabulary still counts.
+                    // 'failed' never reaches here — $allTasks drops it.
+                    $completedInWindow = $tasksInWindow->filter(function ($t) use ($completedTaskStatuses) {
+                        return in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
+                    });
+
+                    $joCount = $completedInWindow->where('task_type', 'jo')->count();
+                    $soCount = $completedInWindow->where('task_type', 'so')->count();
+
                     // Define effective start for availability (either view start or time_in)
                     $effectiveStart = $viewStart->copy();
                     if (!empty($tech->time_in)) {
@@ -916,7 +954,10 @@ class MonitorController extends Controller
                     $availableTimeStr = "{$aHours}h {$aMins}m";
 
                     // 3. Status Logic
-                    $workingTask = $allTasks->filter(function($t) { return !empty($t->start_time) && empty($t->end_time); })->last();
+                    $workingTask = $allTasks->filter(function($t) use ($completedTaskStatuses) {
+                        $isCompleted = in_array(strtolower(trim($t->status ?? '')), $completedTaskStatuses, true);
+                        return !empty($t->start_time) && empty($t->end_time) && !$isCompleted;
+                    })->last();
                     $isPullout = false;
                     if ($workingTask) {
                         $status = 'Working';
@@ -996,6 +1037,9 @@ class MonitorController extends Controller
                             'primary_time_str' => $primaryTimeDisp,
                             'total_working_str' => $workingTimeStr,
                             'total_available_str' => $availableTimeStr,
+                            // Tasks worked on within the view window (see 1b above).
+                            'jo_count' => $joCount,
+                            'so_count' => $soCount,
                             'is_pullout' => $isPullout,
                             'time_in' => $tech->time_in,
                             'time_out' => $tech->time_out,
@@ -1038,7 +1082,13 @@ class MonitorController extends Controller
                     ->whereNotNull('job_orders.assigned_email')
                     ->where('job_orders.assigned_email', '!=', '');
 
-                $jobs = $applyScope($jobs, 'job_orders.timestamp');
+                // Scoped on updated_at, not on timestamp. `timestamp` is when the job order was
+                // RAISED; a JO raised last month and worked on today would fall outside a
+                // 'today' scope and never reach the board, while one raised today and untouched
+                // since would sit on it all day. This queue reports on ACTIVITY, so the window
+                // has to be the last time the row actually moved — the same column the tech
+                // performance widgets above already scope on.
+                $jobs = $applyScope($jobs, 'job_orders.updated_at');
 
                 // 2) Service Orders
                 $services = DB::table('service_orders')
@@ -1066,7 +1116,9 @@ class MonitorController extends Controller
                     ->whereNotNull('service_orders.assigned_email')
                     ->where('service_orders.assigned_email', '!=', '');
 
-                $services = $applyScope($services, 'service_orders.timestamp');
+                // updated_at for the same reason as the job orders above — an SO raised days
+                // ago and visited today belongs on today's board.
+                $services = $applyScope($services, 'service_orders.updated_at');
 
                 $all = $jobs->union($services)->get();
 

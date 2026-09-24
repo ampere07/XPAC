@@ -10,11 +10,14 @@ class DashboardController extends Controller
 {
     public function stats(Request $request)
     {
-        // Authentication is the auth.token middleware's job now — see
-        // routes/api.php. The hand-rolled copy that used to sit here read the
-        // cache under the raw token, which no longer matches how a token is
-        // stored, and duplicating the check is what let every other endpoint
-        // in this API be written without one.
+        $token = $request->bearerToken();
+        
+        if (!$this->validateToken($token)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
 
         $totalApplications = Application::count();
         $pendingApplications = Application::where('status', 'pending')->count();
@@ -31,11 +34,14 @@ class DashboardController extends Controller
 
     public function recentApplications(Request $request)
     {
-        // Authentication is the auth.token middleware's job now — see
-        // routes/api.php. The hand-rolled copy that used to sit here read the
-        // cache under the raw token, which no longer matches how a token is
-        // stored, and duplicating the check is what let every other endpoint
-        // in this API be written without one.
+        $token = $request->bearerToken();
+        
+        if (!$this->validateToken($token)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
 
         $limit = $request->get('limit', 10);
 
@@ -64,5 +70,15 @@ class DashboardController extends Controller
         ]);
     }
 
+    private function validateToken($token)
+    {
+        if (!$token) {
+            return false;
+        }
+
+        $userData = Cache::get('auth_token_' . $token);
+
+        return $userData !== null;
+    }
 }
 

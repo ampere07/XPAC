@@ -16,7 +16,6 @@ import {
 } from 'lucide-react-native';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { relatedDataService } from '../services/relatedDataService';
-import { relatedDataColumns } from '../config/relatedDataColumns';
 
 interface PaymentPortalDetailsProps {
   record: {
@@ -94,12 +93,6 @@ const DetailRow: React.FC<DetailRowProps> = ({ label, value, valueColor, action 
   </View>
 );
 
-const INVOICE_PAGE_SIZE = 5;
-
-/** Same clamp the customer screen uses, so the two tables line up visually. */
-const columnWidth = (column: { label: string }) =>
-  Math.max(120, Math.min(260, column.label.length * 9 + 32));
-
 const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({
   record,
   onClose,
@@ -112,14 +105,6 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({
   const [relatedInvoices, setRelatedInvoices] = useState<any[]>([]);
   const [invoicesCount, setInvoicesCount] = useState(0);
   const [invoicesLoading, setInvoicesLoading] = useState(false);
-  const [invoicePage, setInvoicePage] = useState(1);
-
-  // The same column set the web build renders through RelatedDataTable, so the
-  // two screens describe an invoice with the same fields in the same order.
-  const invoiceColumns = relatedDataColumns.invoices || [];
-  const totalInvoicePages = Math.max(1, Math.ceil(relatedInvoices.length / INVOICE_PAGE_SIZE));
-  const pageStart = (Math.min(invoicePage, totalInvoicePages) - 1) * INVOICE_PAGE_SIZE;
-  const pagedInvoices = relatedInvoices.slice(pageStart, pageStart + INVOICE_PAGE_SIZE);
 
   useEffect(() => {
     const loadPalette = async () => {
@@ -138,12 +123,8 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({
       setInvoicesLoading(true);
       try {
         const result = await relatedDataService.getRelatedInvoices(String(accountNo));
-        // Hold every row: the badge counts them all, and the pager below reaches
-        // them a page at a time. Slicing to 5 here is what made the count a lie.
-        const rows = result.data || [];
-        setRelatedInvoices(rows);
-        setInvoicesCount(result.count || rows.length);
-        setInvoicePage(1);
+        setRelatedInvoices((result.data || []).slice(0, 5));
+        setInvoicesCount(result.count || 0);
       } catch {
         setRelatedInvoices([]);
         setInvoicesCount(0);
@@ -278,109 +259,20 @@ const PaymentPortalDetails: React.FC<PaymentPortalDetailsProps> = ({
                 ) : relatedInvoices.length === 0 ? (
                   <Text style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, paddingVertical: 12 }}>No invoices found</Text>
                 ) : (
-                  <>
-                    <ScrollView horizontal showsHorizontalScrollIndicator>
-                      <View>
-                        <View style={{ flexDirection: 'row', backgroundColor: '#f3f4f6' }}>
-                          {invoiceColumns.map((column, index) => (
-                            <View
-                              key={column.key}
-                              style={{
-                                width: columnWidth(column),
-                                paddingHorizontal: 10,
-                                paddingVertical: 8,
-                                borderRightWidth: index < invoiceColumns.length - 1 ? 1 : 0,
-                                borderRightColor: '#e5e7eb',
-                              }}
-                            >
-                              <Text style={{ fontSize: 11, fontWeight: '700', color: '#374151' }} numberOfLines={1}>
-                                {column.label}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-
-                        {pagedInvoices.map((inv, rowIndex) => (
-                          <View
-                            key={rowIndex}
-                            style={{
-                              flexDirection: 'row',
-                              borderTopWidth: 1,
-                              borderTopColor: '#f3f4f6',
-                            }}
-                          >
-                            {invoiceColumns.map((column, index) => {
-                              const raw = inv?.[column.key];
-                              const rendered = column.render ? column.render(raw, inv) : raw;
-                              const text =
-                                rendered === null || rendered === undefined || rendered === ''
-                                  ? '-'
-                                  : String(rendered);
-                              return (
-                                <View
-                                  key={column.key}
-                                  style={{
-                                    width: columnWidth(column),
-                                    paddingHorizontal: 10,
-                                    paddingVertical: 8,
-                                    borderRightWidth: index < invoiceColumns.length - 1 ? 1 : 0,
-                                    borderRightColor: '#f3f4f6',
-                                  }}
-                                >
-                                  <Text style={{ fontSize: 12, color: '#111827' }} numberOfLines={2}>{text}</Text>
-                                </View>
-                              );
-                            })}
-                          </View>
-                        ))}
-                      </View>
-                    </ScrollView>
-
-                    {/* Pager row — the 6th row, same shape as the customer screen */}
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        paddingTop: 10,
-                        marginTop: 8,
-                        borderTopWidth: 1,
-                        borderTopColor: '#e5e7eb',
-                      }}
-                    >
-                      <Text style={{ fontSize: 12, color: '#6b7280' }}>
-                        {pageStart + 1}–{Math.min(pageStart + INVOICE_PAGE_SIZE, relatedInvoices.length)} of {relatedInvoices.length}
+                  relatedInvoices.map((inv, i) => (
+                    <View key={i} style={{
+                      flexDirection: 'row', justifyContent: 'space-between',
+                      paddingVertical: 8, borderBottomWidth: i < relatedInvoices.length - 1 ? 1 : 0,
+                      borderBottomColor: '#f3f4f6',
+                    }}>
+                      <Text style={{ fontSize: 13, color: '#6b7280', flex: 1 }}>
+                        {inv.invoice_no || inv.id || `Invoice ${i + 1}`}
                       </Text>
-                      <View style={{ flexDirection: 'row', gap: 8 }}>
-                        <TouchableOpacity
-                          onPress={() => setInvoicePage(p => Math.max(1, p - 1))}
-                          disabled={invoicePage <= 1}
-                          style={{
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderColor: invoicePage <= 1 ? '#e5e7eb' : '#d1d5db',
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: invoicePage <= 1 ? '#9ca3af' : '#374151' }}>Prev</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => setInvoicePage(p => Math.min(totalInvoicePages, p + 1))}
-                          disabled={invoicePage >= totalInvoicePages}
-                          style={{
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderColor: invoicePage >= totalInvoicePages ? '#e5e7eb' : '#d1d5db',
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: invoicePage >= totalInvoicePages ? '#9ca3af' : '#374151' }}>Next</Text>
-                        </TouchableOpacity>
-                      </View>
+                      <Text style={{ fontSize: 13, color: '#111827', fontWeight: '500' }}>
+                        {inv.amount ? formatCurrency(Number(inv.amount)) : (inv.status || 'N/A')}
+                      </Text>
                     </View>
-                  </>
+                  ))
                 )}
               </View>
             )}

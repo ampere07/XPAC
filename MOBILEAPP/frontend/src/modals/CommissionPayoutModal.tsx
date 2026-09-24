@@ -7,6 +7,7 @@ import {
   Image,
   ActivityIndicator,
   Platform,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -248,6 +249,14 @@ const CommissionPayoutForm: React.FC<CommissionPayoutModalProps> = ({
       const response = await apiClient.post('/commissions/history', payload);
 
       if ((response.data as any).success) {
+        // The payout is recorded Pending: it moves the agent's balance only once
+        // an administrator approves it. Say so, rather than closing silently as
+        // if the money had already moved.
+        Alert.alert(
+          'Payout submitted',
+          (response.data as any).message
+            || "The payout is Pending. It updates the agent's balance once an administrator approves it."
+        );
         onSuccess();
         onClose();
       } else {

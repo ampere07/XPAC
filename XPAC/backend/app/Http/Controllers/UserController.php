@@ -5,8 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\Organization;
 use App\Models\AgentBalance;
-use App\Models\Role;
-use App\Support\Permissions;
+use App\Support\AgentAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -20,89 +19,34 @@ class UserController extends Controller
      * The relations a user listing may carry for this caller.
      *
      * `agentBalance` holds an agent's commission RATE, quota, incentive value
-     * and every earned figure they have. Reading the user list is open to
-     * holders of `job-order` / `work-order` / `application-management` (the
-     * technician and assignee pickers need it), and an AGENT holds two of
-     * those — so eager-loading the balance unconditionally handed every agent
-     * a full read of their colleagues' rates and earnings.
+     * and every earned figure they have. The user list also feeds the
+     * technician / assignee / referral pickers, so eager-loading the balance
+     * unconditionally handed every agent a full read of their colleagues'
+     * rates and earnings.
      *
-     * It is loaded only for a caller who is entitled to manage agents or users,
-     * which is exactly who the Agent Payout, Agent Management and payout modal
-     * screens are drawn for.
+     * GOWISER: loaded for administrators and the roles that may read every
+     * agent's records (App\Support\AgentAccess::canReadAll) — the people the
+     * Agent Payout, Agent Management and payout modal screens are drawn for.
      */
-    private function listRelationsFor($authUser): array
+    private function listRelationsFor($authUser, $ownRecordId = null): array
     {
         $base = ['organization', 'role', 'agent'];
 
-        $mayReadBalances = Permissions::allows($authUser, [
-            'user-management', 'agent-management', 'team-agent',
-            'agent-payout', 'bonus-history.payout',
-        ]);
+        // An agent reading their OWN account still gets their own balance.
+        $readingSelf = $authUser && $ownRecordId !== null
+            && (int) $authUser->id === (int) $ownRecordId;
+
+        $mayReadBalances = AgentAccess::canReadAll($authUser) || $readingSelf;
 
         return $mayReadBalances ? array_merge($base, ['agentBalance']) : $base;
     }
 
     /**
-     * May the caller only touch agent accounts?
-     *
-     * Agent Management renders this same controller with `agentOnly` set, and
-     * an administrator reaches it through the "agent-management" key without
-     * holding the full Users Management one. The UI offers nothing but agents
-     * there, so a request naming another role did not come from the UI —
-     * without this, an administrator could POST /api/users with role_id 7 and
-     * mint themselves a SuperAdmin.
-     */
-    private function limitedToAgents($authUser): bool
-    {
-        if ($authUser === null) {
-            return true;
-        }
-
-        if (Permissions::allows($authUser, ['user-management', 'tech-users'])) {
-            return false;
-        }
-
-        return Permissions::allows($authUser, ['agent-management', 'team-agent']);
-    }
-
-    /**
-     * Refuse a write that would create or alter an account outside the caller's
-     * remit, or null when the write is allowed.
-     *
-     * `$targetRoleId` is the role the request is asking for; `$existing` is the
-     * account being edited, if any — an agent-only caller may neither promote
-     * an agent nor edit somebody who was never one.
-     */
-    private function denyIfRoleOutOfRemit($authUser, $targetRoleId, ?User $existing = null)
-    {
-        if (!$this->limitedToAgents($authUser)) {
-            return null;
-        }
-
-        $offLimits = static fn ($roleId) => $roleId !== null && (int) $roleId !== Role::AGENT;
-
-        if ($offLimits($targetRoleId) || ($existing !== null && $offLimits($existing->role_id))) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You may only manage agent accounts.',
-            ], 403);
-        }
-
-        return null;
-    }
-
-    /**
      * Is this account an agent, for the purpose of owning an agent_balance row?
      *
-     * Three things make somebody one, and the third is why this is a method rather
-     * than the inline `role_id == 4` it replaces:
-     *
-     *   - the seeded Agent role, matched by its id;
-     *   - a per-organization role literally named "Agent", matched by name;
-     *   - a custom role built on Agent - see Role::baseRoleId(). `base_role_id` is
-     *     a newer column, so its presence is checked on the loaded row rather than
-     *     assumed: a deployment that has not run that migration simply has no
-     *     hybrids to detect, and must not error out looking for them.
+     * Either the seeded Agent role, matched by its id, or a per-organization
+     * role literally named "Agent", matched by name — the same test this
+     * controller always applied inline.
      */
     private function isAgentRole(?User $user): bool
     {
@@ -110,25 +54,13 @@ class UserController extends Controller
             return false;
         }
 
-        if ((int) ($user->role_id ?? 0) === Role::AGENT) {
+        if (AgentAccess::isAgent($user)) {
             return true;
         }
 
         $role = $user->role;
 
-        if (!$role) {
-            return false;
-        }
-
-        if (strtolower(trim((string) $role->role_name)) === 'agent') {
-            return true;
-        }
-
-        if (!array_key_exists('base_role_id', $role->getAttributes())) {
-            return false;
-        }
-
-        return $role->baseRoleId() === Role::AGENT;
+        return $role && strtolower(trim((string) $role->role_name)) === 'agent';
     }
 
     /**
@@ -161,6 +93,15 @@ class UserController extends Controller
         }
 
         if (!AgentBalance::where('agent_id', $user->id)->exists()) {
+            // A rate the form sent EMPTY (ConvertEmptyStringsToNull makes it
+            // null) starts at zero on a new row, as it always did before
+            // (`$request->commission ?? 0.00`), rather than as NULL.
+            foreach (['commission', 'quota', 'incentives_value'] as $rate) {
+                if (array_key_exists($rate, $data) && $data[$rate] === null) {
+                    unset($data[$rate]);
+                }
+            }
+
             // Only fills the keys the request did not already set.
             $data += [
                 'commission'       => 0.00,
@@ -293,15 +234,8 @@ class UserController extends Controller
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
             $roleId = $authUser ? $authUser->role_id : null;
-
-            if ($denied = $this->denyIfRoleOutOfRemit($authUser, $request->role_id)) {
-                return $denied;
-            }
-
-            // A request with no user reaches here only if the API's access
-            // control was bypassed; treat it as unprivileged rather than as a
-            // global administrator.
-            $isGlobalAdmin = $authUser && $roleId == 7 && $organizationId === null;
+            
+            $isGlobalAdmin = !$authUser || ($roleId == 7 && $organizationId === null);
 
             // Generate user ID with proper error handling
             
@@ -378,7 +312,7 @@ class UserController extends Controller
             $roleId = $authUser ? $authUser->role_id : null;
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
             
-            $user = User::with($this->listRelationsFor($authUser))->findOrFail($id);
+            $user = User::with($this->listRelationsFor($authUser, $id))->findOrFail($id);
             
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
@@ -456,10 +390,6 @@ class UserController extends Controller
             $isGlobalAdmin = ($roleId == 7 && $organizationId === null);
 
             $user = User::findOrFail($id);
-
-            if ($denied = $this->denyIfRoleOutOfRemit($authUser, $request->input('role_id'), $user)) {
-                return $denied;
-            }
 
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
@@ -556,9 +486,6 @@ class UserController extends Controller
 
             $user = User::findOrFail($id);
 
-            if ($denied = $this->denyIfRoleOutOfRemit($authUser, null, $user)) {
-                return $denied;
-            }
 
             if (!$isGlobalAdmin) {
                 if ($organizationId) {
@@ -640,4 +567,4 @@ class UserController extends Controller
             ], 500);
         }
     }
-}
+}

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\EmailQueue;
 use App\Models\EmailTemplate;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Log;
 
 class EmailQueueService
@@ -15,22 +16,78 @@ class EmailQueueService
         $this->resendService = $resendService;
     }
 
+    /**
+     * Queue one email, at most once.
+     *
+     * Scheduled notices come from scans that are expected to re-run — the daily billing cron, a
+     * manual re-run, a scan whose "already notified" marker failed to persist. Queueing is
+     * therefore idempotent for anything carrying a `time_sent`: the
+     * (account, recipient, subject, time_sent) tuple is hashed into `email_queue.dedupe_key`, which
+     * is UNIQUE, so a second insert loses at the database and the row already queued is returned
+     * instead. Two overlapping runs cannot email a customer twice.
+     *
+     * Emails queued WITHOUT a time_sent are deliberately NOT deduplicated — resending the same
+     * message by hand is a legitimate operator action. Mirrors
+     * {@see \App\Services\SmsQueueService::queueSms()}.
+     */
     public function queueEmail(array $data): EmailQueue
     {
-        $emailQueue = EmailQueue::create([
-            'account_no' => $data['account_no'] ?? null,
-            'recipient_email' => $data['recipient_email'],
-            'cc' => $data['cc'] ?? null,
-            'bcc' => $data['bcc'] ?? null,
-            'subject' => $data['subject'],
-            'body_html' => $data['body_html'],
-            'attachment_path' => $data['attachment_path'] ?? null,
-            'status' => 'pending',
-            'time_sent' => $data['time_sent'] ?? null,
-            'email_sender' => $data['email_sender'] ?? null,
-            'reply_to' => $data['reply_to'] ?? null,
-            'sender_name' => $data['sender_name'] ?? null
-        ]);
+        $dedupeKey = $this->dedupeKeyFor(
+            $data['account_no'] ?? null,
+            $data['recipient_email'],
+            $data['subject'],
+            $data['time_sent'] ?? null
+        );
+
+        if ($dedupeKey !== null) {
+            $existing = EmailQueue::where('dedupe_key', $dedupeKey)->first();
+
+            if ($existing) {
+                Log::info('Email already queued for this notification, not queueing again', [
+                    'id' => $existing->id,
+                    'recipient' => $data['recipient_email'],
+                    'subject' => $data['subject'],
+                    'status' => $existing->status,
+                ]);
+
+                return $existing;
+            }
+        }
+
+        try {
+            $emailQueue = EmailQueue::create([
+                'account_no' => $data['account_no'] ?? null,
+                'recipient_email' => $data['recipient_email'],
+                'cc' => $data['cc'] ?? null,
+                'bcc' => $data['bcc'] ?? null,
+                'subject' => $data['subject'],
+                'dedupe_key' => $dedupeKey,
+                'body_html' => $data['body_html'],
+                'attachment_path' => $data['attachment_path'] ?? null,
+                'status' => 'pending',
+                'time_sent' => $data['time_sent'] ?? null,
+                'email_sender' => $data['email_sender'] ?? null,
+                'reply_to' => $data['reply_to'] ?? null,
+                'sender_name' => $data['sender_name'] ?? null
+            ]);
+        } catch (QueryException $e) {
+            // Lost the race against a concurrent run holding the same key — that run has already
+            // queued the message, so this is success. Anything else is a real fault and re-thrown.
+            if ($dedupeKey !== null && $this->isDuplicateKeyViolation($e)) {
+                $existing = EmailQueue::where('dedupe_key', $dedupeKey)->first();
+
+                if ($existing) {
+                    Log::info('Email queued concurrently by another run, reusing that row', [
+                        'id' => $existing->id,
+                        'recipient' => $data['recipient_email'],
+                    ]);
+
+                    return $existing;
+                }
+            }
+
+            throw $e;
+        }
 
         Log::info('Email queued', [
             'id' => $emailQueue->id,
@@ -41,14 +98,51 @@ class EmailQueueService
         return $emailQueue;
     }
 
+    /**
+     * The idempotency key for a scheduled notification, or null when the message is not one.
+     *
+     * MUST stay in step with the UNIQUE index added in
+     * 2026_08_06_000003_add_dedupe_key_to_email_queue.
+     */
+    public function dedupeKeyFor(?string $accountNo, string $recipientEmail, string $subject, ?string $timeSent): ?string
+    {
+        if (empty($timeSent)) {
+            return null;
+        }
+
+        return hash('sha256', implode("\0", [
+            (string) $accountNo,
+            $recipientEmail,
+            $subject,
+            $timeSent,
+        ]));
+    }
+
+    /**
+     * A UNIQUE constraint violation, as opposed to any other query failure.
+     */
+    private function isDuplicateKeyViolation(QueryException $e): bool
+    {
+        return ($e->errorInfo[0] ?? null) === '23000'
+            && in_array((int) ($e->errorInfo[1] ?? 0), [1062, 1586], true);
+    }
+
     public function queueFromTemplate(string $templateCode, array $data): ?EmailQueue
     {
-        $template = EmailTemplate::where('Template_Code', $templateCode)
-            ->where('Is_Active', true)
-            ->first();
+        // Fetched without the Is_Active filter so the two cases can be told apart. Filtering
+        // in the query collapsed them, and a template that had simply been switched off was
+        // reported as missing — at ERROR level, which put a routine configuration choice in
+        // the log next to real faults and sent people looking for a row that was there all
+        // along.
+        $template = EmailTemplate::where('Template_Code', $templateCode)->first();
 
         if (!$template) {
             Log::error('Email template not found', ['template_code' => $templateCode]);
+            return null;
+        }
+
+        if (!$template->Is_Active) {
+            Log::info('Email template is disabled; skipping send', ['template_code' => $templateCode]);
             return null;
         }
 
@@ -233,10 +327,10 @@ class EmailQueueService
         return $this->queueEmail([
             'account_no' => $user->username,
             'recipient_email' => $user->email_address,
-            'subject' => 'Account Credentials - ATSS Fiber',
+            'subject' => 'Account Credentials - GOWISER',
             'body_html' => "
                 <div style='font-family: Arial, sans-serif; color: #333; line-height: 1.6;'>
-                    <h2 style='color: #7c3aed;'>Welcome to ATSS Fiber</h2>
+                    <h2 style='color: #7c3aed;'>Welcome to GOWISER</h2>
                     <p>Hello <strong>{$user->full_name}</strong>,</p>
                     <p>Your account has been activated. Below are your login credentials for our customer portal:</p>
                     <div style='background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #7c3aed;'>
@@ -245,14 +339,14 @@ class EmailQueueService
                     </div>
                     <p>Please keep these credentials secure. You can use them to log in to our portal to view your billing statements and manage your account.</p>
                     <br>
-                    <p>Best regards,<br><strong>ATSS Fiber Team</strong></p>
+                    <p>Best regards,<br><strong>GOWISER Team</strong></p>
                     <hr style='border: 0; border-top: 1px solid #eee; margin: 20px 0;'>
                     <p style='font-size: 11px; color: #666;'>This is an automated message, please do not reply directly to this email.</p>
                 </div>
             ",
-            'email_sender' => 'billing@atssfiber.ph',
-            'reply_to' => 'billing@atssfiber.ph',
-            'sender_name' => 'ATSS Fiber'
+            'email_sender' => 'billing@gowiser.ph',
+            'reply_to' => 'billing@gowiser.ph',
+            'sender_name' => 'GOWISER'
         ]);
     }
 }

@@ -33,6 +33,7 @@ use App\Http\Controllers\InventoryRelatedDataController;
 use App\Http\Controllers\PPPoEController;
 use App\Models\User;
 use App\Models\MassRebate;
+use App\Services\TechnicianSessionGuard;
 use App\Http\Controllers\Api\MonitorController;
 use App\Http\Controllers\Api\SmsBlastController;
 use App\Http\Controllers\Api\ExpensesLogController;
@@ -53,7 +54,6 @@ Route::apiResource('roles', RoleController::class);
 Route::get('/tech-in-out/status', [TechInOutController::class, 'getStatus']);
 Route::post('/tech-in-out/time-in', [TechInOutController::class, 'timeIn']);
 Route::post('/tech-in-out/time-out', [TechInOutController::class, 'timeOut']);
-Route::get('/reports', [ReportController::class , 'index']);
 Route::get('/commissions', [CommissionController::class, 'index']);
 Route::get('/commissions/history', [CommissionController::class, 'getHistory']);
 Route::post('/commissions/history', [CommissionController::class, 'storeHistory']);
@@ -62,103 +62,101 @@ Route::get('/commissions/agent-job-orders', [CommissionController::class, 'getJo
 Route::get('/commissions/incentive-history', [CommissionController::class, 'getIncentiveHistory']);
 Route::get('/commissions/bonus-history', [CommissionController::class, 'getBonusHistory']);
 Route::post('/commissions/bonus-history', [CommissionController::class, 'storeBonusHistory']);
+// Weekly / monthly onboarding achievements. Reading is scoped in the controller
+// (a non-admin reads their own); claiming credits the caller, and only an
+// administrator may name another agent.
 Route::get('/commissions/achievements', [CommissionController::class, 'getAchievements']);
 Route::post('/commissions/achievements', [CommissionController::class, 'storeAchievement']);
-// Payout approval, following the transaction pattern: a payout is recorded as
-// Pending and only moves the agent's balance once it is approved here. The
-// approver is taken from the signed-in user, never from the request body.
+// Payout approval: a payout or bonus is recorded as Pending and only moves the
+// agent's balance once approved here. Administrator / SuperAdmin only (enforced
+// in the controller via App\Support\AgentAccess); the approver is taken from
+// the signed-in user, never from the request body.
 Route::post('/commissions/history/{id}/approve', [CommissionController::class, 'approveHistory'])->whereNumber('id');
 Route::post('/commissions/history/{id}/reject', [CommissionController::class, 'rejectHistory'])->whereNumber('id');
 Route::post('/commissions/bonus-history/{id}/approve', [CommissionController::class, 'approveBonus'])->whereNumber('id');
 Route::post('/commissions/bonus-history/{id}/reject', [CommissionController::class, 'rejectBonus'])->whereNumber('id');
 
 // ── Weekly agent referral invoices ──────────────────────────────────────────
-// Every one of these is scoped to what the signed-in user may see inside the
-// controller: an agent sees their team's invoices, or their own when they have
-// no team; an administrator sees their organisation's; a superadmin sees all.
-// "generate" is registered before "{id}" so it is not read as an id.
+// Scoped inside the controller: an agent sees their team's invoices, or their
+// own when they have no team; an administrator sees their organisation's; a
+// superadmin sees all. generate / status are Administrator / SuperAdmin only.
+// The literal paths are registered before the /{id} ones (which also carry
+// whereNumber) so they can never be read as an id.
 Route::get('/agent-invoices', [\App\Http\Controllers\AgentInvoiceController::class, 'index']);
 Route::post('/agent-invoices/generate', [\App\Http\Controllers\AgentInvoiceController::class, 'generate']);
-// Registered above the /{id} routes below. Those carry whereNumber, so a word
-// would not match them anyway — the order is kept for the next route added
-// without one.
 Route::get('/agent-invoices/periods', [\App\Http\Controllers\AgentInvoiceController::class, 'periods']);
 Route::get('/agent-invoices/archive', [\App\Http\Controllers\AgentInvoiceController::class, 'archive']);
 Route::get('/agent-invoices/{id}', [\App\Http\Controllers\AgentInvoiceController::class, 'show'])->whereNumber('id');
 Route::get('/agent-invoices/{id}/pdf', [\App\Http\Controllers\AgentInvoiceController::class, 'pdf'])->whereNumber('id');
 Route::patch('/agent-invoices/{id}/status', [\App\Http\Controllers\AgentInvoiceController::class, 'updateStatus'])->whereNumber('id');
-Route::post('/reports', [ReportController::class , 'store']);
-Route::get('/reports/options', [ReportController::class , 'options']);
-// Registered before the /reports/{id} routes below, which have no numeric
-// constraint and would otherwise match "settings" as an id.
-// Draft preview: renders the form's current values without creating anything.
-// Registered with the other literal paths, ahead of /reports/{id}.
-Route::post('/reports/preview', [ReportController::class , 'previewDraft']);
-Route::get('/reports/settings', [ReportController::class , 'settings']);
-Route::put('/reports/settings', [ReportController::class , 'updateSettings'])
-    ->middleware('permission:reports.manage');
-Route::put('/reports/{id}', [ReportController::class , 'update'])->whereNumber('id');
-// Deleting a report also drops its dispatch ledger and unsent emails, so it is
-// held apart from editing one — enforced here, not just hidden in the UI.
-//
-// Stated as a permission rather than as `role:super_admin`: the two are the same
-// thing for the seeded roles, since SuperAdmin is the only one holding
-// reports.delete, but a custom role can now be granted it deliberately instead
-// of being refused something its Role Management page said it had.
-Route::delete('/reports/{id}', [ReportController::class , 'destroy'])
-    ->whereNumber('id')
-    ->middleware('permission:reports.delete');
-Route::get('/reports/{id}/preview', [ReportController::class , 'preview'])->whereNumber('id');
-Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate'])->whereNumber('id');
-Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow'])->whereNumber('id');
-Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches'])->whereNumber('id');
-Route::get('/reports-migrate-pdf', function () {
-    $reports = \App\Models\Report::all();
-    $pdfService = new \App\Services\ReportPdfService();
-    $driveService = resolve(\App\Services\GoogleDriveService::class);
-    $folderId = $driveService->findFolder('Reports') ?? $driveService->createFolder('Reports');
 
-    $count = 0;
-    $failures = [];
-    foreach ($reports as $report) {
-        try {
-            // generate() picks the summary or tabular layout itself. The old
-            // branch called generateTablePdf(), which did not exist, so every
-            // non-summary report silently failed inside the catch below.
-            $tempPath = $pdfService->generate($report);
-            $fileName = basename($tempPath);
+// Reports module is Super Admin only — enforced here (not just hidden in the UI) since
+// reports can expose org-wide financial/commission data.
+Route::middleware('role:superadmin')->group(function () {
+    Route::get('/reports', [ReportController::class , 'index']);
+    Route::post('/reports', [ReportController::class , 'store']);
+    Route::get('/reports/options', [ReportController::class , 'options']);
+    // Registered before the /reports/{id} routes below, which have no numeric
+    // constraint and would otherwise match "settings" as an id.
+    // Draft preview: renders the form's current values without creating anything.
+    // Registered with the other literal paths, ahead of /reports/{id}.
+    Route::post('/reports/preview', [ReportController::class , 'previewDraft']);
+    Route::get('/reports/settings', [ReportController::class , 'settings']);
+    Route::put('/reports/settings', [ReportController::class , 'updateSettings']);
+    Route::put('/reports/{id}', [ReportController::class , 'update'])->whereNumber('id');
+    Route::delete('/reports/{id}', [ReportController::class , 'destroy'])->whereNumber('id');
+    Route::get('/reports/{id}/preview', [ReportController::class , 'preview'])->whereNumber('id');
+    Route::post('/reports/{id}/regenerate', [ReportController::class , 'regenerate'])->whereNumber('id');
+    Route::post('/reports/{id}/send-now', [ReportController::class , 'sendNow'])->whereNumber('id');
+    Route::get('/reports/{id}/dispatches', [ReportController::class , 'dispatches'])->whereNumber('id');
+    Route::get('/reports-migrate-pdf', function () {
+        $reports = \App\Models\Report::all();
+        $pdfService = new \App\Services\ReportPdfService();
+        $driveService = resolve(\App\Services\GoogleDriveService::class);
+        $folderId = $driveService->findFolder('Reports') ?? $driveService->createFolder('Reports');
 
-            $fileUrl = $driveService->uploadFile($tempPath, $folderId, $fileName, 'application/pdf');
+        $count = 0;
+        $failures = [];
+        foreach ($reports as $report) {
+            try {
+                // generate() picks the summary or tabular layout itself. The old
+                // branch called generateTablePdf(), which did not exist, so every
+                // non-summary report silently failed inside the catch below.
+                $tempPath = $pdfService->generate($report);
+                $fileName = basename($tempPath);
 
-            $oldUrl = $report->file_url;
-            if ($oldUrl && preg_match('/\/d\/([a-zA-Z0-9_-]+)/', $oldUrl, $matches)) {
-                try {
-                    $driveService->deleteFile($matches[1]);
+                $fileUrl = $driveService->uploadFile($tempPath, $folderId, $fileName, 'application/pdf');
+
+                $oldUrl = $report->file_url;
+                if ($oldUrl && preg_match('/\/d\/([a-zA-Z0-9_-]+)/', $oldUrl, $matches)) {
+                    try {
+                        $driveService->deleteFile($matches[1]);
+                    }
+                    catch (\Exception $e) {
+                    }
                 }
-                catch (\Exception $e) {
-                }
+
+                $report->file_url = $fileUrl;
+                $report->save();
+                @unlink($tempPath);
+                $count++;
             }
-
-            $report->file_url = $fileUrl;
-            $report->save();
-            @unlink($tempPath);
-            $count++;
+            catch (\Throwable $e) {
+                // Previously swallowed entirely, which is why a broken PDF pipeline
+                // could report "Converted 0 reports." and look like success.
+                $failures[] = "#{$report->id} {$report->report_name}: {$e->getMessage()}";
+                \Illuminate\Support\Facades\Log::error('Report PDF migration failed', [
+                    'report_id' => $report->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
-        catch (\Throwable $e) {
-            // Previously swallowed entirely, which is why a broken PDF pipeline
-            // could report "Converted 0 reports." and look like success.
-            $failures[] = "#{$report->id} {$report->report_name}: {$e->getMessage()}";
-            \Illuminate\Support\Facades\Log::error('Report PDF migration failed', [
-                'report_id' => $report->id,
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-    return response()->json([
-        'success' => $failures === [],
-        'message' => "Converted {$count} of {$reports->count()} reports.",
-        'failures' => $failures,
-    ], $failures === [] ? 200 : 207);
+        return response()->json([
+            'success' => $failures === [],
+            'message' => "Converted {$count} of {$reports->count()} reports.",
+            'failures' => $failures,
+        ], $failures === [] ? 200 : 207);
+    });
 });
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -174,7 +172,47 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 Route::get('/sms-blast', [SmsBlastController::class , 'index']);
 Route::post('/sms-blast', [SmsBlastController::class , 'store']);
-Route::get('/expenses-logs', [ExpensesLogController::class , 'index']);
+// Expenses module. The bare GET stays first and unchanged so the legacy
+// ExpensesLog page keeps hitting exactly the endpoint it already knows.
+Route::prefix('expenses-logs')->group(function () {
+    Route::get('/', [ExpensesLogController::class , 'index']);
+    // Literal segments before /{id}, or the wildcard swallows them.
+    Route::get('/summary', [ExpensesLogController::class , 'summary']);
+    Route::get('/export', [ExpensesLogController::class , 'export']);
+    Route::post('/', [ExpensesLogController::class , 'store']);
+    Route::get('/{id}', [ExpensesLogController::class , 'show']);
+    // POST+_method=PUT is how the frontend sends multipart updates; PHP does not
+    // populate $_FILES on a real PUT body.
+    Route::match(['put', 'post'], '/{id}', [ExpensesLogController::class , 'update']);
+    Route::delete('/{id}', [ExpensesLogController::class , 'destroy']);
+});
+
+// Monthly Payables. Behind auth:sanctum, unlike the older expenses-logs routes above:
+// these rows are amounts owed to named vendors with account numbers on them, so the
+// endpoints get the session guard rather than relying on the SPA to be the only caller.
+Route::middleware('auth:sanctum')->prefix('monthly-payables')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'index']);
+    // Literal segments before /{id}, or the wildcard swallows them.
+    Route::get('/alert-count', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'alertCount']);
+    Route::post('/generate', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'generateMonthlyBatch']);
+    Route::post('/', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'show'])->whereNumber('id');
+    // POST+_method=PUT is how the frontend sends multipart updates; PHP does not
+    // populate $_FILES on a real PUT body.
+    Route::match(['put', 'post'], '/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'update'])->whereNumber('id');
+    Route::delete('/{id}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'destroy'])->whereNumber('id');
+    Route::post('/{id}/payments', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'recordPayment'])->whereNumber('id');
+    Route::delete('/{id}/payments/{paymentId}', [\App\Http\Controllers\Api\MonthlyPayableController::class , 'deletePayment'])
+        ->whereNumber('id')->whereNumber('paymentId');
+});
+
+Route::prefix('expenses-categories')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'index']);
+    Route::post('/', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'show']);
+    Route::put('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'update']);
+    Route::delete('/{id}', [\App\Http\Controllers\Api\ExpensesCategoryApiController::class , 'destroy']);
+});
 Route::get('/disconnection-logs', [DisconnectionLogsController::class , 'index']);
 Route::get('/smart-olt/validate-sn', [\App\Http\Controllers\SmartOltController::class , 'validateOnuSn']);
 Route::post('/smart-olt/update-name', [\App\Http\Controllers\SmartOltController::class , 'updateOnuNameBySn']);
@@ -185,11 +223,6 @@ Route::put('/smart-olt/{id}', [\App\Http\Controllers\SmartOltController::class ,
 Route::delete('/smart-olt/{id}', [\App\Http\Controllers\SmartOltController::class , 'destroy']);
 Route::get('/reconnection-logs', [ReconnectionLogsController::class , 'index']);
 Route::get('/data-logs', [\App\Http\Controllers\Api\DataLogsController::class , 'index']);
-Route::get('/modem-router-logs', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'index']);
-Route::get('/modem-router-logs/sn/{sn}', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'getBySn']);
-Route::get('/modem-router-logs/summary', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'summary']);
-// The RADIUS retry queue, read-only.
-Route::get('/radius-queue', [\App\Http\Controllers\Api\RadiusQueueController::class , 'index']);
 
 // File-based Log Viewers (SmartOLT & Radius)
 Route::get('/file-logs/{type}', [\App\Http\Controllers\FileLogController::class, 'getLogFile']);
@@ -327,18 +360,11 @@ Route::prefix('service-charges')->group(function () {
     Route::get('/', function (Request $request) {
             $query = DB::table('service_charge_logs');
 
-            // A customer reaching this from their own Dashboard or Bills page
-            // sees only their own charges, whatever account_no they ask for.
-            $customerAccountNo = \App\Support\CustomerScope::accountNo(['so-charge', 'customer']);
-
-            if ($customerAccountNo !== null) {
-                $query->where('account_no', $customerAccountNo);
-            }
-            elseif ($request->has('account_no')) {
+            if ($request->has('account_no')) {
                 $query->where('account_no', $request->account_no);
             }
 
-            if ($customerAccountNo === null && $request->has('account_id')) {
+            if ($request->has('account_id')) {
                 $billingAccount = \App\Models\BillingAccount::find($request->account_id);
                 if ($billingAccount) {
                     $query->where('account_no', $billingAccount->account_no);
@@ -1075,11 +1101,6 @@ Route::prefix('work-orders')->group(function () {
     Route::get('/statistics', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'getStatistics']);
     Route::get('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'update']);
-    // Releases a work order to its technician ahead of their queue.
-    // Administrators only — enforced here, not just hidden in the UI. This group
-    // has no auth middleware of its own, so auth:sanctum is named explicitly.
-    Route::post('/{id}/enable-technician', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'enableForTechnician'])
-        ->middleware(['auth:sanctum', 'role:administrator,super_admin']);
     Route::delete('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'destroy']);
 });
 
@@ -1191,47 +1212,19 @@ Route::post('/login', function (Request $request) {
         // Verify password
         $passwordMatches = Hash::check($password, $user->password_hash);
 
-        // A customer's password is their mobile number, and a mobile number has
-        // more than one spelling. Accept any of them.
-        //
-        // This replaces a retry that bolted a '0' onto the front of the typed
-        // password: it covered one spelling out of several and missed "+63…",
-        // spaced and dashed numbers, and anything with a stray space around it.
-        // App\Support\PortalPassword normalises rather than guesses, so the same
-        // subscriber's number unlocks the account however it is written, and a
-        // hybrid customer role counts as a customer instead of being turned away
-        // by a check against the literal role_id 3.
-        //
-        // Accounts written before that class existed hold whatever spelling was
-        // typed at the time. Signing in through one of those legacy spellings
-        // rehashes the account to the canonical form, so it repairs itself once
-        // and never takes the slow path again. That is what removes the need to
-        // edit a customer's contact number purely to force a rehash.
-        if (!$passwordMatches && \App\Support\PortalPassword::isCustomer($user)) {
-            $matchedCanonically = false;
+        // For customers (role_id 3), allow variations of the leading '0' if the primary check fails
+        if (!$passwordMatches && $user->role_id == 3) {
+            $altPassword = null;
+            if (str_starts_with($password, '0')) {
+                $altPassword = substr($password, 1); // Try without leading '0'
+            }
+            else {
+                $altPassword = '0' . $password; // Try with leading '0'
+            }
 
-            // The number of record, for the one legacy case the typed password
-            // cannot reconstruct on its own: a hash made from a punctuated
-            // spelling such as "0917-123-4567". username is the billing account
-            // number, which is how the rest of the system reaches the customer.
-            $storedNumber = \DB::table('billing_accounts')
-                ->join('customers', 'customers.id', '=', 'billing_accounts.customer_id')
-                ->where('billing_accounts.account_no', $user->username)
-                ->value('customers.contact_number_primary') ?? $user->contact_number;
-
-            if (\App\Support\PortalPassword::matchesWithStoredNumber($password, $user->password_hash, $storedNumber, $matchedCanonically)) {
+            if ($altPassword && Hash::check($altPassword, $user->password_hash)) {
                 $passwordMatches = true;
-
-                if (!$matchedCanonically) {
-                    // Assigning through the model runs setPasswordHashAttribute,
-                    // so this stores Hash::make() of the canonical number.
-                    $user->password_hash = \App\Support\PortalPassword::normalize($password);
-                    $user->save();
-
-                    \Log::info('Customer login: rehashed legacy password spelling', [
-                        'user_id' => $user->id,
-                    ]);
-                }
+                \Log::info('Customer login: Password matched using variation', ['user_id' => $user->id]);
             }
         }
 
@@ -1261,8 +1254,68 @@ Route::post('/login', function (Request $request) {
             ], 403);
         }
 
-        // CRITICAL: Actually log the user in to create an authenticated session
-        \Auth::login($user);
+        // Technicians get one live login and no more. Everyone else falls straight through
+        // this block unchanged.
+        //
+        // Runs before Auth::login() on purpose: a refused attempt must not leave an
+        // authenticated session behind for the device that was told to confirm first.
+        if (TechnicianSessionGuard::applies($user)) {
+            $currentSessionId = TechnicianSessionGuard::currentSessionId($request);
+
+            if (TechnicianSessionGuard::hasSessionElsewhere($user, $currentSessionId)) {
+                // Anything other than an explicit true — absent, false, '0' — means the client
+                // has not shown the confirmation prompt yet.
+                $forceLogin = filter_var($request->input('force_login', false), FILTER_VALIDATE_BOOLEAN);
+
+                if (! $forceLogin) {
+                    \Log::info('Technician login needs takeover confirmation', [
+                        'user_id' => $user->id,
+                        'username' => $user->username,
+                        'ip' => $request->ip()
+                    ]);
+
+                    return response()->json([
+                        'status' => 'already_logged_in',
+                        'require_confirmation' => true,
+                        'message' => 'Account active on another device. Proceed and log out previous session?'
+                    ], 409);
+                }
+
+                // Confirmed. Ends the other device's session, tokens and recaller cookie in one
+                // transaction, and must happen before Auth::login() so the new device is issued
+                // a fresh remember_token rather than the revoked one.
+                TechnicianSessionGuard::takeOver($user, $request);
+            }
+        }
+
+        // CRITICAL: Actually log the user in to create an authenticated session.
+        //
+        // $remember = true issues the long-lived recaller cookie. This is what keeps people
+        // signed in: the session itself still expires after SESSION_LIFETIME of inactivity,
+        // but on the next request SessionGuard::userFromRecaller() silently rebuilds the
+        // session from that cookie, so the user never sees a 401. Without it, closing the
+        // laptop overnight guaranteed a trip back to the login screen.
+        \Auth::login($user, true);
+
+        // Rotate the session id now that privileges have changed, so a session id captured
+        // before login cannot be reused afterwards. Must run AFTER login(), and the recaller
+        // cookie survives it.
+        try {
+            $request->session()->regenerate();
+        } catch (\Throwable $sessionError) {
+            // A request without a started session must not break login.
+            \Log::warning('Could not regenerate session on login', [
+                'user_id' => $user->id,
+                'error' => $sessionError->getMessage()
+            ]);
+        }
+
+        // Claim the single technician session slot. After regenerate(), so the id recorded is
+        // the one the device will actually present — recording the pre-login id would make
+        // this technician's own next login on this same device look like a second device.
+        if (TechnicianSessionGuard::applies($user)) {
+            TechnicianSessionGuard::register($user, $request);
+        }
 
         // Verify session was created
         $sessionUserId = \Auth::id();
@@ -1305,9 +1358,10 @@ Route::post('/login', function (Request $request) {
         // Resolved through App\Support\Permissions rather than read straight off
         // the role row, so a seeded role (1-8) gets the keys its role implies
         // and a custom role (9+) gets its own stored list — plus, if it is a
-        // hybrid, everything its base role holds. The clients receive one shape
-        // and do not have to know which kind of role they hold. A SuperAdmin
-        // gets ["*"].
+        // hybrid, everything its base role holds, and, if it was saved before
+        // per-action keys existed, every action of each page it holds. The
+        // clients receive one shape and do not have to know which kind of role
+        // they hold. A SuperAdmin gets ["*"].
         //
         // This is the same list /api/me/permissions returns; sending it at
         // sign-in saves the first paint a round trip.
@@ -1323,8 +1377,11 @@ Route::post('/login', function (Request $request) {
                 'role_id' => $user->role_id,
                 'permissions' => $rolePermissions,
                 // Where this role should land. The client uses it instead of
-                // guessing from the first key in the list.
+                // guessing from the first key in the list. Null for a
+                // standalone custom role: the client picks its first page.
                 'home' => \App\Support\Permissions::homeFor($user),
+                // A custom role saved before per-action keys existed.
+                'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
             ]
         ];
 
@@ -1344,71 +1401,9 @@ Route::post('/login', function (Request $request) {
             ]);
         }
 
-        // A real Sanctum personal access token, issued alongside the session.
-        //
-        // The session cookie remains the primary credential and nothing about
-        // the cookie flow changes. This is the fallback for a browser that will
-        // not return the cookie at all — an in-app browser such as Messenger's,
-        // whose WebView drops a cookie set by a host other than the page's.
-        // Without it, such a browser has no way to stay authenticated: the
-        // login succeeds, the cookie is discarded, and every request after it
-        // is a 401.
-        //
-        // Replaces a string of the form "user_token_<id>_<timestamp>", which
-        // looked like a credential but authenticated nothing — no guard ever
-        // read it, and anyone could have constructed one.
-        //
-        // Named per device so a token can be traced and revoked on its own, and
-        // so signing in again does not silently pile up duplicates.
-        //
-        // The name used to come from the User-Agent, which is not per-device at
-        // all. A React Native app sets no User-Agent of its own, so OkHttp
-        // supplies one and every Android install of this app sends the identical
-        // string. The delete below is scoped by user, not by device, so it reached
-        // the token of a phone that was still using it: one household with the
-        // account on two Android phones meant the second sign-in silently revoked
-        // the first. That phone kept its stored authData, so it went on showing the
-        // customer's name and account number while every request 401'd — and since
-        // customers are told to stay signed in for fast payment, it had no reason
-        // to sign in again and no way to know it needed to. Two browsers with the
-        // same User-Agent collided in exactly the same way, so this was never
-        // mobile-only.
-        //
-        // X-Device-Id is generated once per install by each client and kept in its
-        // own storage, so it identifies what the User-Agent was only assumed to.
-        $deviceId = trim((string) $request->header('X-Device-Id', ''));
-        $tokenName = $deviceId !== ''
-            ? 'device:' . substr($deviceId, 0, 64)
-            : 'spa:' . substr((string) ($request->userAgent() ?? 'unknown'), 0, 120);
-
-        // The previous credential for THIS device is dropped, so a fresh login
-        // replaces it rather than leaving it valid.
-        //
-        // Only ever when the caller identified itself. Without a device id the
-        // name says what KIND of client this is, not which one, so any row it
-        // matches may belong to a phone that is still using it — which is the
-        // whole bug. Nothing is deleted in that case.
-        //
-        // Deliberately not "delete the ones that look idle": last_used_at cannot
-        // carry that judgement here. Sanctum writes it only when a request is
-        // authenticated by the token itself (vendor/laravel/sanctum/src/Guard.php:83),
-        // and a request authenticated by the session cookie returns at line 57
-        // without touching it. Wherever the Authorization header is not reaching
-        // PHP — the fault public/.htaccess and AppServiceProvider::boot now
-        // address — every row therefore reads NULL, including the ones on phones
-        // in daily use, so reaping "unused" rows would delete precisely the
-        // credentials this is meant to protect.
-        //
-        // Old clients that cannot send the header accumulate a row per sign-in
-        // until they update. That is the cheap side of the trade: a spare row
-        // costs storage, a wrongly deleted one signs a paying customer out. Once
-        // the token path is confirmed working in production, last_used_at becomes
-        // meaningful and a scheduled prune can use it.
-        if ($deviceId !== '') {
-            $user->tokens()->where('name', $tokenName)->delete();
-        }
-
-        $responseData['token'] = $user->createToken($tokenName)->plainTextToken;
+        // Generate token
+        $token = 'user_token_' . $user->id . '_' . time();
+        $responseData['token'] = $token;
 
         return response()->json([
         'status' => 'success',
@@ -1496,13 +1491,46 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 });
 
 /**
- * The signed-in user's effective permission keys.
+ * Explicit logout. There was previously no logout endpoint at all — the SPA just dropped
+ * localStorage, leaving the server session and (now) the recaller cookie alive. With
+ * remember-me enabled that would mean logging out never actually logged you out.
+ *
+ * Deliberately NOT behind auth:sanctum: logging out must succeed even when the session has
+ * already lapsed, otherwise the client gets a 401 while trying to clean up.
+ */
+Route::post('/logout', function (Request $request) {
+    $userId = \Auth::id();
+
+    // Free the technician's single-session slot before anything is torn down: invalidate()
+    // below rotates the session id, and the id being released has to be the one that was
+    // recorded at login. A no-op for every other role — they hold no such record.
+    TechnicianSessionGuard::release($userId, TechnicianSessionGuard::currentSessionId($request));
+
+    // Cycles remember_token, so the old recaller cookie can never re-authenticate — this is
+    // what makes "explicitly logged out" stick across devices holding a stale cookie.
+    \Auth::logout();
+
+    try {
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+    } catch (\Throwable $sessionError) {
+        // Already-dead session: nothing to invalidate, and that is a successful logout.
+        \Log::info('Logout with no active session', ['error' => $sessionError->getMessage()]);
+    }
+
+    \Log::info('User logged out', ['user_id' => $userId]);
+
+    return response()->json(['success' => true, 'message' => 'Logged out']);
+});
+
+/**
+ * The signed-in user's effective permission keys and landing page.
  *
  * The server is the authority on what a role may do; this is how a client
  * asks. The clients cache the same table locally so the first paint after a
  * reload does not have to wait on a round trip, and reconcile against this —
- * so an administrator whose role is changed while they are signed in loses the
- * menu entries on their next load rather than on their next sign-in.
+ * so a user whose role is changed while they are signed in loses the menu
+ * entries on their next load rather than on their next sign-in.
  *
  * `permissions` may be `["*"]` for a SuperAdmin, which the clients read as
  * "everything, including keys added later".
@@ -1517,47 +1545,40 @@ Route::middleware('auth:sanctum')->get('/me/permissions', function (Request $req
             'role'        => strtolower(optional($user->role)->role_name ?? ''),
             'permissions' => \App\Support\Permissions::forUser($user),
             'home'        => \App\Support\Permissions::homeFor($user),
+            'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
         ],
     ]);
 });
 
 /**
- * Sign out: end the session AND revoke the token this device is holding.
- *
- * Both halves matter. Clearing the session alone would leave a working bearer
- * token behind on a device that has signed out, which is exactly the credential
- * an in-app browser is relying on.
- *
- * Deliberately tolerant of being called when only one of the two exists — a
- * cookie session with no token, or a token with no session — so signing out
- * never fails and leaves the user stuck.
+ * Cheap "is my session still good?" probe for the SPA to call on boot and before deciding a
+ * 401 is terminal. Unauthenticated is a normal answer here, not an error, so it returns 200
+ * with authenticated=false rather than a 401 — that keeps it from tripping the SPA's own
+ * 401 handling and causing a redirect loop.
  */
-Route::middleware('auth:sanctum')->post('/logout', function (Request $request) {
-    $token = $request->user()?->currentAccessToken();
+Route::get('/auth/session', function (Request $request) {
+    // Resolving the web guard is what triggers the recaller-cookie path, so simply asking
+    // this question is enough to transparently rebuild a lapsed session.
+    $user = \Auth::guard('web')->user();
 
-    // Only a real personal access token can be deleted. On a cookie-based
-    // request this is a TransientToken, which has nothing to revoke.
-    if ($token instanceof \Laravel\Sanctum\PersonalAccessToken) {
-        $token->delete();
+    if (! $user) {
+        return response()->json(['authenticated' => false], 200);
     }
 
-    if ($request->hasSession()) {
-        \Auth::guard('web')->logout();
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+    try {
+        $user->load(['organization', 'role', 'group']);
+    } catch (\Throwable $e) {
+        // Relationship failure must not make a valid session look invalid.
+        \Log::warning('Could not load relations for session probe', ['error' => $e->getMessage()]);
     }
 
-    return response()->json(['status' => 'success', 'message' => 'Logged out']);
+    return response()->json(['authenticated' => true, 'user' => $user], 200);
 });
 
 // User Management Routes
 Route::prefix('users')->middleware('ensure.database.tables')->group(function () {
     Route::get('/', [UserController::class , 'index']);
     Route::post('/', [UserController::class , 'store']);
-    // The mobile app registers its own Expo token here. Declared above /{id} so the
-    // literal path is never read as an id, and UserController::updatePushToken writes
-    // only to the caller's own row.
-    Route::post('/push-token', [UserController::class , 'updatePushToken']);
     Route::get('/{id}', [UserController::class , 'show']);
     Route::put('/{id}', [UserController::class , 'update']);
     Route::delete('/{id}', [UserController::class , 'destroy']);
@@ -1676,10 +1697,6 @@ Route::prefix('job-orders')->middleware(['auth:sanctum', 'ensure.database.tables
     Route::put('/{id}', [JobOrderController::class , 'update']);
     Route::delete('/{id}', [JobOrderController::class , 'destroy']);
     Route::post('/{id}/approve', [JobOrderController::class , 'approve']);
-    // Releases a job order to its technician ahead of their oldest-first queue.
-    // Administrators only — enforced here, not just hidden in the UI.
-    Route::post('/{id}/enable-technician', [JobOrderController::class , 'enableForTechnician'])
-        ->middleware('role:administrator,super_admin');
     Route::post('/{id}/log-blocked-transfer', [JobOrderController::class , 'logBlockedTransfer']);
     Route::post('/{id}/create-radius-account', [JobOrderController::class , 'createRadiusAccount']);
     Route::post('/{id}/upload-images', [JobOrderController::class , 'uploadImages']);
@@ -1873,10 +1890,6 @@ Route::get('/plans/{id}', [\App\Http\Controllers\Api\PlanApiController::class , 
 Route::put('/plans/{id}', [\App\Http\Controllers\Api\PlanApiController::class , 'update']);
 Route::delete('/plans/{id}', [\App\Http\Controllers\Api\PlanApiController::class , 'destroy']);
 
-// User Manager groups read live off the MikroTik router — backs the plan form so an
-// operator picks a group the router will actually authenticate against.
-Route::get('/radius/user-groups', [\App\Http\Controllers\Api\PlanApiController::class , 'getMikrotikGroups']);
-
 // Plan Related Data - fetch applications, job orders, customers by plan name
 Route::get('/plans/{id}/related', function ($id) {
     try {
@@ -1965,7 +1978,7 @@ Route::get('/plans/{id}/related', function ($id) {
                             // than turning it into a name again.
                             $rawReferral = $jo->referred_by ?? ($app ? $app->referred_by : '');
                             $jo->referred_by = \App\Support\AgentReferral::displayName($rawReferral);
-                            $jo->referred_by_agent_id = \App\Support\AgentReferral::agentId($rawReferral);
+                            $jo->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($rawReferral);
                             $jo->applying_for = $jo->applying_for ?? ($app ? $app->promo : '');
                             $jo->terms_agreed = $jo->terms_agreed ?? ($app ? $app->terms_agreed : '');
 
@@ -2225,11 +2238,6 @@ Route::prefix('work-orders')->group(function () {
     Route::get('/statistics', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'getStatistics']);
     Route::get('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'update']);
-    // Releases a work order to its technician ahead of their queue.
-    // Administrators only — enforced here, not just hidden in the UI. This group
-    // has no auth middleware of its own, so auth:sanctum is named explicitly.
-    Route::post('/{id}/enable-technician', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'enableForTechnician'])
-        ->middleware(['auth:sanctum', 'role:administrator,super_admin']);
     Route::delete('/{id}', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'destroy']);
     Route::post('/{id}/upload-images', [\App\Http\Controllers\Api\WorkOrderApiController::class , 'uploadImages']);
 });
@@ -2383,11 +2391,6 @@ Route::prefix('service-orders')->group(function () {
     Route::post('/broadcast-viewing', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'broadcastViewing']);
     Route::get('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'update']);
-    // Releases a service order to its technician ahead of their queue.
-    // Administrators only — enforced here, not just hidden in the UI. This group
-    // has no auth middleware of its own, so auth:sanctum is named explicitly.
-    Route::post('/{id}/enable-technician', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'enableForTechnician'])
-        ->middleware(['auth:sanctum', 'role:administrator,super_admin']);
     Route::post('/{id}/log-blocked-transfer', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'logBlockedTransfer']);
     Route::delete('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'destroy']);
 });
@@ -2417,31 +2420,12 @@ Route::prefix('service_orders')->group(function () {
     Route::post('/broadcast-viewing', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'broadcastViewing']);
     Route::get('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'update']);
-    // Releases a service order to its technician ahead of their queue.
-    // Administrators only — enforced here, not just hidden in the UI. This group
-    // has no auth middleware of its own, so auth:sanctum is named explicitly.
-    Route::post('/{id}/enable-technician', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'enableForTechnician'])
-        ->middleware(['auth:sanctum', 'role:administrator,super_admin']);
     Route::post('/{id}/log-blocked-transfer', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'logBlockedTransfer']);
     Route::delete('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'destroy']);
 });
 
 // Customer Detail Management - Dedicated endpoint for customer details view
 Route::get('/customer-detail/{accountNo}', [\App\Http\Controllers\CustomerDetailController::class , 'show']);
-
-// Where the customer's browser reports a failure this server never saw. The
-// dashboard fetches its balance client side, so a request that never completes
-// leaves no trace here — see ClientLogController for why that matters and why
-// this is kept as narrow as it is. Throttled: it writes to disk and needs no
-// authentication, matching the dashboard endpoints it reports on.
-Route::post('/client-log', [\App\Http\Controllers\ClientLogController::class , 'store'])
-    ->middleware('throttle:30,1');
-
-// Just the amount due, its due date and whether a payment is already in progress - the
-// three things the customer dashboard's balance card and Pay Now button wait on. Split
-// out from the endpoint above because that one loads four relations and computes two
-// payment SUMs the card does not use, and the balance was queued behind all of it.
-Route::get('/customer-detail/{accountNo}/pay-summary', [\App\Http\Controllers\CustomerPaySummaryController::class , 'show']);
 
 // Customer Detail Update Routes - Update customer, billing, and technical details
 Route::put('/customer-detail/{accountNo}', [\App\Http\Controllers\CustomerDetailUpdateController::class , 'update']);
@@ -2852,6 +2836,10 @@ Route::prefix('transactions')->group(function () {
     Route::post('/upload-images', [\App\Http\Controllers\TransactionController::class , 'uploadImages']);
     Route::post('/batch-approve', [\App\Http\Controllers\TransactionController::class , 'batchApprove']);
     Route::get('/{id}', [\App\Http\Controllers\TransactionController::class , 'show']);
+    // Print-ready projection for the receipt / invoice templates. Registered ahead of the
+    // parameterised routes below only for readability — it is a two-segment path, so the
+    // single-segment `/{id}` above can never swallow it.
+    Route::get('/{id}/receipt', [\App\Http\Controllers\TransactionController::class , 'receipt']);
     Route::put('/{id}', [\App\Http\Controllers\TransactionController::class , 'update']);
     Route::post('/{id}/approve', [\App\Http\Controllers\TransactionController::class , 'approve']);
     Route::post('/{id}/revert', [\App\Http\Controllers\TransactionController::class , 'revert']);
@@ -2866,6 +2854,20 @@ Route::prefix('transaction-reverts')->group(function () {
     Route::get('/{id}', [\App\Http\Controllers\TransactionRevertController::class , 'show']);
     Route::put('/{id}/status', [\App\Http\Controllers\TransactionRevertController::class , 'updateStatus']);
     Route::post('/broadcast-viewing', [\App\Http\Controllers\TransactionRevertController::class , 'broadcastViewing']);
+});
+
+/*
+ * Prepaid Expiration Override Routes.
+ *
+ * billing_accounts.prepaid_expires_at is read-only on the Edit Billing Details form; these
+ * endpoints are the only way it moves outside of a payment. Requests are raised from the clock
+ * icon on Customer Details and decided in Billing -> Prepaid Override.
+ */
+Route::prefix('prepaid-overrides')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'index']);
+    Route::post('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'store']);
+    Route::get('/{id}', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'show']);
+    Route::put('/{id}/status', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'updateStatus']);
 });
 
 // Rebates endpoint for frontend
@@ -3546,6 +3548,10 @@ Route::prefix('notifications')->group(function () {
     Route::get('/unread-count', [\App\Http\Controllers\NotificationController::class , 'getUnreadCount']);
     Route::get('/debug-timezone', [\App\Http\Controllers\NotificationController::class , 'debugTimezone']);
     Route::get('/consolidated', [ConsolidatedNotificationController::class , 'index']);
+    // Attention counts for the sidebar menu badges and the header bell. Behind auth:sanctum
+    // because the counts are scoped to the caller's organization — an unauthenticated request
+    // would otherwise be told how much work exists across every tenant.
+    Route::middleware('auth:sanctum')->get('/nav-badges', [\App\Http\Controllers\Api\NavBadgeCountController::class , 'index']);
 });
 
 Route::post('/debug/verify-password', function (Request $request) {
@@ -3581,15 +3587,19 @@ Route::prefix('payments')->group(function () {
     Route::post('/webhook', [\App\Http\Controllers\Api\XenditPaymentController::class , 'handleWebhook']);
     Route::post('/status', [\App\Http\Controllers\Api\XenditPaymentController::class , 'checkPaymentStatus']);
     Route::post('/check-pending', [\App\Http\Controllers\Api\XenditPaymentController::class , 'checkPendingPayment']);
+    // Read-only: amount a prepaid onboarding bill would come to under a different plan.
+    Route::post('/quote-plan-change', [\App\Http\Controllers\Api\XenditPaymentController::class , 'quotePlanChange']);
     Route::post('/account-balance', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAccountBalance']);
     Route::post('/cancel', [\App\Http\Controllers\Api\XenditPaymentController::class , 'cancelPayment']);
+    // Read-only: the convenience fee rate, so a payment screen can disclose it before checkout.
+    Route::get('/convenience-fee', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getConvenienceFee']);
 
     // Test endpoint to verify webhook configuration
     Route::get('/webhook-info', function () {
             return response()->json([
             'status' => 'success',
             'message' => 'Xendit webhook endpoint is configured',
-            'webhook_url' => 'https://backend.atssfiber.ph/api/payments/webhook',
+            'webhook_url' => 'https://backend.gowiser.ph/api/payments/webhook',
             'method' => 'POST',
             'required_header' => 'X-Callback-Token',
             'callback_token_configured' => !empty(env('XENDIT_CALLBACK_TOKEN')),
@@ -3873,20 +3883,6 @@ Route::post('/soa/{id}/generate-pdf', function ($id) {
             ], 404);
         }
 
-        // A customer generates this for their own statement from the portal's
-        // Bills page. The id in the URL is not an authorization boundary, so a
-        // portal caller is pinned to their own account here — otherwise walking
-        // the ids would hand out a print link to anyone's statement. Staff
-        // holding the SOA page are not confined.
-        $customerAccountNo = \App\Support\CustomerScope::accountNo('soa');
-
-        if ($customerAccountNo !== null && $account->account_no !== $customerAccountNo) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Statement of Account not found'
-            ], 404);
-        }
-
         $pdfService = app(\App\Services\GoogleDrivePdfGenerationService::class);
 
         // Debug: Log the SOA data before PDF generation
@@ -4002,16 +3998,40 @@ Route::prefix('cron-test')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| Tools — Mikrotik Radius Tool & SmartOLT Tool
+| SmartOLT Tool — reconciliation, optical crawl, alignment and cleanup
 |--------------------------------------------------------------------------
-|
-| Reconciliation utilities ported from the standalone syncradius.php and
-| smartolt.php operator tools. Both mutate live subscriber state, so every
-| route sits behind Sanctum; the controllers scope each request to the
-| caller's organization unless they are SuperAdmin.
-|
 */
+Route::middleware('auth:sanctum')->prefix('smartolt-reconciliation')->group(function () {
+    Route::get('/state', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'state']);
+    Route::get('/mac-discovery', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'macDiscovery']);
+    // Deprecated alias of /mac-discovery, kept so a deployed frontend on the old
+    // path keeps working. The crawl no longer reads optical power.
+    Route::get('/optical-power', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'opticalPower']);
+    Route::get('/alignment-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'alignmentPreview']);
+    Route::get('/mac-alignment', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'macAlignment']);
+    Route::get('/sn-alignment', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'snAlignment']);
+    Route::get('/profile-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'profilePreview']);
+    Route::get('/cleanup-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'cleanupPreview']);
+    // Progress polling. Jobs are advanced by `cron:tool-jobs-drain`, so these are
+    // plain reads — the tool watches a sweep rather than driving it, and a closed
+    // tab costs nothing. `active-job` lets the page reattach without a remembered id.
+    Route::get('/job-status', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'jobStatus']);
+    Route::get('/active-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'activeJob']);
+    Route::get('/logs', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'logs']);
+    Route::get('/export', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'export']);
 
+    Route::post('/start-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'startJob']);
+    Route::post('/process-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'processJob']);
+    Route::post('/abort-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'abortJob']);
+    Route::post('/undo', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'undo']);
+});
+
+
+/*
+|--------------------------------------------------------------------------
+| MikroTik RADIUS Tool — reconciliation between the User Manager and billing
+|--------------------------------------------------------------------------
+*/
 Route::middleware('auth:sanctum')->prefix('radius-reconciliation')->group(function () {
     Route::get('/servers', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'servers']);
     // The tool opens on /snapshot (cached, no device contact); /data is the
@@ -4023,7 +4043,6 @@ Route::middleware('auth:sanctum')->prefix('radius-reconciliation')->group(functi
     Route::get('/export', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'export']);
 
     Route::post('/sync-password', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'syncPassword']);
-    Route::post('/align-username', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'alignUsername']);
     Route::post('/sync-group-mikrotik', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'syncGroupMikrotik']);
     Route::post('/sync-group-billing', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'syncGroupBilling']);
     Route::post('/restrict', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'restrict']);
@@ -4047,42 +4066,12 @@ Route::middleware('auth:sanctum')->prefix('radius-reconciliation')->group(functi
     Route::post('/update-group', [\App\Http\Controllers\Api\RadiusReconciliationController::class, 'syncGroupMikrotik']);
 });
 
-Route::middleware('auth:sanctum')->prefix('smartolt-reconciliation')->group(function () {
-    Route::get('/state', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'state']);
-    Route::get('/mac-discovery', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'macDiscovery']);
-    // Deprecated alias of /mac-discovery, kept so a deployed frontend on the old
-    // path keeps working. The crawl no longer reads optical power.
-    Route::get('/optical-power', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'opticalPower']);
-    Route::get('/alignment-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'alignmentPreview']);
-    Route::get('/mac-alignment', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'macAlignment']);
-    Route::get('/sn-alignment', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'snAlignment']);
-    Route::get('/profile-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'profilePreview']);
-    Route::get('/cleanup-preview', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'cleanupPreview']);
-    // Progress polling. Jobs are advanced by `cron:tool-jobs-drain`, so these are
-    // plain reads — the tool watches a sweep rather than driving it, and a closed
-    // tab costs nothing. `active-job` lets the page reattach without a remembered id.
-    Route::get('/job-status', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'jobStatus']);
-    Route::get('/active-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'activeJob']);
-    Route::get('/logs', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'logs']);
-    Route::get('/export', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'export']);
-
-    Route::post('/start-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'startJob']);
-    Route::post('/process-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'processJob']);
-    Route::post('/abort-job', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'abortJob']);
-    // Hardware swap for one ONU. Not a job: it is a single call the operator makes
-    // from a confirmation modal and needs the answer to immediately, unlike the
-    // sweeps above which run in slices against a quota.
-    Route::post('/replace-sn', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'replaceSn']);
-    Route::post('/undo', [\App\Http\Controllers\Api\SmartOltReconciliationController::class, 'undo']);
-});
-
 /*
 |--------------------------------------------------------------------------
-| Tools — Xendit Payment Reconciliation
+| Xendit Reconciliation Tool — operator surface over pending payments
 |--------------------------------------------------------------------------
 |
-| The staff-facing counterpart to the public checkout endpoints registered
-| further up this file. These read and settle real money against real
+| These endpoints read and settle real money against real subscriber
 | accounts, so every one of them sits behind Sanctum and is scoped to the
 | caller's organization unless they are SuperAdmin.
 |
@@ -4092,7 +4081,6 @@ Route::middleware('auth:sanctum')->prefix('smartolt-reconciliation')->group(func
 | here and no transaction wrapped around a gateway call.
 |
 */
-
 /*
 |--------------------------------------------------------------------------
 | Billing Reconcile tool
@@ -4120,4 +4108,3 @@ Route::middleware('auth:sanctum')->prefix('xendit-reconciliation')->group(functi
     Route::post('/force-post', [\App\Http\Controllers\Api\XenditPaymentController::class, 'reconciliationForcePost']);
     Route::post('/mark-expired', [\App\Http\Controllers\Api\XenditPaymentController::class, 'reconciliationMarkExpired']);
 });
-

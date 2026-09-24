@@ -36,6 +36,34 @@ class CustomerDetailController extends Controller
             if ($technicalDetail && $technicalDetail->lcpnap) {
                 $lcpNapLocation = LCPNAPLocation::where('lcpnap_name', $technicalDetail->lcpnap)->first();
             }
+
+            // PPPoE credentials come from technical_details, the account's current-state record.
+            // Accounts installed before pppoe_password was added there were not backfilled, so fall
+            // back to the job order the technician set at install — matched on account_id (the
+            // structural link) rather than on the username string, and newest-first so a
+            // re-install wins.
+            $pppoeCredentials = ['username' => null, 'password' => null];
+            if ($technicalDetail) {
+                $pppoeCredentials = [
+                    'username' => $technicalDetail->username,
+                    'password' => $technicalDetail->pppoe_password,
+                ];
+
+                if ($pppoeCredentials['password'] === null || $pppoeCredentials['password'] === '') {
+                    $jobOrderCredentials = \App\Models\JobOrder::where('account_id', $billingAccount->id)
+                        ->whereNotNull('pppoe_password')
+                        ->where('pppoe_password', '!=', '')
+                        ->orderByDesc('id')
+                        ->first(['pppoe_username', 'pppoe_password']);
+
+                    if ($jobOrderCredentials) {
+                        $pppoeCredentials = [
+                            'username' => $pppoeCredentials['username'] ?: $jobOrderCredentials->pppoe_username,
+                            'password' => $jobOrderCredentials->pppoe_password,
+                        ];
+                    }
+                }
+            }
             
             \Log::info('CustomerDetailController - Customer found:', [
                 'customer_id' => $customer ? $customer->id : null,
@@ -92,7 +120,7 @@ class CustomerDetailController extends Controller
                 // Shown as a name; the id travels beside it so an edit form can
                 // write the same referral back instead of turning it into a name.
                 'referredBy' => \App\Support\AgentReferral::displayName($customer->referred_by),
-                'referredByAgentId' => \App\Support\AgentReferral::agentId($customer->referred_by),
+                'referredByAgentId' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                 'desiredPlan' => $customer->desired_plan,
                 'houseFrontPictureUrl' => $customer->house_front_picture_url,
                 'proofOfBillingUrl' => $customer->proof_of_billing_url,
@@ -114,16 +142,7 @@ class CustomerDetailController extends Controller
                     'billingDay' => $billingAccount->billing_day,
                     'billingStatusId' => $billingAccount->billing_status_id,
                     'billingStatusName' => $billingAccount->billingStatus ? $billingAccount->billingStatus->status_name : null,
-                    // Cast, like every other emitter of this figure — the
-                    // pay-summary endpoint and both payment-portal-log
-                    // responses all send a number. Passed through raw, a NULL
-                    // column arrives as null, and the customer dashboard reads
-                    // that as "no figure" rather than "nothing owed": it draws
-                    // "Balance unavailable" off a request that succeeded. That
-                    // distinction is deliberate on the client — a settled
-                    // account must not render a confident zero it never got —
-                    // so the zero has to come from here.
-                    'accountBalance' => (float) $billingAccount->account_balance,
+                    'accountBalance' => $billingAccount->account_balance,
                     'balanceUpdateDate' => $billingAccount->balance_update_date ? $billingAccount->balance_update_date->format('Y-m-d H:i:s') : null,
                     'createdBy' => $billingAccount->created_by,
                     'createdAt' => $billingAccount->created_at ? $billingAccount->created_at->format('Y-m-d H:i:s') : null,
@@ -131,6 +150,23 @@ class CustomerDetailController extends Controller
                     'updatedAt' => $billingAccount->updated_at ? $billingAccount->updated_at->format('Y-m-d H:i:s') : null,
                     'vip_expiration' => $billingAccount->vip_expiration,
                     'vip_remarks' => $billingAccount->vip_remarks,
+                    'generation_type' => $billingAccount->generation_type,
+                    'vat_type' => $billingAccount->vat_type,
+                    // Boolean VAT plus withholding, carried over from the job order at approval.
+                    // vat_type above is the legacy text kept in sync for older readers.
+                    'vat_enabled' => $billingAccount->vat_enabled,
+                    'withholding_enabled' => $billingAccount->withholding_enabled,
+                    'withholding_percentage' => $billingAccount->withholding_percentage,
+                    'prepaid_expires_at' => $billingAccount->prepaid_expires_at ? $billingAccount->prepaid_expires_at->format('Y-m-d H:i:s') : null,
+                    // Prepaid plan change bought but not yet in effect — the customer app shows
+                    // this so they can see the switch they already paid for and when it lands.
+                    'pending_plan_id' => $billingAccount->pending_plan_id,
+                    'pending_plan_name' => $billingAccount->pending_plan_id
+                        ? \App\Models\AppPlan::where('id', $billingAccount->pending_plan_id)->value('plan_name')
+                        : null,
+                    'pending_plan_effective_at' => $billingAccount->pending_plan_effective_at
+                        ? $billingAccount->pending_plan_effective_at->format('Y-m-d H:i:s')
+                        : null,
                 ],
                 
                 'technicalDetails' => $technicalDetail ? [
@@ -149,6 +185,10 @@ class CustomerDetailController extends Controller
                     'lcpnap' => $technicalDetail->lcpnap,
                     'usageTypeId' => $technicalDetail->usage_type_id,
                     'usageType' => $technicalDetail->usage_type,
+                    // Resolved above: technical_details.pppoe_password, falling back to the install
+                    // job order for accounts predating that column.
+                    'pppoePassword' => $pppoeCredentials['password'],
+                    'pppoeUsername' => $pppoeCredentials['username'],
                     'createdBy' => $technicalDetail->created_by,
                     'updatedBy' => $technicalDetail->updated_by,
                 ] : null,
@@ -156,9 +196,24 @@ class CustomerDetailController extends Controller
                 'createdAt' => $customer->created_at?->format('Y-m-d H:i:s'),
                 'updatedAt' => $customer->updated_at?->format('Y-m-d H:i:s'),
                 
+                // Connectivity. Every key below is additive to what callers already read, so the
+                // response contract is unchanged.
+                //
+                // session_status alone was not enough to tell the truth. The Customer list gets
+                // active_sessions from BillingController and treats a live RADIUS session as
+                // connectivity; this endpoint did not return it, so the Customer Details panel had
+                // only the 2-minute-old session_status to go on and rendered OFFLINE for a customer
+                // the list beside it showed as online. active_sessions is returned here so the two
+                // resolve identically.
                 'onlineSessionStatus' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->session_status : null,
                 'session_group' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->session_group : null,
                 'session_ip' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->ip_address : null,
+                'active_sessions' => $billingAccount->onlineStatus ? (int) $billingAccount->onlineStatus->active_sessions : 0,
+                // When RADIUS last wrote this row. Lets the panel tell "offline" apart from
+                // "nobody has synced this account in hours".
+                'session_updated_at' => $billingAccount->onlineStatus && $billingAccount->onlineStatus->updated_at
+                    ? $billingAccount->onlineStatus->updated_at->format('Y-m-d H:i:s')
+                    : null,
                 'onlineStatusData' => $billingAccount->onlineStatus ? $billingAccount->onlineStatus->toArray() : null,
             ];
             

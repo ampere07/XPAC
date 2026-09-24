@@ -15,6 +15,7 @@ import { User } from '../types/api';
 import { StandardPage, RecordCard } from '../components/common';
 import apiClient from '../config/api';
 import { usePermissions } from '../hooks/usePermissions';
+import { usePayoutApproval } from '../hooks/usePayoutApproval';
 
 // Forced light mode to match the ~50 already-migrated pages.
 const isDarkMode = false;
@@ -63,14 +64,12 @@ const AgentPayout: React.FC = () => {
     const [showDetails, setShowDetails] = useState(false);
     const [showAgentPayoutModal, setShowAgentPayoutModal] = useState(false);
 
-    // Settling a pending payout. The API demands 'agent-payout.approve' for
-    // both verbs, so the buttons are offered on the same key — a reader without
-    // it never sees them rather than seeing them and being refused.
-    const { can } = usePermissions();
-    const canApprove = can('agent-payout.approve');
-    const [approveRecord, setApproveRecord] = useState<any | null>(null);
-    const [approvalPending, setApprovalPending] = useState(false);
-
+    // Settling a pending payout needs agent-payout.approve (seeded:
+    // Administrator and SuperAdmin), and the API refuses it for anyone else, so
+    // a reader without the key never sees the buttons rather than seeing them
+    // and being refused.
+    const { can, ready: permissionsReady } = usePermissions();
+    const canApprove = permissionsReady && can('agent-payout.approve');
     const { fetchAgents } = useAgentStore();
 
     const fetchData = async () => {
@@ -78,41 +77,19 @@ const AgentPayout: React.FC = () => {
     };
 
     /**
-     * Approving collects the payout's details first — amount, type, proof and
-     * remarks — because a payout raised from an invoice was recorded without
-     * them. The form posts to the same approve endpoint, so this opens it
-     * rather than approving with nothing.
-     *
-     * Rejecting moves no money, so it posts straight away.
+     * Approve / reject a Pending payout. See hooks/usePayoutApproval: a record
+     * that already has an amount and proof is approved as it stands (after a
+     * confirmation), never re-typed; only an invoice-raised record without
+     * those details opens the approval form below. Rejecting also confirms.
      */
-    const handleApproval = async (record: any, action: 'approve' | 'reject') => {
-        if (approvalPending) return;
-
-        if (action === 'approve') {
-            setApproveRecord(record);
-            return;
-        }
-
-        setApprovalPending(true);
-        try {
-            const res = await apiClient.post<{ success: boolean; message?: string }>(
-                `/commissions/history/${record.id}/reject`
+    const { handleApproval, approvalPending, approveRecord, setApproveRecord } = usePayoutApproval(
+        (settled, status) => {
+            setSelectedRecord((current: any) =>
+                current && current.id === settled?.id ? { ...current, status } : current
             );
-            if (!res.data?.success) {
-                throw new Error(res.data?.message || 'Failed to reject the payout.');
-            }
-            await handleRefresh();
-            setShowDetails(false);
-            setSelectedRecord(null);
-        } catch (err: any) {
-            Alert.alert(
-                'Reject failed',
-                err?.response?.data?.message || err?.message || 'Failed to reject the payout.'
-            );
-        } finally {
-            setApprovalPending(false);
+            handleRefresh();
         }
-    };
+    );
 
     const handleRefresh = async () => {
         setRefreshing(true);
@@ -459,8 +436,9 @@ const AgentPayout: React.FC = () => {
                 }}
             />
 
-            {/* The same form in approve mode: every field required, written onto
-                the record that already exists rather than raising a new one. */}
+            {/* The same form in approve mode, only for a record still missing its
+                amount / proof (raised from an invoice). It keeps the record's
+                own type and writes onto the record rather than raising a new one. */}
             <AgentPayoutModal
                 isOpen={approveRecord !== null}
                 onClose={() => setApproveRecord(null)}
@@ -480,6 +458,8 @@ const AgentPayout: React.FC = () => {
                 }}
                 approveId={approveRecord?.id}
                 approveRefNumber={approveRecord?.ref_number}
+                approveType={approveRecord?.type ?? null}
+                approveAmount={approveRecord?.total_amount ?? null}
                 agentId={approveRecord?.agent_id}
                 agentName={approveRecord?.agent_name}
             />

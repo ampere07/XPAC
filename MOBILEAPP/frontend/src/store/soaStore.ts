@@ -56,14 +56,6 @@ interface SOAState {
     soaRecords: SOARecordUI[];
     totalCount: number;
     isLoading: boolean;
-    /**
-     * True while the chunk loop is still pulling the rest of the table.
-     *
-     * isLoading drops to false as soon as the first chunk lands so the list can
-     * paint, which leaves the poll free to merge into an array this loop is about
-     * to overwrite with its own snapshot. Writers wait on this flag too.
-     */
-    isBackgroundLoading: boolean;
     error: string | null;
     lastUpdated: Date | null;
     fetchSOARecords: (force?: boolean, silent?: boolean) => Promise<void>;
@@ -135,16 +127,14 @@ export const useSOAStore = create<SOAState>((set, get) => ({
     soaRecords: [],
     totalCount: 0,
     isLoading: false,
-    isBackgroundLoading: false,
     error: null,
     lastUpdated: null,
 
     fetchSOARecords: async (force = false, silent = false) => {
-        const { soaRecords, isLoading, totalCount, isBackgroundLoading } = get();
+        const { soaRecords, isLoading, totalCount } = get();
 
-        // Lock fetching to avoid overlapping loops. isLoading alone did not do
-        // that: it is cleared after the first chunk, while the loop below runs on.
-        if (isLoading || isBackgroundLoading) return;
+        // Lock fetching to avoid overlapping loops
+        if (isLoading) return;
 
         // Prevent re-fetching if we already have data and not forced
         if (!force && soaRecords.length >= totalCount && totalCount > 0) {
@@ -192,8 +182,6 @@ export const useSOAStore = create<SOAState>((set, get) => ({
                 let hasMore = firstResult.pagination?.has_more || allFetchedRecords.length < dbTotal;
                 currentFetchPage++;
 
-                set({ isBackgroundLoading: hasMore });
-
                 while (hasMore) {
                     try {
                         const result = await soaService.getAllStatementsWithTotal(false, currentFetchPage, CHUNK_SIZE);
@@ -230,7 +218,7 @@ export const useSOAStore = create<SOAState>((set, get) => ({
                 set({ error: 'Failed to load SOA records. Please try again.' });
             }
         } finally {
-            set({ isLoading: false, isBackgroundLoading: false });
+            set({ isLoading: false });
         }
     },
 
@@ -243,12 +231,8 @@ export const useSOAStore = create<SOAState>((set, get) => ({
     },
 
     pollLatestUpdates: async () => {
-        const { lastUpdated, soaRecords, totalCount, isBackgroundLoading } = get();
+        const { lastUpdated, soaRecords, totalCount } = get();
         if (!lastUpdated || soaRecords.length === 0) return;
-
-        // The merge below rebuilds the array from current state; the chunk loop
-        // would then write its own snapshot over the top and drop the update.
-        if (isBackgroundLoading) return;
 
         try {
             const isoString = lastUpdated.toISOString();

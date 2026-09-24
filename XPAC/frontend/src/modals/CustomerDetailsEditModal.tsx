@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ChevronDown, Calendar, Camera, Search } from 'lucide-react';
+import { X, ChevronDown, Calendar, Camera, Search, Loader2 } from 'lucide-react';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
 import { locationDetailService, LocationDetail } from '../services/locationDetailService';
@@ -42,6 +42,39 @@ interface ModalConfig {
   onCancel?: () => void;
 }
 
+/** Canonical Billing Type values. Labels and stored values are the same. */
+const GENERATION_TYPES = ['Prepaid', 'Postpaid'] as const;
+
+
+/**
+ * Map any stored generation_type onto a canonical value so the <select> can match it.
+ *
+ * Rows written before the rename hold 'Pre Paid' / 'Post Paid'; without this they would show as
+ * an unselected dropdown and a careless save would blank the field.
+ */
+const normalizeGenerationType = (raw?: string | null): string => {
+  const letters = String(raw ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (letters === 'prepaid') return 'Prepaid';
+  if (letters === 'postpaid') return 'Postpaid';
+  return '';
+};
+
+/**
+ * Format a stored datetime for a `datetime-local` input ('YYYY-MM-DDTHH:mm').
+ *
+ * prepaid_expires_at carries a time (periods commonly end at 23:59), so a plain date input would
+ * silently truncate it to 00:00 on save and cut the customer's period short by up to a day.
+ * Parsed by string rather than via `new Date()` to avoid a timezone shift moving the date.
+ */
+const formatDateTimeForInput = (raw?: string | null): string => {
+  if (!raw) return '';
+  const text = String(raw).trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2})?:?(\d{2})?/);
+  if (!match) return '';
+  const [, y, mo, d, h, mi] = match;
+  return `${y}-${mo}-${d}T${h ?? '00'}:${mi ?? '00'}`;
+};
+
 const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   isOpen,
   onClose,
@@ -76,6 +109,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
   const [inventoryRouterModels, setInventoryRouterModels] = useState<InventoryItem[]>([]);
   const [originalRouterModemSn, setOriginalRouterModemSn] = useState('');
+
+  // Modem SN validation against SmartOLT, mirroring JobOrderDoneFormModal: the VALIDATE button
+  // verifies the serial and auto-populates Router Model from the ONU type it returns.
+  const [isValidatingSN, setIsValidatingSN] = useState(false);
+  const [isSNValidated, setIsSNValidated] = useState(false);
+  const [validateCooldown, setValidateCooldown] = useState(0);
+
+  // Cooldown timer for the SN validate button
+  useEffect(() => {
+    if (validateCooldown > 0) {
+      const timer = setTimeout(() => {
+        setValidateCooldown(prev => prev - 1);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [validateCooldown]);
   const [agents, setAgents] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
 
@@ -219,7 +268,36 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           billing_day: recordData.billing_day || recordData.billingDay || recordData.Billing_Day || recordData.billingAccount?.billing_day || '',
           date_installed: formatDateForInput(recordData.date_installed || recordData.dateInstalled || recordData.Date_Installed || recordData.billingAccount?.date_installed || ''),
           vip_expiration: formatDateForInput(recordData.vip_expiration || recordData.vipExpiration || ''),
-          vip_remarks: recordData.vip_remarks || recordData.vipRemarks || recordData.billingAccount?.vip_remarks || ''
+          vip_remarks: recordData.vip_remarks || recordData.vipRemarks || recordData.billingAccount?.vip_remarks || '',
+          // Normalise the stored value to the canonical spelling so the <select> matches an option
+          // even for rows still holding the older 'Pre Paid' / 'Post Paid'.
+          generation_type: normalizeGenerationType(
+            recordData.generation_type || recordData.generationType || recordData.billingAccount?.generation_type || ''
+          ),
+          // VAT is a boolean now: unchecked = No VAT, checked = VAT Included (added on top).
+          // Accounts written before vat_enabled existed only carry the legacy free-text mode, so
+          // fall back to it. Note the legacy DB value for "VAT is added" is the string
+          // 'Excluded Vat' — the old three-mode vocabulary, unrelated to today's label.
+          vat_enabled: (() => {
+            const stored = recordData.vat_enabled ?? recordData.vatEnabled ?? recordData.billingAccount?.vat_enabled;
+            if (stored !== undefined && stored !== null) return Boolean(stored);
+            const legacy = String(
+              recordData.vat_type || recordData.vatType || recordData.billingAccount?.vat_type || ''
+            ).toLowerCase().replace(/[^a-z]/g, '');
+            return legacy.includes('exclu');
+          })(),
+          withholding_enabled: Boolean(
+            recordData.withholding_enabled ?? recordData.withholdingEnabled ?? recordData.billingAccount?.withholding_enabled ?? false
+          ),
+          // Kept as a string for the text input; '' when nothing is configured.
+          withholding_percentage: (() => {
+            const stored = recordData.withholding_percentage ?? recordData.withholdingPercentage ?? recordData.billingAccount?.withholding_percentage;
+            return stored === undefined || stored === null || stored === '' ? '' : String(Number(stored));
+          })(),
+          // Only meaningful for prepaid accounts; the field is hidden for postpaid.
+          prepaid_expires_at: formatDateTimeForInput(
+            recordData.prepaid_expires_at || recordData.prepaidExpiration || recordData.billingAccount?.prepaid_expires_at || ''
+          )
         });
       } else if (editType === 'technical_details') {
         let lcpnapValue = recordData.lcpnap || recordData.LCPNAP || '';
@@ -255,6 +333,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
         const initialSn = recordData.router_modem_sn || recordData.routerModemSn || recordData.routerModemSN || '';
         setOriginalRouterModemSn(initialSn);
+
+        // An already-saved SN counts as validated, so simply reopening the modal to change an
+        // unrelated field does not force a pointless re-validation. Editing the SN clears this.
+        setIsSNValidated(!!initialSn);
+        setValidateCooldown(0);
       }
     }
     // Using granular IDs instead of the whole recordData object prevents 
@@ -438,6 +521,99 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
 
   /**
+   * Verify the Modem SN against SmartOLT and auto-fill Router Model from the ONU type.
+   * Same behaviour as the VALIDATE button in JobOrderDoneFormModal.
+   */
+  const handleValidateSN = async () => {
+    const sn = String(formData.router_modem_sn || '').trim();
+
+    if (!sn) {
+      setErrors(prev => ({ ...prev, router_modem_sn: 'Please enter a Modem SN first' }));
+      return;
+    }
+
+    // Guard against double-submits and against hammering the SmartOLT API.
+    if (isValidatingSN || validateCooldown > 0) return;
+
+    const accountNoForValidation =
+      recordData?.accountNo || recordData?.account_no || recordData?.AccountNo ||
+      recordData?.applicationId || recordData?.id || '';
+
+    if (!accountNoForValidation) {
+      // Without it the backend cannot tell "this account's own modem" from "someone else's",
+      // and would reject the account's own serial. Better to say so than to show a duplicate
+      // error that looks like the serial is taken.
+      console.warn('[SmartOLT] No account number on the record; cannot scope the duplicate check.');
+    }
+
+    setIsValidatingSN(true);
+    setValidateCooldown(30);
+
+    try {
+      const response = await apiClient.get('/smart-olt/validate-sn', {
+        params: {
+          sn,
+          // Scopes the backend's duplicate check to OTHER accounts. Without this the account's
+          // own stored serial reads as "already exists in our system", which stopped staff from
+          // re-validating an unchanged modem just to pull its router model. A serial held by a
+          // different account is still rejected.
+          //
+          // applicationId is part of the fallback chain on purpose: billingService's detail
+          // mapper populates ONLY applicationId, so relying on accountNo alone would send an
+          // empty value on that path and silently reinstate the duplicate error. Mirrors how
+          // CustomerDetails resolves the account number.
+          account_no: accountNoForValidation
+        },
+        timeout: 15000
+      });
+
+      const result: any = response?.data;
+
+      if (!result || !result.success) {
+        const msg = result?.message || 'Serial Number not found in SmartOLT system.';
+        setModal({ isOpen: true, type: 'error', title: 'Validation Error', message: msg });
+        setErrors(prev => ({ ...prev, router_modem_sn: msg }));
+        setIsSNValidated(false);
+        return;
+      }
+
+      // Success — mark validated and auto-populate the Router Model.
+      setIsSNValidated(true);
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors.router_modem_sn;
+        return newErrors;
+      });
+
+      const onuType = result.data?.onu_type_name || result.onus?.[0]?.onu_type_name;
+      if (onuType) {
+        // Router Model is a free-text SearchableField, so a model that is not in the inventory
+        // list still displays and saves correctly.
+        setFormData((prev: any) => ({ ...prev, router_model: onuType }));
+        setErrors(prev => {
+          const newErrors = { ...prev };
+          delete newErrors.router_model;
+          return newErrors;
+        });
+      }
+
+      setModal({
+        isOpen: true,
+        type: 'success',
+        title: 'Success',
+        message: 'Modem Serial Number is valid and verified in SmartOLT.'
+      });
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.message || error.message || 'System communication error. Please check your internet.';
+      setModal({ isOpen: true, type: 'error', title: 'Validation Error', message: errorMsg });
+      setErrors(prev => ({ ...prev, router_modem_sn: errorMsg }));
+      setIsSNValidated(false);
+    } finally {
+      setIsValidatingSN(false);
+    }
+  };
+
+  /**
    * Keep the agent's name on screen and their id in the form.
    *
    * SearchableField hands over the option it rendered, so the id comes from the
@@ -486,6 +662,12 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   }, [isOpen, agents, editType, referredByRaw, referredByAgentIdProp]);
 
   const handleInputChange = (field: string, value: any) => {
+    // Any change to the Modem SN invalidates a prior validation, so a swapped serial can never
+    // be saved on the strength of the previous one's check.
+    if (field === 'router_modem_sn') {
+      setIsSNValidated(String(value || '').trim() === String(originalRouterModemSn || '').trim());
+    }
+
     setFormData((prev: any) => {
       const newData = { ...prev, [field]: value };
 
@@ -495,6 +677,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           newData.barangay = '';
         } else if (field === 'city') {
           newData.barangay = '';
+        }
+      } else if (editType === 'billing_details') {
+        // Clear the hidden input so an unchecked box never saves a stale percentage.
+        if (field === 'withholding_enabled' && value === false) {
+          newData.withholding_percentage = '';
         }
       } else if (editType === 'technical_details') {
         if (field === 'lcpnap') {
@@ -699,6 +886,14 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     }
   };
 
+  /**
+   * Prepaid accounts bill on a rolling 30-day period that starts when they pay, so they have no
+   * fixed billing day — the field is hidden and not required for them, and the prepaid expiry is
+   * shown in its place. Letters-only compare so a row still holding 'Pre Paid' also resolves.
+   */
+  const isPrepaidBillingType =
+    String(formData.generation_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -713,7 +908,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       if (!formData.barangay?.trim()) newErrors.barangay = 'Barangay is required';
     } else if (editType === 'billing_details') {
       if (!formData.billing_status_id?.toString().trim()) newErrors.billing_status_id = 'Billing Status is required';
-      if (!formData.billing_day) newErrors.billing_day = 'Billing Day is required';
+      // Not required for prepaid: the field is hidden, so requiring it would block the save with
+      // an error the user cannot see or fix.
+      if (!isPrepaidBillingType && !formData.billing_day) newErrors.billing_day = 'Billing Day is required';
+
+      // Only validated when the checkbox is on: the input is hidden otherwise, so requiring it
+      // would block the save with an error the user cannot see or fix.
+      if (formData.withholding_enabled) {
+        const withholdingPercentage = parseFloat(String(formData.withholding_percentage));
+        if (isNaN(withholdingPercentage)) {
+          newErrors.withholding_percentage = 'Withholding Percentage is required';
+        } else if (withholdingPercentage <= 0) {
+          newErrors.withholding_percentage = 'Withholding Percentage must be greater than 0';
+        } else if (withholdingPercentage > 100) {
+          newErrors.withholding_percentage = 'Withholding Percentage cannot exceed 100';
+        }
+      }
 
       const isVipStatus = billingStatuses.find(s => s.id.toString() === formData.billing_status_id?.toString())?.status_name.toUpperCase() === 'VIP' || formData.billing_status_id?.toString() === '7';
       if (isVipStatus) {
@@ -757,9 +967,13 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       return;
     }
 
-    // SmartOLT Validation Logic for Technical Details (skip if SN hasn't changed)
+    // SmartOLT Validation Logic for Technical Details (skip if SN hasn't changed).
+    //
+    // Retained as a backstop for anyone who types a new SN and saves without pressing VALIDATE.
+    // Skipped when isSNValidated is set, so pressing the button does not cost a second identical
+    // SmartOLT call on save.
     const snChanged = formData.router_modem_sn?.trim() !== originalRouterModemSn?.trim();
-    if (editType === 'technical_details' && formData.connection_type === 'Fiber' && formData.router_modem_sn?.trim() && snChanged) {
+    if (editType === 'technical_details' && formData.connection_type === 'Fiber' && formData.router_modem_sn?.trim() && snChanged && !isSNValidated) {
       try {
         setLoading(true);
 
@@ -849,6 +1063,14 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
       const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId };
 
+      /*
+       * prepaid_expires_at is loaded into the form purely to be DISPLAYED — the input is
+       * read-only and the field now moves only through the Prepaid Override approval workflow.
+       * Stripped before the request so an ordinary billing-details save does not post a value it
+       * has no authority over. The backend drops it as well, but it logs a warning when it does,
+       * and every save of a prepaid account would otherwise raise one for a change nobody made.
+       */
+      delete dataWithUpdatedBy.prepaid_expires_at;
       // referredBy is the name the field showed; the column takes the agent's
       // id. Only touched when this form carries the field at all — the billing
       // and technical tabs share this handler and have no referral on them.
@@ -1427,6 +1649,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                 )}
 
+                {/* Billing Day is hidden for prepaid accounts — they bill on a rolling period,
+                    not a fixed day — and the prepaid expiry takes its place below. */}
+                {!isPrepaidBillingType && (
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Billing Day (1-30)<span className="text-red-500">*</span>
@@ -1462,6 +1687,144 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
                   />
                   {errors.billing_day && <p className="text-red-500 text-xs mt-1">{errors.billing_day}</p>}
+                </div>
+                )}
+
+                {/* Billing Type — the generation_type column. Switching this moves the account
+                    between the fixed-billing-day flow and the rolling prepaid-period flow. */}
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Billing Type
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={formData.generation_type || ''}
+                      onChange={(e) => handleInputChange('generation_type', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                        }`}
+                    >
+                      <option value="">Select Billing Type</option>
+                      {GENERATION_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+                  </div>
+                  {isPrepaidBillingType && (
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Prepaid accounts are billed on a rolling 30-day period that starts when they
+                      pay, so they have no fixed billing day.
+                    </p>
+                  )}
+                </div>
+
+                {/* Prepaid Expiration — only meaningful for prepaid accounts, so it is shown only
+                    when Billing Type is Prepaid. This is the end of the paid-for service period:
+                    it gates access (AutoDisconnectService restricts once it lapses) and is what a
+                    queued plan change waits for.
+
+                    READ-ONLY for every role. A mistyped date here could hand out — or take away —
+                    months of service with nothing recording who did it or why, so adjustments go
+                    through the Prepaid Override approval queue instead: raise one from the clock
+                    icon on Customer Details, and a second person approves it in Billing ->
+                    Prepaid Override. The backend drops this field on this endpoint too, so a stale
+                    client cannot write it either. */}
+                {isPrepaidBillingType && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Prepaid Expiration
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={formData.prepaid_expires_at || ''}
+                      readOnly
+                      disabled
+                      tabIndex={-1}
+                      aria-readonly="true"
+                      title="Prepaid expiration is adjusted through the Prepaid Override approval workflow"
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors cursor-not-allowed opacity-70 ${isDarkMode ? 'border-gray-700 bg-gray-800 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'
+                        }`}
+                    />
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      {formData.prepaid_expires_at
+                        ? 'End of the current paid period. Service is restricted once this passes; a payment extends it by 30 days.'
+                        : 'Empty means the prepaid clock has not started — it begins on their first payment.'}
+                    </p>
+                    <p className={`text-xs mt-1 font-medium ${isDarkMode ? 'text-yellow-500' : 'text-yellow-700'}`}>
+                      Not editable here. Use the Prepaid Override action on Customer Details to
+                      request a change — it takes effect once approved.
+                    </p>
+                  </div>
+                )}
+
+                {/* VAT — a boolean now, matching the JO Assign Form. 'Vat Included' is gone: the
+                    only two computations are "bill the plan price" and "add VAT on top". */}
+                <div>
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.vat_enabled)}
+                      onChange={(e) => handleInputChange('vat_enabled', e.target.checked)}
+                      className="w-4 h-4 rounded cursor-pointer"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>VAT</span>
+                  </label>
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {formData.vat_enabled
+                      ? 'VAT Included — VAT is added on top of the plan price.'
+                      : 'No VAT — the customer is billed the plan price.'}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(formData.withholding_enabled)}
+                      onChange={(e) => handleInputChange('withholding_enabled', e.target.checked)}
+                      className="w-4 h-4 rounded cursor-pointer"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Withholding</span>
+                  </label>
+
+                  {formData.withholding_enabled && (
+                    <div className="mt-3">
+                      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        Withholding Percentage<span className="text-red-500">*</span>
+                      </label>
+                      <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+                        } ${errors.withholding_percentage ? 'border-red-500' : ''}`}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          value={formData.withholding_percentage ?? ''}
+                          onChange={(e) => handleInputChange('withholding_percentage', e.target.value)}
+                          placeholder="e.g. 5"
+                          className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'
+                            }`}
+                        />
+                        <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>%</span>
+                      </div>
+                      {errors.withholding_percentage && <p className="text-red-500 text-xs mt-1">{errors.withholding_percentage}</p>}
+                      <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        Deducted from the VAT-inclusive subtotal when the bill is generated.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1582,23 +1945,44 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Router Modem SN
                   </label>
-                  <input
-                    type="text"
-                    value={formData.router_modem_sn || ''}
-                    onChange={(e) => handleInputChange('router_modem_sn', e.target.value)}
-                    onFocus={(e) => {
-                      if (colorPalette?.primary) {
-                        e.currentTarget.style.borderColor = colorPalette.primary;
-                        e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
-                      }
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
-                      e.currentTarget.style.boxShadow = 'none';
-                    }}
-                    className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                      }`}
-                  />
+                  <div className="flex items-center gap-2">
+                    {/* Verifies the serial with SmartOLT and fills Router Model from the ONU
+                        type it returns. Only Fiber connections exist in SmartOLT. */}
+                    {formData.connection_type === 'Fiber' && (
+                      <button
+                        type="button"
+                        onClick={handleValidateSN}
+                        disabled={isValidatingSN || validateCooldown > 0}
+                        className={`px-4 py-2 rounded text-white text-sm font-bold whitespace-nowrap flex items-center justify-center min-w-[90px] ${(isValidatingSN || validateCooldown > 0) ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600'}`}
+                      >
+                        {isValidatingSN ? (
+                          <Loader2 className="animate-spin" size={16} />
+                        ) : validateCooldown > 0 ? (
+                          `${validateCooldown}s`
+                        ) : (
+                          'VALIDATE'
+                        )}
+                      </button>
+                    )}
+                    <input
+                      type="text"
+                      value={formData.router_modem_sn || ''}
+                      onChange={(e) => handleInputChange('router_modem_sn', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.router_modem_sn ? 'border-red-500' : ''} ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
+                        }`}
+                    />
+                  </div>
+                  {errors.router_modem_sn && <p className="text-red-500 text-xs mt-1">{errors.router_modem_sn}</p>}
                 </div>
 
                 {(formData.connection_type === 'Antenna' || formData.connection_type === 'Local') && (

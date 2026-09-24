@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Dimensions,
+} from 'react-native';
 import { Picker } from '@react-native-picker/picker';
+import { RefreshCw, Download } from 'lucide-react-native';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { StandardPage, RecordCard } from '../components/common';
 import { useOverdueStore } from '../store/overdueStore';
 import { Overdue } from '../services/overdueService';
 import { exportToCSV } from '../utils/exportUtils';
@@ -42,8 +51,9 @@ const OverduePage: React.FC = () => {
 
   const { overdueRecords, totalCount, isLoading, error, fetchOverdueRecords, refreshOverdueRecords, silentRefresh } = useOverdueStore();
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const primaryColor = colorPalette?.primary || '#7c3aed';
+  const { width } = Dimensions.get('window');
+  const isTablet = width >= 768;
 
   useEffect(() => {
     const fetchColorPalette = async () => {
@@ -106,96 +116,57 @@ const OverduePage: React.FC = () => {
     exportToCSV('overdue_records', allColumns, filtered, renderCell);
   };
 
-  // A narrowed list can be shorter than the page the reader is on.
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, selectedDate]);
+  const renderItem = ({ item }: { item: Overdue }) => {
+    const r = item as any;
+    return (
+      <View style={{ backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingHorizontal: 16, paddingVertical: 14 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 }} numberOfLines={1}>
+            {r.full_name || 'Unknown'}
+          </Text>
+          {!!r.overdue_date && (
+            <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: '#fee2e2' }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#b91c1c' }}>{formatDate(r.overdue_date)}</Text>
+            </View>
+          )}
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 6 }}>
+          {!!r.account_no && <Field label="Acct" value={String(r.account_no)} />}
+          {!!r.plan && <Field label="Plan" value={String(r.plan)} />}
+          {!!r.contact_number && <Field label="Contact" value={String(r.contact_number)} />}
+        </View>
+        {!!r.email_address && <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>{r.email_address}</Text>}
+        {!!r.address && <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }} numberOfLines={1}>{r.address}</Text>}
+      </View>
+    );
+  };
 
   return (
-    <StandardPage<Overdue>
-      data={filtered}
-      keyExtractor={(item, idx) => String((item as any).id ?? idx)}
-      renderItem={(item) => {
-        const r = item as any;
-        return (
-          <RecordCard
-            title={r.full_name || 'Unknown'}
-            subtitle={[
-              r.account_no ? `Acct: ${r.account_no}` : null,
-              r.plan ? `Plan: ${r.plan}` : null,
-              r.contact_number ? `Contact: ${r.contact_number}` : null,
-            ].filter(Boolean).join('  |  ')}
-            showStatus={false}
-            right={
-              r.overdue_date ? (
-                <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: '#fee2e2' }}>
-                  <Text style={{ fontSize: 11, fontWeight: '600', color: '#b91c1c' }}>{formatDate(r.overdue_date)}</Text>
-                </View>
-              ) : undefined
-            }
-          >
-            {!!r.email_address && <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>{r.email_address}</Text>}
-            {!!r.address && (
-              <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }} numberOfLines={1}>
-                {r.address}
-              </Text>
-            )}
-          </RecordCard>
-        );
-      }}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search Overdue"
-      onExport={handleExport}
-      exportDisabled={filtered.length === 0}
-      onRefresh={() => fetchOverdueRecords(true)}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && overdueRecords.length === 0}
-      loadingText="Loading overdue records..."
-      error={error}
-      onRetry={() => fetchOverdueRecords(true)}
-      emptyText="No overdue records found"
-      // The store keeps pulling pages in the background; say so rather than
-      // leaving a spinner pinned to the bottom of the list.
-      progressText={isLoading && overdueRecords.length > 0 ? `Loading more records... (${overdueRecords.length}${totalCount ? `/${totalCount}` : ''})` : null}
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={setItemsPerPage}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      header={
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            backgroundColor: '#ffffff',
-            borderBottomWidth: 1,
-            borderBottomColor: '#e5e7eb',
-          }}
-        >
-          <View
-            style={{
-              borderWidth: 1,
-              borderColor: '#d1d5db',
-              borderRadius: 6,
-              overflow: 'hidden',
-              flex: 1,
-              marginRight: 12,
-              height: 40,
-              justifyContent: 'center',
-            }}
-          >
-            <Picker
-              selectedValue={selectedDate}
-              onValueChange={(v) => setSelectedDate(v)}
-              style={{ color: '#111827' }}
-              dropdownIconColor="#6b7280"
-            >
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: isTablet ? 16 : 60,
+          paddingBottom: 12,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          gap: 10,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <GlobalSearch searchQuery={searchQuery} setSearchQuery={setSearchQuery} isDarkMode={isDarkMode} colorPalette={colorPalette} placeholder="Search Overdue" />
+          <TouchableOpacity onPress={handleExport} style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor, alignItems: 'center', justifyContent: 'center' }}>
+            <Download size={16} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => fetchOverdueRecords(true)} style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor, alignItems: 'center', justifyContent: 'center' }}>
+            {isLoading ? <ActivityIndicator size="small" color="#ffffff" /> : <RefreshCw size={16} color="#ffffff" />}
+          </TouchableOpacity>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6, overflow: 'hidden', flex: 1, marginRight: 12, height: 40, justifyContent: 'center' }}>
+            <Picker selectedValue={selectedDate} onValueChange={(v) => setSelectedDate(v)} style={{ color: '#111827' }} dropdownIconColor="#6b7280">
               <Picker.Item label="All Overdue Dates" value="All" />
               {distinctDates.map((d) => (
                 <Picker.Item key={d} label={formatDate(d)} value={d} />
@@ -203,13 +174,55 @@ const OverduePage: React.FC = () => {
             </Picker>
           </View>
           <Text style={{ fontSize: 12, color: '#6b7280' }}>
-            {filtered.length}
-            {totalCount ? ` / ${totalCount}` : ''}
+            {filtered.length}{totalCount ? ` / ${totalCount}` : ''}
           </Text>
         </View>
-      }
-    />
+      </View>
+
+      {/* Body */}
+      {isLoading && overdueRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ color: '#6b7280', marginTop: 12 }}>Loading overdue records...</Text>
+        </View>
+      ) : error && overdueRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80, gap: 12 }}>
+          <Text style={{ fontSize: 16, fontWeight: '600', color: '#ef4444', textAlign: 'center', paddingHorizontal: 24 }}>{error}</Text>
+          <TouchableOpacity onPress={() => fetchOverdueRecords(true)} style={{ paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, backgroundColor: primaryColor }}>
+            <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(item, idx) => String((item as any).id ?? idx)}
+          renderItem={renderItem}
+          initialNumToRender={20}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />}
+          ListEmptyComponent={
+            <View style={{ paddingVertical: 80, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280' }}>No overdue records found</Text>
+            </View>
+          }
+          ListFooterComponent={
+            isLoading && overdueRecords.length > 0 ? (
+              <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color={primaryColor} />
+                <Text style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>Loading more...</Text>
+              </View>
+            ) : null
+          }
+        />
+      )}
+    </View>
   );
 };
+
+const Field: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <Text style={{ fontSize: 11, color: '#6b7280' }}>
+    <Text style={{ fontWeight: '600' }}>{label}: </Text>
+    {value}
+  </Text>
+);
 
 export default OverduePage;

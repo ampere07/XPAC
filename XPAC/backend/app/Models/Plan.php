@@ -19,6 +19,7 @@ class Plan extends Model
         'price',
         'group_id',
         'organization_id',
+        'show_in_application',
         'modified_by_user',
         'modified_date',
     ];
@@ -26,6 +27,7 @@ class Plan extends Model
     protected $casts = [
         'price' => 'decimal:2',
         'organization_id' => 'integer',
+        'show_in_application' => 'boolean',
         'modified_date' => 'datetime',
     ];
 

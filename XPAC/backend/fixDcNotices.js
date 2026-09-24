@@ -7,9 +7,9 @@ async function fixDcNotices() {
     const connection = await mysql.createConnection({
         host: '15.235.167.58',
         port: 3306,
-        user: 'atsscbms_sync_db1',
+        user: 'gowiser_sync_db1',
         password: 'Sync2026!',
-        database: 'atsscbms_sync_db1'
+        database: 'gowiser_sync_db1'
     });
 
     try {

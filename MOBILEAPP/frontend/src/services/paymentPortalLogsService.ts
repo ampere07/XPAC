@@ -1,5 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../config/api';
+
+// Through the shared apiClient, so the list is fetched signed in (session
+// cookie and Origin), like every other screen. It used to call axios directly
+// with `Authorization: Bearer <authData.token>`, and authData never holds a
+// token, so the API saw an anonymous caller: that worked only while the route
+// was open, and returned every organization's logs, because the controller
+// scopes the list to the signed-in user's organization only when it knows who
+// is asking. Endpoints, parameters, return shapes and messages are unchanged.
 
 export interface PaymentPortalLog {
   id: string | number;
@@ -56,10 +63,8 @@ export const paymentPortalLogsService = {
   }): Promise<any> => {
     try {
       const response = await apiClient.get<PaymentPortalLogsResponse>(
-        '/payment-portal-logs',
-        {
-          params,
-        }
+        `/payment-portal-logs`,
+        { params }
       );
 
       return {

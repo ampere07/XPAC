@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Menu, ChevronDown, RefreshCw, ArrowUp, ArrowDown, Columns3, Download } from 'lucide-react';
+import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Menu, ChevronDown, RefreshCw, ArrowUp, ArrowDown, Columns3, Download, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useSOChargeStore, SOChargeRecord } from '../store/soChargeStore';
 import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -19,6 +21,22 @@ const allColumns = [
   { key: 'amount', label: 'Amount', width: 'min-w-28' },
   { key: 'source', label: 'Source', width: 'min-w-28' },
   { key: 'remarks', label: 'Remarks', width: 'min-w-64' },
+];
+
+/**
+ * One filter entry per table column above, so every column the table can show is filterable.
+ * Keys match allColumns exactly — the table renders each cell from record[key] and the filter
+ * reads the same key, so the two cannot disagree. 'type' and 'source' offer the values present
+ * in the loaded records rather than requiring a lookup endpoint.
+ */
+const funnelColumns: FunnelColumn[] = [
+  { key: 'id', label: 'ID', dataType: 'varchar' },
+  { key: 'account_no', label: 'Account No', dataType: 'varchar' },
+  { key: 'date', label: 'Date', dataType: 'date' },
+  { key: 'type', label: 'Type', dataType: 'checklist' },
+  { key: 'amount', label: 'Amount', dataType: 'decimal' },
+  { key: 'source', label: 'Source', dataType: 'checklist' },
+  { key: 'remarks', label: 'Remarks', dataType: 'text' },
 ];
 
 const SOChargePage: React.FC = () => {
@@ -153,12 +171,21 @@ const SOChargePage: React.FC = () => {
     return filtered;
   }, [chargeRecords, searchQuery, dateFrom, dateTo, userOrgId]);
 
+  // Applied here, on the search-narrowed set, so the sidebar counts, the tab counts and the
+  // table all describe the same rows. Customer.tsx applies its funnel at the same point; a
+  // filter applied further down would leave the counts describing the unfiltered set.
+  const funnel = useFunnelFilter({
+    storageKey: 'soChargeFunnelFilters',
+    columns: funnelColumns,
+    rows: globalFilteredRecords,
+  });
+
   // Derive date items for sidebar
   const dateItems = React.useMemo(() => {
     const dateCounts: Record<string, number> = {};
     const dates = new Map<string, string>();
 
-    globalFilteredRecords.forEach(record => {
+    funnel.filteredRows.forEach(record => {
       if (record.date) {
         const date = new Date(record.date);
         const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -181,10 +208,10 @@ const SOChargePage: React.FC = () => {
       }));
 
     return {
-      all: globalFilteredRecords.length,
+      all: funnel.filteredRows.length,
       dates: sortedDates
     };
-  }, [globalFilteredRecords]);
+  }, [funnel.filteredRows]);
 
   useEffect(() => {
     const checkDarkMode = () => {
@@ -394,8 +421,9 @@ const SOChargePage: React.FC = () => {
     }
   };
 
+
   const filteredRecords = React.useMemo(() => {
-    let filtered = globalFilteredRecords.filter(record => {
+    let filtered = funnel.filteredRows.filter(record => {
       if (selectedDate === 'All') return true;
       if (!record.date) return false;
       const date = new Date(record.date);
@@ -428,7 +456,7 @@ const SOChargePage: React.FC = () => {
     }
 
     return filtered;
-  }, [globalFilteredRecords, selectedDate, sortColumn, sortDirection]);
+  }, [funnel.filteredRows, selectedDate, sortColumn, sortDirection]);
 
   const paginatedRecords = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -508,7 +536,10 @@ const SOChargePage: React.FC = () => {
   const handleExport = () => {
     if (!filteredRecords.length) return;
     const exportColumns = allColumns.filter(col => visibleColumns.includes(col.key)).sort((a, b) => columnOrder.indexOf(a.key) - columnOrder.indexOf(b.key));
-    const getExportValue = (record: SOChargeRecord, columnKey: string) => renderCellValue(record, columnKey);
+    const getExportValue = (record: SOChargeRecord, columnKey: string) => {
+      if (columnKey === 'amount') return Number(record.amount ?? 0).toFixed(2);
+      return renderCellValue(record, columnKey);
+    };
     exportToCSV('so_charge_export', exportColumns, filteredRecords, getExportValue);
   };
 
@@ -590,6 +621,24 @@ const SOChargePage: React.FC = () => {
               </div>
 
               <div className="flex items-center space-x-2 flex-shrink-0">
+                <button
+                  className={`flex-shrink-0 px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                    ? 'text-white'
+                    : isDarkMode
+                      ? 'hover:bg-gray-700 text-white bg-gray-800 border-gray-700'
+                      : 'hover:bg-gray-200 text-gray-900 bg-white border border-gray-300'
+                    }`}
+                  style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                >
+                  <Filter className="h-5 w-5" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 <div className="relative z-[100]" ref={filterDropdownRef}>
                   <button
                     className={`p-2 rounded-lg transition-colors flex items-center justify-center border shadow-sm ${isDarkMode
@@ -748,6 +797,12 @@ const SOChargePage: React.FC = () => {
         </div>
         {!isLoading && filteredRecords.length > 0 && <PaginationControls />}
       </div>
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Service Charge Filters"
+        subtitle="Refine your service charge results"
+      />
     </div>
   );
 };

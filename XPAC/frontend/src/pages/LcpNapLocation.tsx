@@ -118,6 +118,27 @@ const LcpNapLocation: React.FC = () => {
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
+  /**
+   * Cap on how many pins are drawn at once, matching the mobile page.
+   *
+   * Kept as a string so the input can be cleared while typing; parsed with a
+   * fallback at the point of use.
+   */
+  const [pinLimit, setPinLimit] = useState<string>('25');
+
+  /**
+   * Current map viewport, refreshed whenever the map stops moving.
+   *
+   * Needed so the cap keeps the pins NEAREST to wherever the user is looking
+   * rather than an arbitrary first-N of the dataset — pan somewhere new and the
+   * pins there load in.
+   */
+  const [mapViewport, setMapViewport] = useState<{
+    center: { lat: number; lng: number };
+    bounds: { north: number; south: number; east: number; west: number } | null;
+  } | null>(null);
+
+
   const filteredMarkers = React.useMemo(() => {
     return markers.filter(m => {
       if (currentUserOrgId) {
@@ -130,6 +151,59 @@ const LcpNapLocation: React.FC = () => {
       }
     });
   }, [markers, currentUserOrgId]);
+
+  /**
+   * The pins actually drawn on the map, after the limit is applied.
+   *
+   * Mirrors the mobile page: start from the active set (all markers, or just the
+   * selected LCP/NAP group), cull to the viewport plus a 50% buffer, then keep
+   * only the N closest to the map centre.
+   *
+   * Distance uses a plain lat/lng delta rather than a great-circle calculation —
+   * this only needs a relative ordering over a few kilometres, and it avoids
+   * thousands of trig calls on every pan.
+   */
+  const visibleMarkers = React.useMemo(() => {
+    const active = selectedLcpNapId === 'all'
+      ? filteredMarkers
+      : (lcpNapGroups.find(g => g.lcp_name === selectedLcpNapId)?.locations ?? filteredMarkers);
+
+    const limit = Math.max(1, parseInt(pinLimit, 10) || 25);
+
+    // Before the first `idle` there is no viewport to measure against, so fall
+    // back to a plain cap instead of rendering everything.
+    if (!mapViewport) return active.slice(0, limit);
+
+    const { center, bounds } = mapViewport;
+
+    let candidates = active;
+    if (bounds) {
+      const latBuffer = (bounds.north - bounds.south) * 0.25;
+      const lngBuffer = (bounds.east - bounds.west) * 0.25;
+
+      candidates = active.filter(m =>
+        m.latitude >= bounds.south - latBuffer &&
+        m.latitude <= bounds.north + latBuffer &&
+        m.longitude >= bounds.west - lngBuffer &&
+        m.longitude <= bounds.east + lngBuffer
+      );
+
+      // Nothing in view (the user panned away from every pin): fall back to the
+      // nearest ones overall so the map is never mysteriously empty.
+      if (candidates.length === 0) candidates = active;
+    }
+
+    if (candidates.length <= limit) return candidates;
+
+    return candidates
+      .map(m => ({
+        m,
+        d: Math.abs(m.latitude - center.lat) + Math.abs(m.longitude - center.lng),
+      }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, limit)
+      .map(x => x.m);
+  }, [filteredMarkers, selectedLcpNapId, lcpNapGroups, pinLimit, mapViewport]);
 
   const searchResults = React.useMemo(() => {
     if (!searchQuery) return [];
@@ -222,12 +296,34 @@ const LcpNapLocation: React.FC = () => {
     }
   }, [filteredMarkers]);
 
+  // Build the marker pool from the FULL set — initializeAllMarkers creates the
+  // Leaflet marker objects (detached) and updateMapMarkers just toggles which
+  // are attached. Limiting here instead would mean re-creating markers on every
+  // pan rather than simply showing different ones.
   useEffect(() => {
     if (isMapReady && isDataLoaded && selectedLcpNapId === 'all') {
       initializeAllMarkers(filteredMarkers);
+      // Frame the FULL coverage area, as before — the limit is applied by the
+      // effect below once the resulting `idle` reports a real viewport. Framing
+      // the capped set here would zoom to an arbitrary first-N instead.
       updateMapMarkers(filteredMarkers);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapReady, isDataLoaded, filteredMarkers]);
+
+  /**
+   * Re-attach the displayed pins whenever the limited set changes — a pan, a zoom
+   * or a new limit value.
+   *
+   * Never refits the camera (see updateMapMarkers): doing so here would fight the
+   * user's own panning and loop through `idle`.
+   */
+  useEffect(() => {
+    if (!isMapReady || !isDataLoaded) return;
+
+    updateMapMarkers(visibleMarkers, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleMarkers, isMapReady, isDataLoaded]);
 
   useEffect(() => {
     if (!isResizingSidebar) return;
@@ -274,6 +370,31 @@ const LcpNapLocation: React.FC = () => {
       tileLayerRef.current = createBasemap(isDarkThemeActive()).addTo(map);
 
       mapInstanceRef.current = map;
+
+      // Recompute which pins are nearest whenever the camera settles, so panning
+      // to a new area loads that area's pins within the configured limit.
+      //
+      // 'moveend' plus 'zoomend' is Leaflet's equivalent of Google's single
+      // 'idle' event: it has no combined "camera has stopped" event of its own.
+      const syncViewport = () => {
+        const center = map.getCenter();
+        const bounds = map.getBounds();
+
+        setMapViewport({
+          center: { lat: center.lat, lng: center.lng },
+          bounds: {
+            north: bounds.getNorth(),
+            east: bounds.getEast(),
+            south: bounds.getSouth(),
+            west: bounds.getWest(),
+          },
+        });
+      };
+
+      map.on('moveend', syncViewport);
+      map.on('zoomend', syncViewport);
+      syncViewport();
+
       setIsMapReady(true);
     } catch (error) {
       console.error('Error initializing map:', error);
@@ -439,8 +560,8 @@ const LcpNapLocation: React.FC = () => {
               </div>
               <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
                 <div style="font-size: 11px;">
-                  <span style="color: #22c55e;">On: ${location.active_sessions || 0}</span> |
-                  <span style="color: #f59e0b;">Off: ${location.offline_sessions || 0}</span> |
+                  <span style="color: #22c55e;">On: ${location.active_sessions || 0}</span> | 
+                  <span style="color: #f59e0b;">Off: ${location.offline_sessions || 0}</span> | 
                   <span style="color: #ef4444;">Disc: ${location.disconnected_sessions || 0}</span>
                 </div>
               </div>
@@ -487,7 +608,16 @@ const LcpNapLocation: React.FC = () => {
     }
   };
 
-  const updateMapMarkers = (locations: LocationMarker[]) => {
+  /**
+   * Show exactly `locations` on the map and hide everything else.
+   *
+   * @param shouldFitBounds Move the camera to frame the given pins. MUST stay
+   *   false for updates driven by the pin limit: fitBounds moves the viewport →
+   *   fires `moveend` → recomputes the limited set → would call fitBounds again,
+   *   looping forever and making the map impossible to pan. Only deliberate user
+   *   actions (picking a group, choosing a search result) reframe the camera.
+   */
+  const updateMapMarkers = (locations: LocationMarker[], shouldFitBounds: boolean = true) => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
@@ -503,7 +633,7 @@ const LcpNapLocation: React.FC = () => {
       }
     });
 
-    if (points.length > 0) {
+    if (shouldFitBounds && points.length > 0) {
       // A single result has no extent to fit, and fitBounds on one point zooms
       // to the maximum — so it is centred at a readable zoom instead.
       if (points.length === 1) {
@@ -699,13 +829,9 @@ const LcpNapLocation: React.FC = () => {
   return (
     <div className={`${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       } h-full flex overflow-hidden`}>
-      {/* flex-col on both branches. It used to be on the desktop one only, so
-          on a phone this panel was a bare `flex` — the header and the list sat
-          side by side and the list was squeezed to a sliver, truncating every
-          label to "L...". */}
       <div className={`${
         isMobile
-          ? mobileViewMode === 'sidebar' ? 'flex w-full flex-col' : 'hidden'
+          ? mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
           : 'flex-shrink-0 flex flex-col border-r relative'
       } ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
         }`} style={!isMobile ? { width: `${sidebarWidth}px` } : undefined}>
@@ -739,10 +865,10 @@ const LcpNapLocation: React.FC = () => {
               color: colorPalette?.primary || '#7c3aed'
             } : {}}
           >
-            <div className="flex items-center min-w-0">
-              <span className="truncate">All Locations</span>
+            <div className="flex items-center">
+              <span>All Locations</span>
             </div>
-            <span className={`flex-shrink-0 ml-2 px-2 py-1 rounded-full text-xs ${selectedLcpNapId === 'all'
+            <span className={`px-2 py-1 rounded-full text-xs ${selectedLcpNapId === 'all'
               ? 'text-white'
               : isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
               }`}
@@ -768,12 +894,10 @@ const LcpNapLocation: React.FC = () => {
                   color: colorPalette?.primary || '#7c3aed'
                 } : {}}
               >
-                <div className="flex items-center min-w-0 flex-1 overflow-hidden">
-                  <div
+                <div className="flex items-center overflow-hidden">
+                  <div 
                     onClick={(e) => toggleGroup(group.lcp_name, e)}
-                    role="button"
-                    aria-label={expandedGroups.has(group.lcp_name) ? 'Collapse' : 'Expand'}
-                    className={`mr-1.5 -ml-1 p-1.5 rounded flex-shrink-0 hover:bg-black/10 transition-colors`}
+                    className={`mr-2 p-1 rounded hover:bg-black/10 transition-colors`}
                   >
                     {expandedGroups.has(group.lcp_name) ? (
                       <ChevronDown className="h-4 w-4" />
@@ -784,7 +908,7 @@ const LcpNapLocation: React.FC = () => {
                   <MapPin className="h-4 w-4 mr-2 flex-shrink-0" />
                   <span className="truncate">{group.lcp_name}</span>
                 </div>
-                <span className={`flex-shrink-0 ml-2 px-2 py-1 rounded-full text-xs ${selectedLcpNapId === group.lcp_name
+                <span className={`px-2 py-1 rounded-full text-xs ${selectedLcpNapId === group.lcp_name
                   ? 'text-white'
                   : isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
                   }`}
@@ -808,15 +932,15 @@ const LcpNapLocation: React.FC = () => {
                           setMobileViewMode('map');
                         }
                       }}
-                      className={`w-full flex items-center justify-between gap-2 pl-10 sm:pl-12 pr-4 py-2.5 sm:py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-200 text-gray-600 hover:text-gray-900'
+                      className={`w-full flex items-center justify-between pl-12 pr-4 py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-200 text-gray-600 hover:text-gray-900'
                         } ${selectedLocation?.id === loc.id ? 'font-bold bg-black/5' : ''}`}
                       style={selectedLocation?.id === loc.id ? {
                         color: colorPalette?.primary || '#7c3aed'
                       } : {}}
                     >
-                      <span className="truncate min-w-0">{loc.lcpnap_name}</span>
+                      <span className="truncate">{loc.lcpnap_name}</span>
                       {loc.total_technical_details !== undefined && (
-                        <span className="opacity-60 flex-shrink-0 whitespace-nowrap">
+                        <span className="opacity-60">
                            {loc.total_technical_details}/{loc.port_total}
                         </span>
                       )}
@@ -828,11 +952,6 @@ const LcpNapLocation: React.FC = () => {
           ))}
         </div>
 
-        {/* Drag-to-resize is a pointer affordance, and on a phone the panel is
-            full width with nothing to resize against — so it is not rendered
-            there at all. It also had no positioned ancestor on that branch,
-            which is what put the stray bar at the screen edge. */}
-        {!isMobile && (
         <div
           className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize transition-colors z-10"
           style={{
@@ -846,7 +965,6 @@ const LcpNapLocation: React.FC = () => {
           }}
           onMouseDown={handleMouseDownSidebarResize}
         />
-        )}
       </div>
 
       <div className={`${
@@ -967,6 +1085,34 @@ const LcpNapLocation: React.FC = () => {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Pin limit — caps how many markers are drawn, keeping the ones
+                  closest to the map centre. Mirrors the mobile page's control. */}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className={`flex items-center rounded-lg border px-2.5 py-1.5 ${isDarkMode
+                  ? 'bg-gray-800 border-gray-700'
+                  : 'bg-gray-50 border-gray-200'
+                  }`}>
+                  <MapPin className="h-4 w-4 mr-1.5 flex-shrink-0" style={{ color: colorPalette?.primary || '#7c3aed' }} />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    aria-label="Maximum pins to display"
+                    title="Maximum number of pins drawn on the map"
+                    placeholder="Limit"
+                    value={pinLimit}
+                    // Digits only, so the parse at point of use can never see junk.
+                    onChange={(e) => setPinLimit(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
+                    className={`w-14 bg-transparent text-sm text-center focus:outline-none ${isDarkMode
+                      ? 'text-white placeholder-gray-500'
+                      : 'text-gray-900 placeholder-gray-400'
+                      }`}
+                  />
+                </div>
+                <span className={`text-xs whitespace-nowrap ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {visibleMarkers.length.toLocaleString()} / {filteredMarkers.length.toLocaleString()} pins
+                </span>
               </div>
 
               {!isMobile && (

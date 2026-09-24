@@ -427,11 +427,6 @@ class XenditReconciliationService
             'xendit_status' => strtoupper((string) ($payload['status'] ?? '')) ?: null,
             'billing_status' => (string) $record->status,
             'settled_at' => $this->extractSettledAt($payload),
-            // The same instant, pre-formatted, as the pair of `date_created` below.
-            // The Date & Time Paid column is now on screen by default, and an operator
-            // matching a Xendit dashboard row against this table needs the paid stamp
-            // as readily as the created one.
-            'date_paid' => $this->formatStamp($this->extractSettledAt($payload)),
             'payment_date' => $record->payment_date,
             // The three dates the reconciliation table sorts on.
             //

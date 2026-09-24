@@ -15,7 +15,6 @@ export type JobType =
   | 'rename'
   | 'profile_sync'
   | 'sn_alignment'
-  | 'sn_replace'
   | 'delete';
 
 /**
@@ -61,7 +60,6 @@ export const JOB_TYPE_LABELS: Record<JobType, string> = {
   rename: 'ONU rename',
   profile_sync: 'Profile push',
   sn_alignment: 'Router/modem SN alignment',
-  sn_replace: 'ONU serial replacement',
   delete: 'ONU unprovision',
 };
 
@@ -328,14 +326,6 @@ export interface CleanupRow {
    */
   eligible: boolean;
   reasons: string[];
-  /**
-   * Whether a pullout Service Order for this ONU's serial or account is marked Done.
-   *
-   * Not advisory, unlike `eligible`: the delete job refuses an ONU without one even on
-   * an operator's selection, so the tool does not offer it for selection either.
-   * Optional so a preview cached before the field existed reads as "not cleared".
-   */
-  pullout_cleared?: boolean;
 }
 
 export interface CleanupPreview {
@@ -364,23 +354,6 @@ export interface ActionResult {
   success: boolean;
   skipped: boolean;
   message: string;
-}
-
-/**
- * What a serial replacement did, beyond succeeding or failing.
- *
- * `billing_updated` is the half an operator has to be told about separately: the OLT
- * swap and the billing write are two systems, and the second one can be refused (a
- * target in another organization) or fail after the first has already landed.
- */
-export interface ReplaceSnResult extends ActionResult {
-  data: {
-    external_id: string;
-    previous_sn: string | null;
-    new_sn: string;
-    billing_updated: boolean;
-    technical_detail_id: number | null;
-  };
 }
 
 export interface JobResult extends ActionResult {
@@ -525,51 +498,6 @@ export const smartOltReconciliationService = {
   },
 
   abortJob: (jobId: number): Promise<JobResult> => unwrapJob(apiClient.post(`${BASE}/abort-job`, { job_id: jobId })),
-
-  /**
-   * Swap the physical device behind one provisioned ONU.
-   *
-   * Not a job. A replacement is a single call an operator makes from a confirmation
-   * modal and needs the answer to immediately, unlike the estate-wide sweeps above
-   * which run in slices against a quota.
-   *
-   * Pass `technicalDetailId` to carry the new serial into the subscriber's
-   * `router_modem_sn` at the same time; omit it to change SmartOLT only. Re-submitting
-   * a replacement that already landed answers `skipped`, not a second call.
-   */
-  replaceSn: async (
-    externalId: string,
-    newSn: string,
-    technicalDetailId?: number | null
-  ): Promise<ReplaceSnResult> => {
-    const empty = {
-      external_id: externalId,
-      previous_sn: null,
-      new_sn: newSn,
-      billing_updated: false,
-      technical_detail_id: technicalDetailId ?? null,
-    };
-
-    try {
-      const response = await apiClient.post<ReplaceSnResult>(`${BASE}/replace-sn`, {
-        external_id: externalId,
-        new_sn: newSn,
-        technical_detail_id: technicalDetailId ?? undefined,
-      });
-      return { ...response.data, data: { ...empty, ...(response.data.data ?? {}) } };
-    } catch (error: any) {
-      const payload = error?.response?.data;
-      return {
-        success: false,
-        skipped: false,
-        // A 422 here carries the operator-facing reason — the serial is provisioned
-        // elsewhere, SmartOLT is throttling, the inventory is stale. Surfacing that
-        // beats surfacing axios's status text.
-        message: payload?.message || error?.message || 'The replacement failed.',
-        data: { ...empty, ...(payload?.data ?? {}) },
-      };
-    }
-  },
 
   undo: async (logId: number): Promise<ActionResult> => {
     try {

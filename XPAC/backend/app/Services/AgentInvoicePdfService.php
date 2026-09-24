@@ -31,8 +31,11 @@ use Throwable;
 class AgentInvoicePdfService
 {
     /**
-     * The branded header and footer artwork, which carry the ATSS FIBER mark
-     * and the company's contact details.
+     * The branded header and footer artwork (company mark and contact details).
+     *
+     * GOWISER: none is shipped. Drop GOWISER-branded PNGs with these names into
+     * backend/resources/images/ to use them; until then the template prints the
+     * text fallback (config agent_invoices.brand_name) and a plain footer bar.
      *
      * Embedded as data URIs rather than linked: Dompdf runs with remote loading
      * off, and a data URI cannot be broken by a moved file or a wrong document
@@ -117,8 +120,8 @@ class AgentInvoicePdfService
      */
     private const FOOTER_LIFT_PT = 10.0;
 
-    /** Fallback footer height when the artwork cannot be measured. */
-    private const FOOTER_FALLBACK_PT = 101.0;
+    /** Fallback footer height when there is no artwork: the plain text-fallback bar (GOWISER ships none). */
+    private const FOOTER_FALLBACK_PT = 24.0;
 
     /**
      * The six typefaces the invoice is set in, one per slot.
@@ -406,6 +409,8 @@ class AgentInvoicePdfService
             // Dompdf's core fonts have no peso glyph, so the currency is written
             // as "P" rather than rendering as a blank box on every line.
             'peso'        => 'P',
+            // Printed in place of the header artwork when none is installed.
+            'brandName'   => (string) config('agent_invoices.brand_name', 'GOWISER'),
             'headerImage' => $this->imageData(self::HEADER_IMAGE),
             'footerImage' => $this->imageData(self::FOOTER_IMAGE),
             // slot => font URL, or null where nothing is installed for it.
@@ -440,6 +445,12 @@ class AgentInvoicePdfService
             ->all();
 
         if ($jobOrderIds === []) {
+            return [];
+        }
+
+        // GOWISER has no pre-install workflow, so job_orders normally lacks
+        // these columns; the section is then simply omitted.
+        if (!\App\Support\AgentProgramme::hasPreInstallColumns()) {
             return [];
         }
 
@@ -648,13 +659,12 @@ class AgentInvoicePdfService
             return null;
         }
 
-        // The backend's own copy first — it is the only one that exists on the
-        // server, since frontend/src is a build input and is never deployed.
-        // The frontend original is a convenience for a local checkout that has
-        // not had the artwork copied across yet.
+        // GOWISER: only the backend's own copy is read. The upstream service
+        // also fell back to ../frontend/src/assets, which must not happen here:
+        // artwork that lands in the frontend (possibly another brand's) would
+        // then be printed on GOWISER invoices without anyone choosing it.
         $candidates = [
             resource_path('images/' . $filename),
-            base_path('../frontend/src/assets/' . $filename),
         ];
 
         foreach ($candidates as $path) {

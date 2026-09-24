@@ -1,18 +1,17 @@
 // The mobile app's copy of the permission table.
 //
-// The server is the authority — every endpoint is checked against
-// ATSS2_0/backend/app/Support/ApiPermissionMap.php whatever this file says.
-// This exists so the UI can decide what to *draw* without waiting on a round
+// The server is the authority: every endpoint is checked against
+// backend/app/Support/ApiPermissionMap.php, whatever this file says.
+// This file lets the UI decide what to *draw* without waiting for a round
 // trip: which tabs to list, which page to open, which buttons to render.
 //
 // The mobile app and the web portal share one backend and therefore one set of
-// keys. This file is a copy of ATSS2_0/frontend/src/config/permissions.ts with
-// one addition at the end: the mobile app's section ids are not all the same
-// strings as the keys (it says "lcp-list" where the web says "lcp"), so it
-// carries a translation table the web portal does not need.
-//
-// Kept deliberately in step with backend/app/Support/Permissions.php. The
-// backend file is the one to change first; the two clients mirror it.
+// keys. The catalog half of this file (PAGES through ROLE_HOME) mirrors
+// backend/app/Support/Permissions.php and frontend/src/config/permissions.ts;
+// PermissionsParityTest reads it as text and fails when they drift, so change
+// the backend file first. The second half is mobile-only: the app's section ids
+// are not all the same strings as the keys (it says "lcp-list" where the web
+// says "lcp"), and each role's landing screen on mobile is its own.
 
 /** Held by SuperAdmin alone. Matches any key, including ones added later. */
 export const WILDCARD = '*';
@@ -32,12 +31,8 @@ export const ROLE = {
 export const LOCKED_ROLE_IDS: number[] = Object.values(ROLE);
 
 /**
- * How each seeded role is written in Role Management's "Base role" picker.
- *
- * Mirrors Role::LOCKED_ROLE_NAMES. Named here rather than read from the roles
- * list the API returns so the picker reads the same on a deployment whose
- * seeded rows were renamed, and always in one order — widest access first,
- * which is the order somebody choosing a starting point thinks in.
+ * How each seeded role is written in Role Management's "Start from a system
+ * role" picker, widest access first.
  */
 export const BASE_ROLE_OPTIONS: Array<{ id: number; label: string }> = [
   { id: ROLE.SUPER_ADMIN, label: 'SuperAdmin' },
@@ -55,11 +50,8 @@ export const baseRoleLabel = (roleId?: number | string | null): string =>
   BASE_ROLE_OPTIONS.find(option => option.id === Number(roleId))?.label ?? '';
 
 /**
- * Role names as they come back from the API (lowercased role_name), mapped onto
- * their ids.
- *
- * Both are carried in authData and either can be missing or stale, so every
- * lookup tries the id first and falls back to the name.
+ * Role names as the login response carries them (lowercased role_name), mapped
+ * onto their ids. Every lookup tries the id first and falls back to the name.
  */
 const ROLE_NAME_TO_ID: Record<string, number> = {
   administrator: ROLE.ADMINISTRATOR,
@@ -71,7 +63,12 @@ const ROLE_NAME_TO_ID: Record<string, number> = {
   osp: ROLE.OSP,
   superadmin: ROLE.SUPER_ADMIN,
   headtech: ROLE.HEAD_TECH,
+  headtechnician: ROLE.HEAD_TECH,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Catalog: kept identical to backend/app/Support/Permissions.php
+// ─────────────────────────────────────────────────────────────────────────────
 
 /** Every page key, in the order the Role modal lists them. */
 export const PAGES = [
@@ -81,12 +78,11 @@ export const PAGES = [
   'customer-bills',
   'customer-support',
   'agent-application',
-
   'live-monitor',
-
   'customer',
   'transaction-list',
   'transactions-revert',
+  'prepaid-override',
   'payment-portal',
   'soa',
   'invoice',
@@ -96,7 +92,7 @@ export const PAGES = [
   'mass-rebate',
   'staggered-payment',
   'discounts',
-
+  'soa-generation',
   'application-management',
   'job-order',
   'service-order',
@@ -104,17 +100,17 @@ export const PAGES = [
   'lcp-nap-location',
   'sms-blast',
   'reports',
-  'support',
-
+  'commission',
   'bonus-history',
   'agent-invoices',
   'agent-payout',
   'agent-management',
   'team-agent',
-
   'inventory',
   'inventory-category-list',
-
+  'monthly-payables',
+  'expenses',
+  'expenses-category',
   'promo-list',
   'plan-list',
   'location-list',
@@ -135,13 +131,11 @@ export const PAGES = [
   'pppoe-setup',
   'concern-config',
   'billing-config',
-
   'user-management',
   'tech-users',
   'organization',
   'roles',
   'group-management',
-
   'disconnected-logs',
   'reconnection-logs',
   'sms-logs',
@@ -151,72 +145,48 @@ export const PAGES = [
   'expenses-log',
   'smart-olt-logs',
   'radius-logs',
-  'radius-queue',
   'system-logs',
-  'modem-router-logs',
-
-  // Tools. Web-only screens, but the keys live here too: this catalog has to
-  // stay identical to the server's and the web client's, and a role's key list
-  // is compared across all three.
   'smartolt-tool',
   'mikrotik-radius-tool',
   'xendit-reconcile-tool',
   'billing-reconcile-tool',
-
-  'soa-generation',
   'settings',
 ] as const;
 
 /** The button-level keys, grouped by the page that owns them. */
 export const ACTIONS: Record<string, string[]> = {
   'job-order': [
-    'job-order.approve',
-    'job-order.failed',
-    'job-order.tech-edit',
-    'job-order.admin-edit',
+    'job-order.approve', 'job-order.failed', 'job-order.tech-edit', 'job-order.admin-edit',
     'job-order.attachment',
-    // Recording a pre-installation visit. Kept apart from the edit keys because
-    // it is what lets a referral start earning quota progress before the
-    // install is finished — a scheduling decision, not an edit to the record.
-    'job-order.pre-install',
   ],
   customer: [
-    'customer.so-request',
-    'customer.details-edit',
-    'customer.attachment',
-    'customer.transact',
+    'customer.so-request', 'customer.details-edit', 'customer.attachment', 'customer.transact',
+    'customer.prepaid-override',
   ],
   'transaction-list': [
-    'transaction-list.batch-approve',
-    'transaction-list.approve',
-    'transaction-list.revert-request',
+    'transaction-list.batch-approve', 'transaction-list.approve',
+    'transaction-list.revert-request', 'transaction-list.delete',
   ],
+  'transactions-revert': ['transactions-revert.approve'],
+  'prepaid-override': ['prepaid-override.approve'],
   'mass-rebate': ['mass-rebate.add'],
   'staggered-payment': ['staggered-payment.add'],
   discounts: ['discounts.add'],
-  'application-management': [
-    'application-management.move-to-jo',
-    'application-management.quick-status',
-  ],
+  'soa-generation': ['soa-generation.manage'],
+  'application-management': ['application-management.move-to-jo', 'application-management.quick-status'],
   'service-order': ['service-order.tech-edit', 'service-order.admin-edit'],
-  // Raising, reassigning or deleting a work order, as opposed to working
-  // the ones already assigned to you. An agent has the page but not this.
   'work-order': ['work-order.manage'],
-  // Scheduling and issuing reports, kept apart from deleting one: a report is a
-  // scheduled job other people rely on receiving.
   reports: ['reports.manage', 'reports.delete'],
-  // Raising a payout, incentive or bonus, and signing one off.
+  commission: ['commission.create'],
   'bonus-history': ['bonus-history.payout'],
   'agent-payout': ['agent-payout.approve'],
-  // Issuing the weekly referral invoices, and marking one settled. An agent
-  // reads their own; neither of these is theirs.
   'agent-invoices': ['agent-invoices.generate', 'agent-invoices.status', 'agent-invoices.payout'],
-  'soa-generation': ['soa-generation.manage'],
-
-  // ── Configurations ─────────────────────────────────────────────────────────
-  // Every page in this group is a list with Add, Edit and Delete controls, and
-  // until now holding the page granted all three. They follow the standard
-  // verbs in CRUD_VERBS below.
+  'monthly-payables': [
+    'monthly-payables.create', 'monthly-payables.edit', 'monthly-payables.delete',
+    'monthly-payables.generate', 'monthly-payables.pay',
+  ],
+  expenses: ['expenses.create', 'expenses.edit', 'expenses.delete'],
+  'expenses-category': ['expenses-category.create', 'expenses-category.edit', 'expenses-category.delete'],
   'promo-list': ['promo-list.create', 'promo-list.edit', 'promo-list.delete'],
   'plan-list': ['plan-list.create', 'plan-list.edit', 'plan-list.delete'],
   'location-list': ['location-list.create', 'location-list.edit', 'location-list.delete'],
@@ -239,26 +209,23 @@ export const ACTIONS: Record<string, string[]> = {
   'pppoe-setup': ['pppoe-setup.create', 'pppoe-setup.edit', 'pppoe-setup.delete'],
   'concern-config': ['concern-config.create', 'concern-config.edit', 'concern-config.delete'],
   'billing-config': ['billing-config.create', 'billing-config.edit', 'billing-config.delete'],
-
-  // ── Users ──────────────────────────────────────────────────────────────────
   'user-management': ['user-management.create', 'user-management.edit', 'user-management.delete'],
   'tech-users': ['tech-users.create', 'tech-users.edit', 'tech-users.delete'],
   organization: ['organization.create', 'organization.edit', 'organization.delete'],
   roles: ['roles.create', 'roles.edit', 'roles.delete'],
-  'group-management': [
-    'group-management.create', 'group-management.edit', 'group-management.delete',
-  ],
+  'group-management': ['group-management.create', 'group-management.edit', 'group-management.delete'],
 };
 
 /**
- * The standard verbs, in the order Role Management shows them.
- *
- * A page whose controls are the ordinary "Add / Edit / Delete" three declares
- * exactly these, named `<page>.<verb>`. Anything a page does that is not one of
- * the three keeps its own descriptive verb.
- *
- * Kept in step with Permissions::CRUD_VERBS on the server.
+ * Pairs that cannot both be held: one opens the technician's Done form, the
+ * other the administrator's.
  */
+export const EXCLUSIVE_PAIRS: Array<[string, string]> = [
+  ['job-order.tech-edit', 'job-order.admin-edit'],
+  ['service-order.tech-edit', 'service-order.admin-edit'],
+];
+
+/** The standard verbs, in the order Role Management shows them. */
 export const CRUD_VERBS = ['create', 'edit', 'delete'] as const;
 
 /** How each standard verb is written on a checkbox. */
@@ -274,25 +241,19 @@ export const ALL_PERMISSIONS: string[] = [
   ...Object.values(ACTIONS).flat(),
 ];
 
-/**
- * How each key is written in Role Management.
- *
- * The Role modal renders from this rather than from a list of its own, so a
- * page added to PAGES above becomes grantable without a second edit — which is
- * how pages added since the modal was written (Reports, the Agent pages, Data
- * Logs, Monitoring) came to be ungrantable to a custom role.
- */
+/** How each key is written in Role Management. */
 export const PERMISSION_LABELS: Record<string, string> = {
   'dashboard': 'Dashboard',
   'agent-dashboard': 'Agent Dashboard',
-  'customer-dashboard': 'Customer Portal',
-  'customer-bills': 'Customer Bills',
-  'customer-support': 'Customer Support',
-  'agent-application': 'Agent Application Form',
+  'customer-dashboard': 'Customer Dashboard',
+  'customer-bills': 'Bills',
+  'customer-support': 'Support',
+  'agent-application': 'Agent Application',
   'live-monitor': 'Monitoring',
   'customer': 'Customer',
   'transaction-list': 'Transaction List',
   'transactions-revert': 'Revert Requests',
+  'prepaid-override': 'Prepaid Override',
   'payment-portal': 'Payment Portal',
   'soa': 'Statements',
   'invoice': 'Invoice',
@@ -302,6 +263,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'mass-rebate': 'Rebates',
   'staggered-payment': 'Staggered',
   'discounts': 'Discounts',
+  'soa-generation': 'SOA Generation',
   'application-management': 'Application',
   'job-order': 'Job Order',
   'service-order': 'Service Order',
@@ -309,14 +271,17 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'lcp-nap-location': 'LCP/NAP Location',
   'sms-blast': 'SMS Blast',
   'reports': 'Reports',
-  'support': 'Support',
-  'bonus-history': 'Pay Out/In',
+  'commission': 'Pay Out/In',
+  'bonus-history': 'Bonus History',
   'agent-invoices': 'Agent Invoices',
   'agent-payout': 'Agent Payout',
   'agent-management': 'Agent Management',
   'team-agent': 'Team Agents',
   'inventory': 'Inventory',
   'inventory-category-list': 'Inventory Category List',
+  'monthly-payables': 'Monthly Payables',
+  'expenses': 'Expenses',
+  'expenses-category': 'Expenses Category',
   'promo-list': 'Promo',
   'plan-list': 'Plan',
   'location-list': 'Location',
@@ -341,7 +306,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'tech-users': 'Tech Users',
   'organization': 'Organization',
   'roles': 'Roles Management',
-  'group-management': 'Group Management',
+  'group-management': 'Affiliates',
   'disconnected-logs': 'Disconnected Logs',
   'reconnection-logs': 'Reconnection Logs',
   'sms-logs': 'SMS Logs',
@@ -351,55 +316,52 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'expenses-log': 'Expenses Log',
   'smart-olt-logs': 'Smart OLT Logs',
   'radius-logs': 'Radius Logs',
-  'radius-queue': 'Radius Queue',
   'system-logs': 'System Logs',
-  'modem-router-logs': 'Modem/Router Logs',
   'smartolt-tool': 'SmartOLT Tool',
   'mikrotik-radius-tool': 'Mikrotik Radius Tool',
   'xendit-reconcile-tool': 'Xendit Reconciliation',
   'billing-reconcile-tool': 'Billing Reconcile',
-  'soa-generation': 'SOA Generation',
   'settings': 'Settings',
-
-  // Sub actions, labelled as the button reads.
   'job-order.approve': 'Approve',
   'job-order.failed': 'Failed',
   'job-order.tech-edit': 'Tech Edit',
   'job-order.admin-edit': 'Admin Edit',
   'job-order.attachment': 'Attachment',
-  'job-order.pre-install': 'Pre Installed',
   'customer.so-request': 'SO Request',
   'customer.details-edit': 'Details Edit',
   'customer.attachment': 'Attachment',
   'customer.transact': 'Transact',
+  'customer.prepaid-override': 'Prepaid Override',
   'transaction-list.batch-approve': 'Batch Approve',
   'transaction-list.approve': 'Approve',
   'transaction-list.revert-request': 'Revert Request',
+  'transaction-list.delete': 'Delete',
+  'transactions-revert.approve': 'Approve',
+  'prepaid-override.approve': 'Approve',
   'mass-rebate.add': 'Add Rebate',
   'staggered-payment.add': 'Add Staggered',
   'discounts.add': 'Add Discount',
+  'soa-generation.manage': 'Generate',
   'application-management.move-to-jo': 'Move to JO',
   'application-management.quick-status': 'Quick Status',
   'service-order.tech-edit': 'Tech Edit',
   'service-order.admin-edit': 'Admin Edit',
-  'work-order.manage': 'Manage',
+  'work-order.manage': 'Add / Delete',
   'reports.manage': 'Manage',
   'reports.delete': 'Delete',
+  'commission.create': 'Add',
   'bonus-history.payout': 'Payout',
   'agent-payout.approve': 'Approve',
   'agent-invoices.generate': 'Generate',
   'agent-invoices.status': 'Set Status',
   'agent-invoices.payout': 'Pay Out',
-  'soa-generation.manage': 'Manage',
+  'monthly-payables.generate': 'Generate Month',
+  'monthly-payables.pay': 'Pay',
 };
 
 /**
- * How a key is written on screen.
- *
- * A standard verb is answered from CRUD_VERB_LABELS rather than needing its own
- * line in PERMISSION_LABELS: there is one label for "Add" however many pages
- * declare `<page>.create`. An explicit entry still wins, for the handful of
- * pages that want to name a verb differently.
+ * How a key is written on screen. A standard verb falls back to
+ * CRUD_VERB_LABELS; an explicit PERMISSION_LABELS entry wins.
  */
 export const labelFor = (key: string): string => {
   const explicit = PERMISSION_LABELS[key];
@@ -411,55 +373,20 @@ export const labelFor = (key: string): string => {
 };
 
 /**
- * The order and grouping Role Management presents the pages in.
- *
- * Any page not named in a group is appended to "Other", so a page added to
- * PAGES is always grantable even if nobody remembers to file it here.
+ * The order and grouping Role Management presents the pages in. Any page not
+ * named in a group is appended to "Other", so nothing is ungrantable.
  */
 export const PERMISSION_GROUPS: Array<{ label: string; pages: string[] }> = [
-  { label: 'Dashboards', pages: ['dashboard', 'agent-dashboard', 'live-monitor', 'support'] },
-  {
-    label: 'Billing',
-    pages: [
-      'customer', 'transaction-list', 'transactions-revert', 'payment-portal',
-      'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice', 'mass-rebate',
-      'staggered-payment', 'discounts', 'soa-generation',
-    ],
-  },
-  {
-    label: 'Operations',
-    pages: [
-      'application-management', 'job-order', 'service-order', 'radius-queue',
-      'work-order', 'lcp-nap-location', 'sms-blast', 'reports',
-    ],
-  },
-  {
-    label: 'Agent',
-    pages: ['bonus-history', 'agent-invoices', 'agent-payout', 'agent-management', 'team-agent'],
-  },
+  { label: 'Dashboards', pages: ['dashboard', 'agent-dashboard', 'live-monitor'] },
+  { label: 'Billing', pages: ['customer', 'transaction-list', 'transactions-revert', 'prepaid-override', 'payment-portal', 'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice', 'mass-rebate', 'staggered-payment', 'discounts', 'soa-generation'] },
+  { label: 'Operations', pages: ['application-management', 'job-order', 'service-order', 'work-order', 'lcp-nap-location', 'sms-blast', 'reports'] },
+  { label: 'Agent', pages: ['commission', 'bonus-history', 'team-agent', 'agent-management', 'agent-payout', 'agent-invoices'] },
   { label: 'Inventory', pages: ['inventory', 'inventory-category-list'] },
-  {
-    label: 'Configurations',
-    pages: [
-      'promo-list', 'plan-list', 'location-list', 'lcp', 'nap', 'ports',
-      'router-models', 'status-remarks-list', 'usage-type', 'vlan-config',
-      'payment-method', 'work-category', 'radius-config', 'smart-olt',
-      'sms-config', 'sms-template', 'email-templates', 'pppoe-setup',
-      'concern-config', 'billing-config',
-    ],
-  },
-  {
-    label: 'Users',
-    pages: ['user-management', 'tech-users', 'organization', 'roles', 'group-management'],
-  },
-  {
-    label: 'Logs',
-    pages: [
-      'disconnected-logs', 'reconnection-logs', 'sms-logs', 'sms-blast-logs',
-      'email-logs', 'data-logs', 'expenses-log', 'smart-olt-logs',
-      'radius-logs', 'system-logs', 'modem-router-logs',
-    ],
-  },
+  { label: 'Expenses', pages: ['monthly-payables', 'expenses', 'expenses-category'] },
+  { label: 'Configurations', pages: ['promo-list', 'plan-list', 'location-list', 'lcp', 'nap', 'ports', 'router-models', 'status-remarks-list', 'usage-type', 'vlan-config', 'payment-method', 'work-category', 'radius-config', 'smart-olt', 'sms-config', 'sms-template', 'email-templates', 'pppoe-setup', 'concern-config', 'billing-config'] },
+  { label: 'Users', pages: ['user-management', 'tech-users', 'organization', 'roles', 'group-management'] },
+  { label: 'Logs', pages: ['disconnected-logs', 'reconnection-logs', 'sms-logs', 'sms-blast-logs', 'email-logs', 'data-logs', 'expenses-log', 'smart-olt-logs', 'radius-logs', 'system-logs'] },
+  { label: 'Tools', pages: ['smartolt-tool', 'mikrotik-radius-tool', 'xendit-reconcile-tool', 'billing-reconcile-tool'] },
   { label: 'Customer Portal', pages: ['customer-dashboard', 'customer-bills', 'customer-support', 'agent-application'] },
   { label: 'Settings', pages: ['settings'] },
 ];
@@ -467,154 +394,98 @@ export const PERMISSION_GROUPS: Array<{ label: string; pages: string[] }> = [
 /** The groups, with any unfiled page swept into a final "Other". */
 export const permissionGroups = (): Array<{ label: string; pages: string[] }> => {
   const filed = new Set(PERMISSION_GROUPS.flatMap(group => group.pages));
-  const unfiled = PAGES.filter(page => !filed.has(page));
+  const unfiled = (PAGES as readonly string[]).filter(page => !filed.has(page));
 
   return unfiled.length > 0
-    ? [...PERMISSION_GROUPS, { label: 'Other', pages: unfiled as unknown as string[] }]
+    ? [...PERMISSION_GROUPS, { label: 'Other', pages: unfiled }]
     : PERMISSION_GROUPS;
 };
 
-/**
- * What each seeded role holds.
- *
- * This reproduces the access the sidebar's allowedRoles tables already granted,
- * with one deliberate change: the technician and head technician now hold their
- * edit keys. Sub-permissions were only ever read from a custom role's array,
- * which a locked role has none of, so a technician's Done button resolved to
- * "no permission" and did nothing at all.
- */
+/** What each seeded role holds. */
 export const ROLE_PERMISSIONS: Record<number, string[]> = {
   [ROLE.SUPER_ADMIN]: [WILDCARD],
 
   [ROLE.ADMINISTRATOR]: [
-    'dashboard',
-    'live-monitor',
-    'customer',
-    'customer.so-request', 'customer.details-edit', 'customer.attachment', 'customer.transact',
-    'transaction-list',
-    'transaction-list.batch-approve', 'transaction-list.approve', 'transaction-list.revert-request',
-    'transactions-revert',
-    'payment-portal',
-    'soa',
-    'invoice',
-    'overdue',
-    'so-charge',
-    'dc-notice',
-    'mass-rebate', 'mass-rebate.add',
-    'staggered-payment', 'staggered-payment.add',
-    'discounts', 'discounts.add',
-    'application-management',
-    'application-management.move-to-jo', 'application-management.quick-status',
-    'job-order',
-    'job-order.approve', 'job-order.failed', 'job-order.admin-edit', 'job-order.attachment',
-    'job-order.pre-install',
-    'service-order', 'service-order.admin-edit',
-    'work-order', 'work-order.manage',
-    'lcp-nap-location',
-    'sms-blast',
-    'reports', 'reports.manage',
-    'support',
-    'bonus-history', 'bonus-history.payout',
-    'team-agent',
-    'agent-management',
-    'agent-payout', 'agent-payout.approve',
-    'agent-invoices', 'agent-invoices.generate', 'agent-invoices.status',
-    'agent-invoices.payout',
-    'inventory',
-    'inventory-category-list',
-    'disconnected-logs',
-    'reconnection-logs',
-    'sms-logs',
-    'sms-blast-logs',
-    'email-logs',
-    'data-logs',
-    'expenses-log',
-    'modem-router-logs',
-    // The RADIUS retry queue. Read-only, and an operational screen rather than
-    // a configuration one.
-    'radius-queue',
-    // Tools suite. Every one of these mutates live state — subscriber ONUs,
-    // RADIUS accounts, posted payments — so they are granted deliberately
-    // rather than inherited from a group. Billing Reconcile is not here: it
-    // decides whether a subscriber is invoiced at all, and stays with
-    // SuperAdmin.
-    'smartolt-tool',
-    'mikrotik-radius-tool',
-    'xendit-reconcile-tool',
+    'dashboard', 'live-monitor', 'customer', 'customer.so-request', 'customer.details-edit',
+    'customer.attachment', 'customer.transact', 'customer.prepaid-override', 'transaction-list',
+    'transaction-list.batch-approve', 'transaction-list.approve',
+    'transaction-list.revert-request', 'transactions-revert', 'prepaid-override', 'payment-portal',
+    'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice', 'mass-rebate', 'mass-rebate.add',
+    'staggered-payment', 'staggered-payment.add', 'discounts', 'discounts.add', 'soa-generation',
+    'soa-generation.manage', 'application-management', 'application-management.move-to-jo',
+    'application-management.quick-status', 'job-order', 'job-order.approve', 'job-order.failed',
+    'job-order.admin-edit', 'job-order.attachment', 'service-order', 'service-order.admin-edit',
+    'work-order', 'work-order.manage', 'lcp-nap-location', 'sms-blast', 'reports',
+    'reports.manage', 'commission', 'commission.create', 'bonus-history', 'bonus-history.payout',
+    'agent-invoices', 'agent-invoices.generate', 'agent-invoices.status', 'agent-invoices.payout',
+    'agent-payout', 'agent-payout.approve', 'agent-management', 'team-agent', 'inventory',
+    'inventory-category-list', 'monthly-payables', 'monthly-payables.create',
+    'monthly-payables.edit', 'monthly-payables.delete', 'monthly-payables.generate',
+    'monthly-payables.pay', 'expenses', 'expenses.create', 'expenses.edit', 'expenses.delete',
+    'expenses-category', 'expenses-category.create', 'expenses-category.edit',
+    'expenses-category.delete', 'promo-list', 'promo-list.create', 'promo-list.edit',
+    'promo-list.delete', 'plan-list', 'plan-list.create', 'plan-list.edit', 'plan-list.delete',
+    'location-list', 'location-list.create', 'location-list.edit', 'location-list.delete', 'lcp',
+    'lcp.create', 'lcp.edit', 'lcp.delete', 'nap', 'nap.create', 'nap.edit', 'nap.delete', 'ports',
+    'ports.create', 'ports.edit', 'ports.delete', 'router-models', 'router-models.create',
+    'router-models.edit', 'router-models.delete', 'status-remarks-list',
+    'status-remarks-list.create', 'status-remarks-list.edit', 'status-remarks-list.delete',
+    'usage-type', 'usage-type.create', 'usage-type.edit', 'usage-type.delete', 'payment-method',
+    'payment-method.create', 'payment-method.edit', 'payment-method.delete', 'work-category',
+    'work-category.create', 'work-category.edit', 'work-category.delete', 'radius-config',
+    'radius-config.create', 'radius-config.edit', 'radius-config.delete', 'smart-olt',
+    'smart-olt.create', 'smart-olt.edit', 'smart-olt.delete', 'sms-config', 'sms-config.create',
+    'sms-config.edit', 'sms-config.delete', 'sms-template', 'sms-template.create',
+    'sms-template.edit', 'sms-template.delete', 'email-templates', 'email-templates.create',
+    'email-templates.edit', 'email-templates.delete', 'pppoe-setup', 'pppoe-setup.create',
+    'pppoe-setup.edit', 'pppoe-setup.delete', 'concern-config', 'concern-config.create',
+    'concern-config.edit', 'concern-config.delete', 'billing-config', 'billing-config.create',
+    'billing-config.edit', 'billing-config.delete', 'user-management', 'user-management.create',
+    'user-management.edit', 'user-management.delete', 'tech-users', 'tech-users.create',
+    'tech-users.edit', 'tech-users.delete', 'organization', 'organization.create',
+    'organization.edit', 'organization.delete', 'roles', 'roles.create', 'roles.edit',
+    'roles.delete', 'group-management', 'group-management.create', 'group-management.edit',
+    'group-management.delete', 'disconnected-logs', 'reconnection-logs', 'sms-logs',
+    'sms-blast-logs', 'email-logs', 'data-logs', 'expenses-log', 'smart-olt-logs', 'radius-logs',
+    'system-logs', 'smartolt-tool', 'mikrotik-radius-tool', 'xendit-reconcile-tool',
+    'billing-reconcile-tool', 'settings',
   ],
 
   [ROLE.TECHNICIAN]: [
-    'job-order',
-    'job-order.tech-edit',
-    'job-order.attachment',
-    // The pre-installation visit is site work, and the server has always
-    // granted it. This catalog did not, so the mobile app hid a button the
-    // technician was entitled to — the drift ran the safe way, but it still
-    // withheld the control.
-    'job-order.pre-install',
-    'service-order',
-    'service-order.tech-edit',
-    // Work orders are a technician's work too. The web sidebar never listed the
-    // page for them, but the page itself has always had technician-specific
-    // behaviour — the queue ordering and the lock in
-    // utils/technicianWorkOrderAccess.ts, enforced server side by
-    // WorkOrderApiController::isWorkOrderLockedForTechnician(). The mobile app
-    // did list it. The omission was the sidebar's.
-    'work-order', 'work-order.manage',
-    'lcp-nap-location',
+    'job-order', 'job-order.tech-edit', 'job-order.attachment', 'service-order',
+    'service-order.tech-edit', 'work-order', 'lcp-nap-location',
   ],
 
   [ROLE.CUSTOMER]: [
-    'customer-dashboard',
-    'customer-bills',
-    'customer-support',
+    'customer-dashboard', 'customer-bills', 'customer-support',
   ],
 
   [ROLE.AGENT]: [
-    'agent-dashboard',
-    'agent-application',
-    'job-order',
-    'work-order',
-    'bonus-history',
+    'agent-dashboard', 'agent-application', 'job-order', 'work-order', 'bonus-history',
     'agent-invoices',
   ],
 
   [ROLE.INVENTORY_STAFF]: [
-    'inventory',
-    'inventory-category-list',
-    'modem-router-logs',
+    'inventory', 'inventory-category-list',
   ],
 
   [ROLE.OSP]: [
-    'work-order', 'work-order.manage',
-    'lcp-nap-location',
+    'work-order', 'work-order.manage', 'lcp-nap-location',
   ],
 
   [ROLE.HEAD_TECH]: [
-    'application-management',
-    'application-management.move-to-jo', 'application-management.quick-status',
-    'job-order',
-    'job-order.approve', 'job-order.failed', 'job-order.admin-edit', 'job-order.attachment',
-    'job-order.pre-install',
-    'service-order', 'service-order.admin-edit',
-    'work-order', 'work-order.manage',
-    'lcp-nap-location',
-    // The head technician maintains the outside-plant records, so the three
-    // verbs are spelled out rather than left to the server's grandfathering
-    // rule, which only covers stored custom roles.
-    'location-list', 'location-list.create', 'location-list.edit', 'location-list.delete',
-    'lcp', 'lcp.create', 'lcp.edit', 'lcp.delete',
-    'nap', 'nap.create', 'nap.edit', 'nap.delete',
-    // The two network tools. Xendit Reconciliation is deliberately NOT here:
-    // it settles real money against real accounts, which is an Administrator
-    // and SuperAdmin concern rather than a field-operations one.
-    'smartolt-tool',
+    'application-management', 'application-management.move-to-jo',
+    'application-management.quick-status', 'job-order', 'job-order.admin-edit',
+    'job-order.attachment', 'service-order', 'service-order.admin-edit', 'work-order',
+    'work-order.manage', 'lcp-nap-location', 'customer.so-request', 'customer.details-edit',
+    'customer.attachment', 'customer.transact', 'customer.prepaid-override', 'location-list',
+    'location-list.create', 'location-list.edit', 'location-list.delete', 'lcp', 'lcp.create',
+    'lcp.edit', 'lcp.delete', 'nap', 'nap.create', 'nap.edit', 'nap.delete', 'smartolt-tool',
     'mikrotik-radius-tool',
-    'modem-router-logs',
   ],
 };
 
-/** Where each seeded role lands after signing in. */
+/** Where each seeded role lands after signing in on the web (server's table). */
 export const ROLE_HOME: Record<number, string> = {
   [ROLE.SUPER_ADMIN]: 'dashboard',
   [ROLE.ADMINISTRATOR]: 'dashboard',
@@ -626,17 +497,37 @@ export const ROLE_HOME: Record<number, string> = {
   [ROLE.HEAD_TECH]: 'application-management',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mobile-only
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The screen each seeded role opens on in the mobile app, as mobile section ids.
+ *
+ * Deliberately not ROLE_HOME: this reproduces the landing ladder the app used
+ * before the permission port, which differs from the web for SuperAdmin (the
+ * app has always opened Application Management for role 7). Changing a seeded
+ * role's first screen is a product decision, not a side effect of the port.
+ */
+export const MOBILE_ROLE_HOME: Record<number, string> = {
+  [ROLE.ADMINISTRATOR]: 'dashboard',
+  [ROLE.TECHNICIAN]: 'job-order',
+  [ROLE.CUSTOMER]: 'customer-dashboard',
+  [ROLE.AGENT]: 'agent-dashboard',
+  [ROLE.INVENTORY_STAFF]: 'inventory',
+  [ROLE.OSP]: 'work-order',
+  [ROLE.SUPER_ADMIN]: 'applicationManagement',
+  [ROLE.HEAD_TECH]: 'applicationManagement',
+};
+
 /**
  * What a section of the app requires to be opened.
  *
- * Section ids and permission keys are the same strings by design — the sidebar
- * item id, the Dashboard switch case and the Role modal checkbox all use one
- * name — so a section needs an entry here only when it does not follow that
- * rule. Everything else is checked against its own id.
+ * A section needs an entry here only when its id is not itself the key.
+ * Everything else is checked against its own id.
  */
 export const SECTION_PERMISSION_OVERRIDES: Record<string, string | string[]> = {
-  // The default case: which dashboard renders depends on the role, so any of
-  // the three landing keys may open it.
+  // Which dashboard renders depends on the role, so any landing key opens it.
   dashboard: ['dashboard', 'agent-dashboard', 'customer-dashboard'],
 
   // ── Sections the mobile app names differently from the key ───────────────
@@ -650,42 +541,30 @@ export const SECTION_PERMISSION_OVERRIDES: Record<string, string | string[]> = {
   'work-category-list': 'work-category',
   'router-model-list': 'router-models',
   'smart-olt-config': 'smart-olt',
-  // Renders the SmartOLT log file specifically (type="smartolt"), so it is
-  // guarded by that page's own key rather than by the union the API accepts
-  // for reading any file log. The union would have offered a SmartOLT viewer
-  // to a role granted only radius-logs. The web keeps the three as separate
-  // entries under separate keys.
+  // Renders the SmartOLT file log specifically (type="smartolt").
   'file-log-viewer': 'smart-olt-logs',
   'so-charges': 'so-charge',
   'disconnection-logs': 'disconnected-logs',
-  // Plural here, singular in the shared catalog. Without this line the section
-  // resolved to its own id, which is not a key any role holds, so Organizations
-  // was reachable only by a SuperAdmin — whose wildcard matches anything — and
-  // refused to an Administrator or to a custom role granted `organization`
-  // explicitly.
   organizations: 'organization',
   rebate: 'mass-rebate',
+  // The billing list is the customer billing desk's view.
   billing: 'customer',
-  // Renders <Logs />, which reads /logs — and ApiPermissionMap demands
-  // 'system-logs' there, a key only SuperAdmin holds. Mapped to 'data-logs'
-  // before, which an Administrator DOES hold: the entry was listed for them,
-  // opened for them, and then the API refused every request it made. The web
-  // lists System Logs under its own key for exactly this reason.
+  // Renders <Logs />, which reads /logs.
   'activity-logs': 'system-logs',
 
-  // The page is "Pay Out/In" here and "Bonus History" on the web; the key the
-  // server knows it by is the web's. Listed before the two sections below so
-  // sectionForPermission() resolves the key back to the page, not to one of them.
-  commission: 'bonus-history',
+  // The Pay Out/In screen. An administrator holds it as 'commission'; an agent
+  // reads it as their own history under 'bonus-history', the key the web
+  // gives them. Either opens it.
+  commission: ['commission', 'bonus-history'],
 
   // ── Sections that exist only on mobile ───────────────────────────────────
   // An agent's own history and achievements, scoped server side to them.
-  'agent-history': 'bonus-history',
-  achievement: 'bonus-history',
+  'agent-history': ['commission', 'bonus-history'],
+  achievement: ['commission', 'bonus-history'],
   // Release notes and the in-app menu are open to anyone signed in.
   'release-notes': [],
   menu: [],
-  // Local diagnostics screens, not shipped to ordinary users.
+  // Local diagnostics screens.
   'database-setup': 'settings',
   'database-test': 'settings',
 };
@@ -695,23 +574,59 @@ export const permissionForSection = (section: string): string | string[] =>
   SECTION_PERMISSION_OVERRIDES[section] ?? section;
 
 /**
- * The reverse: which mobile section shows a given key.
- *
- * The server names a role's landing page with the shared key
- * ("application-management"); the mobile app has to open its own section id
- * ("applicationManagement"). Only the one-to-one entries can be reversed — an
- * override listing several keys, or none, has no single section to come back
- * to — and a key that names no override is already a section id.
+ * The reverse: which mobile section shows a given key. The server names a
+ * landing page with the shared key ("application-management"); the app opens
+ * its own section id ("applicationManagement"). Only keys whose screen has a
+ * different id are listed; every other key is its own section id.
  */
-export const sectionForPermission = (permission: string): string => {
-  const match = Object.entries(SECTION_PERMISSION_OVERRIDES).find(
-    ([, required]) => typeof required === 'string' && required === permission
-  );
-
-  return match ? match[0] : permission;
+const SECTION_FOR_KEY: Record<string, string> = {
+  'application-management': 'applicationManagement',
+  'agent-application': 'Application',
+  lcp: 'lcp-list',
+  nap: 'nap-list',
+  'usage-type': 'usage-type-list',
+  'payment-method': 'payment-method-list',
+  'work-category': 'work-category-list',
+  'router-models': 'router-model-list',
+  'smart-olt': 'smart-olt-config',
+  'smart-olt-logs': 'file-log-viewer',
+  'so-charge': 'so-charges',
+  'disconnected-logs': 'disconnection-logs',
+  organization: 'organizations',
+  'mass-rebate': 'rebate',
+  'system-logs': 'activity-logs',
 };
 
-/** The shape this module reads out of localStorage's authData. */
+export const sectionForPermission = (permission: string): string =>
+  SECTION_FOR_KEY[permission] ?? permission;
+
+/**
+ * The lists the app shell (Dashboard's providers) loads on sign-in for every
+ * role, and the key(s) the API asks for to read each one: the GET requirement
+ * of that endpoint in backend/app/Support/ApiPermissionMap.php (any one key is
+ * enough). A list is warmed only for a user the API would serve it to; nobody
+ * else has a screen that reads it. Keep in step with the map.
+ *
+ * The inventory categories are not here: any signed-in user may read them.
+ */
+export const SHELL_PREFETCH_KEYS: Record<'applications' | 'jobOrders' | 'serviceOrders' | 'inventory', string[]> = {
+  // GET applications (agent-application plus the map's OVERLAY_READERS)
+  applications: [
+    'agent-application', 'job-order.tech-edit', 'job-order.admin-edit', 'job-order.approve',
+    'job-order.failed', 'job-order.attachment', 'service-order', 'application-management',
+    'lcp-nap-location',
+  ],
+  // GET job-orders
+  jobOrders: ['job-order'],
+  // GET service-orders. Not `customer-support`: no customer screen reads this
+  // provider (Support only creates requests), and the list holds other
+  // customers' names, addresses and PPPoE passwords.
+  serviceOrders: ['service-order'],
+  // GET inventory
+  inventory: ['inventory', 'job-order', 'service-order', 'work-order'],
+};
+
+/** The shape this module reads out of AsyncStorage's authData. */
 export interface AuthLike {
   role?: string | null;
   role_id?: number | string | null;
@@ -733,11 +648,8 @@ export const roleIdOf = (auth?: AuthLike | null): number => {
 export const isLockedRole = (roleId: number): boolean => LOCKED_ROLE_IDS.includes(roleId);
 
 /**
- * Parse the permissions field.
- *
- * Rows written before the model cast existed hold a JSON string or a
- * comma-separated list, so all three shapes are accepted — the same three the
- * server accepts.
+ * Parse the permissions field. Older rows hold a JSON string or a
+ * comma-separated list, so all three shapes are accepted, as on the server.
  */
 export const parsePermissions = (raw: unknown): string[] => {
   if (Array.isArray(raw)) {
@@ -749,7 +661,7 @@ export const parsePermissions = (raw: unknown): string[] => {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
     } catch {
-      // Not JSON — fall through to the comma-separated reading.
+      // Not JSON: fall through to the comma-separated reading.
     }
     return raw.split(',').map(p => p.trim()).filter(Boolean);
   }
@@ -758,10 +670,8 @@ export const parsePermissions = (raw: unknown): string[] => {
 };
 
 /**
- * The keys a seeded role holds — what a hybrid role inherits.
- *
- * Empty for anything that is not one of the eight, so a custom role can never
- * be inherited from and a cleared base grants nothing.
+ * The keys a seeded role holds, which is what a hybrid role inherits. Empty for
+ * anything that is not one of the eight, so roles never chain.
  */
 export const inheritedPermissions = (baseRoleId?: number | string | null): string[] => {
   const base = Number(baseRoleId);
@@ -770,14 +680,15 @@ export const inheritedPermissions = (baseRoleId?: number | string | null): strin
 };
 
 /**
- * The keys a user effectively holds.
+ * The keys a user effectively holds, resolved the way the server resolves them.
  *
- * A seeded role is answered from the table above, so it does not depend on the
- * server having sent a list. A custom role uses the list it was sent, which is
- * the only place that information exists — for a hybrid that list already has
- * its base role's keys merged in, done server side so this copy cannot grant a
- * tab from a base that has since changed. Either way the result also contains
- * the parent page of every sub action, matching the server.
+ * A seeded role holds its ROLE_PERMISSIONS entry exactly as written, with no
+ * implied parent pages: Head Technician holds the customer.* actions for the
+ * customer pane opened from a job order, but not the Customer page. A custom
+ * role uses the list the server resolved for it (at sign-in and from
+ * /me/permissions), which already merges a hybrid's base role and applies the
+ * legacy-role rules; the parent page of each of its own sub actions is added,
+ * as on the server.
  */
 export const permissionsFor = (auth?: AuthLike | null): string[] => {
   if (!auth) return [];
@@ -786,9 +697,17 @@ export const permissionsFor = (auth?: AuthLike | null): string[] => {
 
   if (roleId === ROLE.SUPER_ADMIN) return [WILDCARD];
 
-  const keys = isLockedRole(roleId)
-    ? ROLE_PERMISSIONS[roleId] ?? []
-    : parsePermissions(auth.permissions);
+  if (isLockedRole(roleId)) return [...(ROLE_PERMISSIONS[roleId] ?? [])];
+
+  // No list from the server at all: a session signed in before this app
+  // version (or against a backend without it) whose /me/permissions has not
+  // answered, or cannot. Such a custom role has always opened on the general
+  // dashboard, so it keeps exactly that until the server says otherwise. An
+  // empty list from the server is an answer and is not treated this way.
+  if (auth.permissions === undefined || auth.permissions === null) return ['dashboard'];
+
+  const keys = parsePermissions(auth.permissions);
+  if (keys.includes(WILDCARD)) return [WILDCARD];
 
   const withParents = [...keys];
   keys.forEach(key => {
@@ -802,10 +721,8 @@ export const permissionsFor = (auth?: AuthLike | null): string[] => {
 };
 
 /**
- * Does this set of keys satisfy the requirement?
- *
- * `required` may be one key or several, in which case holding any one is
- * enough. An empty requirement means "no permission needed".
+ * Does this set of keys satisfy the requirement? Several keys means any one is
+ * enough; an empty requirement means "no permission needed".
  */
 export const permissionsAllow = (held: string[], required?: string | string[] | null): boolean => {
   if (!required || (Array.isArray(required) && required.length === 0)) return true;
@@ -815,25 +732,50 @@ export const permissionsAllow = (held: string[], required?: string | string[] | 
 };
 
 /**
- * Where to send this user when they sign in, or when the section they asked for
- * is not theirs.
+ * The administrative groups of the Menu screen whose entries make an account an
+ * administrator rather than a field user (see Menu.tsx).
+ */
+export const ADMIN_SURFACE_GROUPS = ['Billing', 'Configurations', 'Users', 'Logs', 'System'];
+
+/**
+ * Whether the Menu screen offers this account its administrative block.
  *
- * Returns a mobile section id, translating the shared key the server names.
+ * Seeded roles keep the rule the app has always used: the Administrator alone
+ * (not SuperAdmin, not Head Technician). A custom role gets it when it holds
+ * something in one of ADMIN_SURFACE_GROUPS; Menu.tsx decides that, since it
+ * owns the list.
+ */
+export const lockedRoleHasAdminMenu = (roleId: number): boolean => roleId === ROLE.ADMINISTRATOR;
+
+/**
+ * Where to send this user when they sign in, or when the section they asked for
+ * is not theirs. Returns a mobile section id.
  */
 export const homeSectionFor = (auth?: AuthLike | null): string => {
   if (!auth) return 'dashboard';
 
   const roleId = roleIdOf(auth);
+
+  // Seeded roles keep the screen they have always opened on.
+  if (MOBILE_ROLE_HOME[roleId]) return MOBILE_ROLE_HOME[roleId];
+
   const held = permissionsFor(auth);
   const declared = auth.home;
 
-  if (declared && permissionsAllow(held, declared)) return sectionForPermission(declared);
-  if (ROLE_HOME[roleId]) return sectionForPermission(ROLE_HOME[roleId]);
+  // A custom role: the page the server names (a hybrid's base role's landing
+  // page), then the general dashboard it has always opened on, then the first
+  // page it was granted. The menu is open to everyone, so nobody lands on a
+  // screen that refuses them.
+  // Every candidate is checked the way the section guard will check it, so a
+  // stored key that is not a page of the catalog (an old or misspelt entry on
+  // a legacy row) is never chosen and bounced to Access Denied.
+  const opens = (key: string) =>
+    (PAGES as readonly string[]).includes(key) &&
+    permissionsAllow(held, permissionForSection(sectionForPermission(key)));
 
-  // A custom role: the first page it was granted, preferring a real page over a
-  // sub action so it does not land on something like "job-order.approve".
-  // A hybrid does not usually reach here — the server names its base role's
-  // landing page in `home`, which the first line above accepts.
-  const firstPage = held.filter(key => !key.includes('.'))[0];
-  return firstPage ? sectionForPermission(firstPage) : 'dashboard';
+  if (declared && opens(declared)) return sectionForPermission(declared);
+  if (permissionsAllow(held, 'dashboard')) return 'dashboard';
+
+  const firstPage = held.find(key => !key.includes('.') && opens(key));
+  return firstPage ? sectionForPermission(firstPage) : 'menu';
 };

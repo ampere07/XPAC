@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  X, ExternalLink, Edit, Settings, Loader
+  X, ExternalLink, Edit, Settings
 } from 'lucide-react';
 import { WorkOrder, WorkOrderDetailsProps } from '../types/workOrder';
 import { ColorPalette } from '../services/settingsColorPaletteService';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import AssignWorkOrderModal from '../modals/AssignWorkOrderModal';
-import { enableWorkOrderForTechnician } from '../services/workOrderService';
-import { isClosedForTechnicianQueue, isTechnicianEnabled } from '../utils/technicianWorkOrderAccess';
 
 interface WorkOrderDetailsComponentProps extends WorkOrderDetailsProps {
   isDarkMode?: boolean;
@@ -32,6 +32,10 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
   }, []);
   const activeIsMobile = isMobile || localIsMobile;
 
+  // work_orders stores the actor as an email string, so names come from the shared
+  // (cached) user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
@@ -41,17 +45,6 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [isEnablingTechnician, setIsEnablingTechnician] = useState(false);
-  const [enableTechnicianError, setEnableTechnicianError] = useState<string | null>(null);
-  const [enableTechnicianNotice, setEnableTechnicianNotice] = useState<string | null>(null);
-  /**
-   * Local echo of technician_enabled after a successful enable.
-   *
-   * The list refresh is what makes the change permanent everywhere; this only
-   * keeps the button honest in the moment between the two. Cleared whenever a
-   * different work order is opened so it can never leak across records.
-   */
-  const [technicianEnabledOverride, setTechnicianEnabledOverride] = useState<boolean | null>(null);
 
   const FIELD_VISIBILITY_KEY = 'workOrderDetailsFieldVisibility';
   const FIELD_ORDER_KEY = 'workOrderDetailsFieldOrder';
@@ -107,68 +100,6 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
       }
     }
   }, []);
-
-  // ── Technician queue release ────────────────────────────────────────────────
-  // Technicians work their work orders In Progress first and oldest first within
-  // that: everything else active is greyed out until either the work ahead of it
-  // moves forward or an administrator releases one early. This is that release.
-
-  const isAdminUser = (): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    return lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7;
-  };
-
-  const technicianEnabled = technicianEnabledOverride ?? isTechnicianEnabled(workOrder);
-
-  // Offered for administrators on any work order still in a technician's queue.
-  // One the queue already skips is not blocking anything, so there is nothing to
-  // release.
-  // Offered for administrators on any record a technician still owes work on,
-  // including one that is deferred — that is precisely the case where they cannot
-  // pick it back up on their own. Only work that is finished, failed or cancelled
-  // has nothing left to release.
-  const shouldShowEnableTechnicianButton = () =>
-    isAdminUser() && !!workOrder && !isClosedForTechnicianQueue(workOrder);
-
-  const handleEnableTechnicianClick = async () => {
-    if (isEnablingTechnician || technicianEnabled) return;
-
-    if (!workOrder?.id) {
-      setEnableTechnicianError('Cannot enable work order: Missing ID');
-      return;
-    }
-
-    setEnableTechnicianError(null);
-    setEnableTechnicianNotice(null);
-    setIsEnablingTechnician(true);
-
-    try {
-      const response = await enableWorkOrderForTechnician(workOrder.id);
-
-      if (response?.success) {
-        setTechnicianEnabledOverride(true);
-        setEnableTechnicianNotice('Work order enabled. The technician can now start it.');
-        if (onRefresh) {
-          onRefresh();
-        }
-      } else {
-        setEnableTechnicianError((response as any)?.message || 'Failed to enable work order for the technician');
-      }
-    } catch (err: any) {
-      setEnableTechnicianError(
-        err.response?.data?.message || err.message || 'Failed to enable work order for the technician'
-      );
-    } finally {
-      setIsEnablingTechnician(false);
-    }
-  };
-
-  // A different record is a different lock state.
-  useEffect(() => {
-    setTechnicianEnabledOverride(null);
-    setEnableTechnicianError(null);
-    setEnableTechnicianNotice(null);
-  }, [workOrder?.id]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -367,7 +298,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Report To:</div>
-            <div className={valueClass}>{workOrder.report_to}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.report_to, userDirectory, workOrder.report_to)}</div>
           </div>
         );
 
@@ -376,7 +307,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Assign To:</div>
-            <div className={valueClass}>{workOrder.assign_to}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.assign_to, userDirectory, workOrder.assign_to)}</div>
           </div>
         );
 
@@ -394,7 +325,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Requested By:</div>
-            <div className={valueClass}>{workOrder.requested_by}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.requested_by, userDirectory, workOrder.requested_by)}</div>
           </div>
         );
 
@@ -414,7 +345,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
         return (
           <div className={baseFieldClass}>
             <div className={labelClass}>Updated By:</div>
-            <div className={valueClass}>{workOrder.updated_by}</div>
+            <div className={valueClass}>{resolveUserDisplayName(workOrder.updated_by, userDirectory, workOrder.updated_by)}</div>
           </div>
         );
 
@@ -512,23 +443,6 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
           </div>
 
           <div className="flex items-center space-x-3">
-            {shouldShowEnableTechnicianButton() && (
-              <button
-                className={`px-3 py-1 rounded-sm flex items-center text-sm md:text-base font-medium whitespace-nowrap ${technicianEnabled
-                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                  }`}
-                onClick={handleEnableTechnicianClick}
-                disabled={technicianEnabled || isEnablingTechnician}
-                title={technicianEnabled
-                  ? 'The technician can already start this work order'
-                  : 'Let the technician start this work order without finishing the work ahead of it first'}
-              >
-                {isEnablingTechnician && <Loader className="h-3 w-3 mr-1 animate-spin" />}
-                <span>{technicianEnabled ? 'Enabled' : (isEnablingTechnician ? 'Enabling...' : 'Enable')}</span>
-              </button>
-            )}
-
             <button
               className="text-white px-3 py-1 rounded-sm flex items-center transition-colors text-sm md:text-base font-medium"
               style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
@@ -600,24 +514,6 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
             </button>
           </div>
         </div>
-
-        {enableTechnicianError && (
-          <div className={`mx-4 sm:mx-6 mt-3 p-3 rounded flex-shrink-0 ${isDarkMode
-            ? 'bg-red-900 bg-opacity-20 border border-red-700 text-red-400'
-            : 'bg-red-100 border border-red-300 text-red-700'
-            }`}>
-            {enableTechnicianError}
-          </div>
-        )}
-
-        {enableTechnicianNotice && (
-          <div className={`mx-4 sm:mx-6 mt-3 p-3 rounded flex-shrink-0 ${isDarkMode
-            ? 'bg-emerald-900 bg-opacity-20 border border-emerald-700 text-emerald-400'
-            : 'bg-emerald-50 border border-emerald-300 text-emerald-700'
-            }`}>
-            {enableTechnicianNotice}
-          </div>
-        )}
 
         {/* Content */}
         <div className={`flex-1 overflow-y-auto w-full ${activeIsMobile ? 'pb-24' : ''}`}>

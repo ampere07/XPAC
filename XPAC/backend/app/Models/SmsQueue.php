@@ -13,13 +13,9 @@ class SmsQueue extends Model
         'account_no',
         'contact_no',
         'message',
-        // Idempotency key, UNIQUE. NULL for ad-hoc sends, which stay repeatable. Built by
-        // SmsQueueService::dedupeKeyFor() for scheduled notices and blastDedupeKeyFor() for blasts.
+        // Idempotency key for scheduled notifications, UNIQUE. NULL for ad-hoc sends, which stay
+        // repeatable. Built by SmsQueueService::dedupeKeyFor().
         'dedupe_key',
-        // Carried through to sms_logs when the worker sends the row, so a message can be traced
-        // back to the blast or the scan that queued it.
-        'source',
-        'reference_id',
         'status',
         'sent_at',
         'time_sent',

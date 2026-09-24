@@ -7,15 +7,6 @@ interface PaymentPortalStore {
     paymentPortalRecords: PaymentPortalLog[];
     totalCount: number;
     isLoading: boolean;
-    /**
-     * True while the chunk loop is still pulling the rest of the table.
-     *
-     * isLoading goes false as soon as the first chunk lands so the list can
-     * paint, which left every other entry point free to start a second loop or
-     * overwrite what this one had merged. Anything that writes the record array
-     * has to wait on this flag, not on isLoading.
-     */
-    isBackgroundLoading: boolean;
     error: string | null;
     fetchPaymentPortalRecords: (force?: boolean) => Promise<void>;
     refreshPaymentPortalRecords: () => Promise<void>;
@@ -28,18 +19,14 @@ export const usePaymentPortalStore = create<PaymentPortalStore>((set, get) => ({
     paymentPortalRecords: [],
     totalCount: 0,
     isLoading: false,
-    isBackgroundLoading: false,
     error: null,
     lastUpdated: null,
 
     fetchPaymentPortalRecords: async (force = false) => {
-        const { paymentPortalRecords, isLoading, isBackgroundLoading } = get();
+        const { paymentPortalRecords, isLoading } = get();
 
-        // If already loading or data already exists (and not forcing), skip.
-        // isBackgroundLoading is checked too: a second pass starting while the
-        // chunk loop runs would append to its own snapshot and the two would
-        // overwrite each other, losing rows.
-        if (isLoading || isBackgroundLoading || (paymentPortalRecords.length > 0 && !force)) return;
+        // If already loading or data already exists (and not forcing), skip
+        if (isLoading || (paymentPortalRecords.length > 0 && !force)) return;
 
         set({ isLoading: true, error: null });
 
@@ -67,8 +54,6 @@ export const usePaymentPortalStore = create<PaymentPortalStore>((set, get) => ({
             // Progressive background loading
             let currentOffset = CHUNK_SIZE;
             let hasMore = allFetchedRecords.length < dbTotal;
-
-            set({ isBackgroundLoading: hasMore });
 
             while (hasMore) {
                 try {
@@ -100,16 +85,10 @@ export const usePaymentPortalStore = create<PaymentPortalStore>((set, get) => ({
                 error: err.message || 'Failed to load records',
                 isLoading: false
             });
-        } finally {
-            set({ isLoading: false, isBackgroundLoading: false });
         }
     },
 
     refreshPaymentPortalRecords: async () => {
-        // Emptying the array mid-chunk-loop would be undone by that loop's next
-        // write, so leave a run in progress alone.
-        if (get().isBackgroundLoading) return;
-
         set({ paymentPortalRecords: [] }); // Clear existing data
         await get().fetchPaymentPortalRecords(true);
     },
@@ -122,12 +101,7 @@ export const usePaymentPortalStore = create<PaymentPortalStore>((set, get) => ({
     },
 
     fetchUpdates: async () => {
-        const { lastUpdated, isLoading, isBackgroundLoading } = get();
-
-        // The merge below rebuilds the array from current state; the chunk loop
-        // would then write its own snapshot over the top and drop the update.
-        if (isLoading || isBackgroundLoading) return;
-
+        const { lastUpdated, paymentPortalRecords } = get();
         if (!lastUpdated) {
             await get().silentRefresh();
             return;

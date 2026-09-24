@@ -9,8 +9,6 @@ export interface RadiusServer {
   port: string | number;
   ssl_type: string;
   username: string;
-  is_fallback?: boolean;
-  fallback_for?: number | null;
 }
 
 /** The eight states an audited account can land in. */
@@ -44,10 +42,6 @@ export interface ReconciliationRow {
   session_ip: string | null;
   session_mac: string | null;
   duplicate_servers: number[];
-  is_format_valid?: boolean;
-  format_issue?: string | null;
-  suggested_username?: string | null;
-  account_id?: number | null;
 }
 
 export interface DuplicateInstance {
@@ -145,8 +139,7 @@ export type BulkOperation =
   | 'sync_group_billing'
   | 'restrict'
   | 'disconnect'
-  | 'delete'
-  | 'align_username';
+  | 'delete';
 
 export interface BulkUserPayload {
   username: string;
@@ -155,7 +148,6 @@ export interface BulkUserPayload {
   rad_group?: string | null;
   target_group?: string | null;
   rad_password?: string | null;
-  suggested_username?: string | null;
 }
 
 const BASE = '/radius-reconciliation';
@@ -211,9 +203,6 @@ export const radiusReconciliationService = {
 
   syncPassword: (username: string, radPassword: string): Promise<ActionResult> =>
     unwrap(apiClient.post(`${BASE}/sync-password`, { username, rad_password: radPassword })),
-
-  alignUsername: (currentUsername: string, newUsername: string, serverId?: number | null): Promise<ActionResult> =>
-    unwrap(apiClient.post(`${BASE}/align-username`, { current_username: currentUsername, new_username: newUsername, server_id: serverId ?? null })),
 
   syncGroupToMikrotik: (
     username: string,

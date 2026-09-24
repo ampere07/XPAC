@@ -20,7 +20,7 @@ interface GroupTreeProps {
   selectedId: string;
   onSelect: (id: string) => void;
   expanded: Set<string>;
-  onToggleExpand: (id: string) => void;
+  onToggleExpand: (event: React.MouseEvent, id: string) => void;
   isDarkMode: boolean;
   accent: string;
 }
@@ -42,8 +42,7 @@ const GroupTree: React.FC<GroupTreeProps> = ({
       const isOpen = expanded.has(node.id) || selectedId.startsWith(`${node.id}/`);
       const hasChildren = node.children.length > 0;
 
-      // 16px per level, on top of the 16px base — the same rhythm the hardcoded
-      // pl-4 / pl-10 / pl-16 ladder produced on the reference screens.
+      // 16px per level, on top of the 16px base — matching the rhythm of the sidebar ladder
       const indent = 16 + node.depth * 20;
 
       return (
@@ -91,12 +90,12 @@ const GroupTree: React.FC<GroupTreeProps> = ({
                   tabIndex={0}
                   onClick={(event) => {
                     event.stopPropagation();
-                    onToggleExpand(node.id);
+                    onToggleExpand(event, node.id);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.stopPropagation();
-                      onToggleExpand(node.id);
+                      onToggleExpand(event as any, node.id);
                     }
                   }}
                   className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}

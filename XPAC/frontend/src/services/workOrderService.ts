@@ -93,26 +93,6 @@ export const updateWorkOrder = async (id: string | number, workOrderData: Partia
   }
 };
 
-/**
- * Release a work order to its technician ahead of their queue.
- *
- * Administrator-only on the server, so the flag cannot be flipped by the
- * technician whose queue it governs.
- */
-export const enableWorkOrderForTechnician = async (id: string | number) => {
-  try {
-    const idStr = id.toString();
-    const authData = localStorage.getItem('authData');
-    const currentUser = authData ? JSON.parse(authData) : null;
-    const payload = currentUser?.email ? { updated_by: currentUser.email } : {};
-    const response = await apiClient.post<ApiResponse<any>>(`/work-orders/${idStr}/enable-technician`, payload);
-    return response.data;
-  } catch (error) {
-    console.error('Error enabling work order for technician:', error);
-    throw error;
-  }
-};
-
 export const deleteWorkOrder = async (id: string | number) => {
   try {
     const idStr = id.toString();

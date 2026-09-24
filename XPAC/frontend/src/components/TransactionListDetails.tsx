@@ -1,23 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft, ArrowRight, Maximize2, X, Phone, MessageSquare, Info,
   ExternalLink, Mail, Edit, Trash2, Receipt, CheckCircle,
-  ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft
+  ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft, Printer
 } from 'lucide-react';
-import { transactionService } from '../services/transactionService';
+import gowiserLogo from '../assets/gowiserlogo.png';
+import { transactionService, TransactionReceipt } from '../services/transactionService';
 import { relatedDataService } from '../services/relatedDataService';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import LoadingModal from './common/LoadingModalGlobal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { formUIService } from '../services/formUIService';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { useBillingStore } from '../store/billingStore';
 import { API_BASE_URL } from '../config/api';
 import TransactionRevertModal from '../modals/TransactionRevertModal';
 import TransactionFormModal from '../modals/TransactionFormModal';
+import ReceiptPreviewModal from '../modals/ReceiptPreviewModal';
+import { ReceiptData } from '../utils/receiptTemplates';
 import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
+
+// Company details printed in the Official Receipt header. These are static registration
+// details (not stored in settings), so edit them here if the company info ever changes.
+const RECEIPT_COMPANY = {
+  name: 'GO WISER CORPORATION',
+  address: 'Sta. Maria, Zamboanga City, Zamboanga del Sur, Zamboanga Peninsula (Region IX)',
+  tin: '654-854-244-00000',
+  sec: '2023100122771-00',
+  bpNo: 'BP-2024-13126-0',
+  tel: '09531354666',
+  email: 'admin@gowiser.ph',
+};
 
 interface Transaction {
   id: string;
@@ -64,16 +82,69 @@ interface Transaction {
     id: number;
     status: string;
   };
+  /**
+   * Snapshot of the account's state taken at approval time, used by the revert to
+   * restore it. One entry per affected table; `table` discriminates the shape.
+   */
   updated_column?: Array<{
     table: string;
     account_no?: string;
     old_account_balance?: number;
+    old_billing_status_id?: number | null;
     invoice_id?: number;
     invoice_date?: string;
     old_status?: string;
     old_received_payment?: number;
+    // table === 'online_status'
+    old_session_group?: string | null;
+    old_session_status?: string | null;
+    // table === 'billing_accounts_prepaid'
+    was_prepaid?: boolean;
+    old_generation_type?: string | null;
+    old_prepaid_expires_at?: string | null;
+    old_plan_id?: number | null;
+    old_pending_plan_id?: number | null;
+    old_pending_plan_effective_at?: string | null;
   }>;
 }
+
+/** The prepaid entry of an approval snapshot, if the transaction carries one. */
+type PrepaidSnapshot = NonNullable<Transaction['updated_column']>[number];
+
+const findPrepaidSnapshot = (
+  updatedColumn: Transaction['updated_column']
+): PrepaidSnapshot | null =>
+  updatedColumn?.find(entry => entry.table === 'billing_accounts_prepaid') ?? null;
+
+/** "Aug 29, 2026" from a stored 'Y-m-d H:i:s' value. */
+const formatSnapshotDate = (raw?: string | null): string => {
+  if (!raw) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw).trim());
+  if (!m) return String(raw);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d.getTime())
+    ? String(raw)
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+/**
+ * Backdrop for this view's inline confirm/success dialogs.
+ *
+ * Portalled to document.body and raised above the mobile panel root, which is
+ * `fixed inset-0 z-[9999]` in phone view. That establishes a stacking context
+ * the sibling dialogs at the default z-50 could not win, so every confirmation
+ * was painted behind the panel and appeared not to open at all. Portalling to
+ * body puts the dialog outside every app container, the one placement that
+ * cannot be trapped by an ancestor's stacking context, overflow or transform —
+ * the same fix already applied to TransactionFormModal's overlays.
+ */
+const DialogOverlay: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+  createPortal(
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10030]">
+      {children}
+    </div>,
+    document.body
+  );
 
 interface TransactionListDetailsProps {
   transaction: Transaction;
@@ -100,6 +171,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showFailedConfirmModal, setShowFailedConfirmModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
+  const [preparingReceipt, setPreparingReceipt] = useState(false);
   const [showCustomerDetails, setShowCustomerDetails] = useState(false);
   const [loadingCustomerOverlay, setLoadingCustomerOverlay] = useState(false);
   const [selectedCustomerForOverlay, setSelectedCustomerForOverlay] = useState<BillingDetailRecord | null>(null);
@@ -107,6 +181,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
+  const [receiptLogoUrl, setReceiptLogoUrl] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const startXRef = useRef<number>(0);
   const startWidthRef = useRef<number>(0);
@@ -126,43 +201,12 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [fullRelatedInvoices, setFullRelatedInvoices] = useState<any[]>([]);
   const [invoicesCount, setInvoicesCount] = useState(0);
   const [expandedModalSection, setExpandedModalSection] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<{ role: string, role_id: string | number } | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
-  useEffect(() => {
-    try {
-      const authData = localStorage.getItem('authData');
-      if (authData) {
-        const parsed = JSON.parse(authData);
-        setUserRole({
-          role: parsed.role || '',
-          role_id: parsed.role_id || ''
-        });
+  const { can } = usePermissions();
 
-        let perms: string[] = [];
-        if (parsed.permissions) {
-          if (Array.isArray(parsed.permissions)) {
-            perms = parsed.permissions;
-          } else if (typeof parsed.permissions === 'string') {
-            try {
-              const parsedPerms = JSON.parse(parsed.permissions);
-              perms = Array.isArray(parsedPerms) ? parsedPerms : [];
-            } catch (e) {
-              perms = parsed.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      }
-    } catch (err) {
-      console.error('Error getting user role and permissions:', err);
-    }
-  }, []);
-
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -183,6 +227,27 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     };
 
     fetchColorPalette();
+  }, []);
+
+  // Receipt logo: use the same DB-configured logo shown in the Header (form_ui.logo_url),
+  // served through the image proxy exactly like Header does. Falls back to the bundled
+  // asset in handlePrintReceipt() when no logo is configured.
+  useEffect(() => {
+    const fetchReceiptLogo = async () => {
+      try {
+        const config = await formUIService.getConfig();
+        if (config && config.logo_url) {
+          setReceiptLogoUrl(`${API_BASE_URL}/proxy/image?url=${encodeURIComponent(config.logo_url)}`);
+        } else {
+          setReceiptLogoUrl(null);
+        }
+      } catch (err) {
+        console.error('Failed to fetch receipt logo:', err);
+        setReceiptLogoUrl(null);
+      }
+    };
+
+    fetchReceiptLogo();
   }, []);
 
   // Fetch related invoices when account number changes
@@ -268,9 +333,21 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
 
   const hasActiveOverlay = selectedCustomerForOverlay || loadingCustomerOverlay;
 
-  const formatCurrency = (amount: number | string) => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    return `₱${numAmount.toFixed(2)}`;
+  /**
+   * Money as "₱1234.56". Unchanged formatting — only the parsing in front of it is new.
+   *
+   * Anything that is not a number becomes 0. `received_payment` is NULL on some rows carried
+   * over from the old database, and its decimal cast means it can also arrive as a string
+   * carrying thousands separators — both used to reach toFixed() as NaN and print the literal
+   * "₱NaN" on the slip and in the detail panel.
+   */
+  const formatCurrency = (amount: number | string | null | undefined) => {
+    const numAmount =
+      typeof amount === 'number'
+        ? amount
+        : parseFloat(String(amount ?? '').replace(/[^0-9.-]/g, ''));
+
+    return `₱${(Number.isFinite(numAmount) ? numAmount : 0).toFixed(2)}`;
   };
 
   const formatDate = (dateStr?: string | null, includeTime: boolean = false): string => {
@@ -522,6 +599,171 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     setExpandedModalSection(null);
   };
 
+  /**
+   * Statuses that mean the money was never collected, so there is nothing to receipt.
+   *
+   * Mirrors TransactionReceiptFormatter::UNSETTLED_STATUSES — keep the two in step.
+   *
+   * An exclusion list rather than a check for 'Done'. The current vocabulary is
+   * Pending/Done/Processing/Cancelled/Failed, but rows migrated from the old database also
+   * carry 'Approved', 'Completed', 'Paid' and NULL. Gating on 'Done' hid the print button on
+   * every one of them, which is exactly the reprint a customer walks in asking for. A blank
+   * status counts as settled: it only occurs on migrated history, where the row exists
+   * because the payment was taken.
+   */
+  const UNSETTLED_STATUSES = [
+    'pending', 'processing', 'cancelled', 'canceled', 'failed',
+    'void', 'voided', 'reverted', 'declined',
+  ];
+
+  const isReceiptPrintable = !UNSETTLED_STATUSES.includes(
+    (transaction.status || '').trim().toLowerCase()
+  );
+
+  /** First value that survives a trim, or undefined when there is none. */
+  const firstFilled = (...values: Array<unknown>): string | undefined => {
+    for (const value of values) {
+      if (value === null || value === undefined) continue;
+      const text = String(value).trim();
+      if (text !== '') return text;
+    }
+    return undefined;
+  };
+
+  /**
+   * Resolve the human-readable payment method the same way the detail field does.
+   *
+   * The column holds two different things depending on when the row was written: the method
+   * NAME on rows written by this system, and the payment_methods row ID on rows migrated from
+   * the old database. Both are looked up. A numeric value that matches no known method is
+   * dropped rather than printed — "Payment Method: 3" on a receipt is worse than a dash,
+   * because it reads as a real value.
+   */
+  const getPaymentMethodName = (): string => {
+    const fromRelation = firstFilled(transaction.payment_method_info?.payment_method);
+    if (fromRelation) return fromRelation;
+
+    const raw = firstFilled(transaction.payment_method);
+    if (!raw) return '-';
+
+    const matched = paymentMethods?.find(m => String(m.id) === raw || String(m.payment_method) === raw);
+    if (matched?.payment_method) return matched.payment_method;
+
+    return /^\d+$/.test(raw) ? '-' : raw;
+  };
+
+  /**
+   * Assemble the printable receipt payload for this transaction.
+   *
+   * The markup itself lives in utils/receiptTemplates so the preview, the print
+   * output and the PDF export all render from one source instead of the HTML
+   * being built inline here (which made a faithful preview impossible).
+   *
+   * Deliberately carries a disclaimer stating it cannot be used to claim input
+   * tax, so it must not be presented as a BIR Official Receipt.
+   *
+   * `remote` is the backend's resolved projection (see TransactionReceiptFormatter) and wins
+   * wherever it has a value, because it can reach data this component cannot: a transaction
+   * migrated from the old database often has no hydrated `account` relation — closed accounts
+   * and account numbers that picked up padding in the export both break the join — which
+   * takes the customer name, contact and address with it. The local derivation stays as the
+   * fallback so the slip still prints when that call fails.
+   */
+  const buildReceiptData = (remote?: TransactionReceipt | null): ReceiptData => {
+    const customer = transaction.account?.customer;
+    const location = [customer?.address, customer?.barangay, customer?.city, customer?.region]
+      .filter(Boolean).join(', ');
+
+    // created_at last: migrated rows routinely carry neither payment date, and a slip reading
+    // "No date" is a slip the cashier has to apologise for.
+    const paidAt = firstFilled(
+      remote?.paid_at,
+      transaction.date_processed,
+      transaction.payment_date,
+      transaction.created_at,
+    );
+
+    const timeStr = (() => {
+      if (!paidAt) return '-';
+      const d = new Date(paidAt);
+      if (isNaN(d.getTime())) return '-';
+      let h = d.getHours();
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+      return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ampm}`;
+    })();
+
+    const plan = firstFilled(remote?.plan, customer?.desired_plan);
+    const planText = plan ? ` (${plan})` : '';
+
+    const amount = remote && Number.isFinite(remote.amount)
+      ? remote.amount
+      : transaction.received_payment;
+
+    return {
+      company: RECEIPT_COMPANY,
+      // Prefer the DB-configured logo (same one the Header shows); fall back to the bundled asset.
+      logoSrc: receiptLogoUrl || gowiserLogo,
+      receiptNo: firstFilled(
+        remote?.receipt_no,
+        transaction.or_no,
+        transaction.reference_no,
+        transaction.id,
+      ) ?? '-',
+      dateStr: paidAt ? formatDate(paidAt) : '-',
+      timeStr,
+      customerName: firstFilled(remote?.customer_name, customer?.full_name) ?? '-',
+      // The transaction's OWN account_no before the relation's: the column is always
+      // populated, the relation is what goes missing on migrated rows.
+      accountNo: firstFilled(
+        remote?.account_no,
+        transaction.account_no,
+        transaction.account?.account_no,
+      ) ?? '-',
+      contact: firstFilled(remote?.contact, customer?.contact_number_primary) ?? '-',
+      address: firstFilled(remote?.address, location) ?? '',
+      description: `${firstFilled(remote?.description, transaction.transaction_type) ?? 'Payment'}${planText}`,
+      amount: formatCurrency(amount ?? 0),
+      paymentMethod: firstFilled(remote?.payment_method, getPaymentMethodName()) ?? '-',
+      referenceNo: firstFilled(remote?.reference_no, transaction.reference_no),
+      processedBy: firstFilled(
+        remote?.processed_by,
+        transaction.processed_by_user,
+        transaction.approved_by,
+      ),
+    };
+  };
+
+  /**
+   * Opens the preview instead of printing straight away, so the cashier can pick the paper
+   * format and check the slip before committing it to a thermal roll.
+   *
+   * The backend projection is fetched first but never blocks: on any failure the preview
+   * opens on the locally derived payload instead. Enrichment that can stop a receipt being
+   * printed is worse than no enrichment.
+   */
+  const handlePrintReceipt = async () => {
+    if (preparingReceipt) return;
+
+    setPreparingReceipt(true);
+
+    let remote: TransactionReceipt | null = null;
+
+    try {
+      const result = await transactionService.getTransactionReceipt(transaction.id);
+      remote = result.data;
+    } catch (err) {
+      console.error('[TransactionListDetails] Receipt enrichment failed, using local data:', err);
+    }
+
+    try {
+      setReceiptData(buildReceiptData(remote));
+      setShowReceiptPreview(true);
+    } finally {
+      setPreparingReceipt(false);
+    }
+  };
+
   return (
     <>
       <LoadingModal
@@ -534,11 +776,10 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
         colorPalette={colorPalette}
       />
 
-      <div className={`flex flex-col relative md:border-l overflow-hidden ${
-        isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
-      } ${isDarkMode
-        ? 'bg-gray-950 border-white border-opacity-30'
-        : 'bg-white border-gray-300'
+      <div className={`flex flex-col relative md:border-l overflow-hidden ${isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
+        } ${isDarkMode
+          ? 'bg-gray-950 border-white border-opacity-30'
+          : 'bg-white border-gray-300'
         }`} style={{ width: isMobile ? '100%' : `${detailsWidth}px` }}>
         {!isMobile && (
           <div
@@ -638,7 +879,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             )}
             {(transaction.status || '').toLowerCase() === 'pending' &&
-              (String(userRole?.role_id) === '7' || userRole?.role === 'SuperAdmin') && (
+              hasPermission('transaction-list.delete') && (
                 <button
                   onClick={handleDeleteTransaction}
                   disabled={loading}
@@ -648,6 +889,21 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                   <Trash2 size={16} />
                 </button>
               )}
+
+            {/* Print Official Receipt — for any transaction whose money was collected */}
+            {isReceiptPrintable && (
+              <button
+                onClick={handlePrintReceipt}
+                disabled={loading || preparingReceipt}
+                className={`p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+                  }`}
+                title={preparingReceipt ? 'Preparing receipt…' : 'Print Receipt'}
+              >
+                <Printer size={16} />
+              </button>
+            )}
 
             {/* Navigation Chevrons */}
             {(onPrevious || onNext) && (
@@ -901,7 +1157,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       </div>
 
       {showSuccessModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -937,11 +1193,11 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -981,19 +1237,85 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showRevertModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
             }`}>
             <h3 className={`text-xl font-bold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>Confirm Reversion</h3>
-            <p className={`mb-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+            <p className={`mb-4 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>Are you sure you want to revert this transaction? This will add the payment amount back to the account balance and mark paid invoices as unpaid.</p>
+
+            {/* Prepaid rollback preview.
+                Reverting a prepaid payment also takes back the service period and plan the
+                payment bought — a materially different outcome from a postpaid revert, and
+                one the operator should see BEFORE confirming rather than discover after the
+                customer is cut off. Values come from the snapshot captured at approval, so
+                this is exactly what the revert will write back. */}
+            {(() => {
+              const prepaid = findPrepaidSnapshot(transaction.updated_column);
+              if (!prepaid?.was_prepaid) return null;
+
+              const rows: Array<[string, string]> = [
+                ['Prepaid expiry', formatSnapshotDate(prepaid.old_prepaid_expires_at)],
+              ];
+              if (prepaid.old_plan_id != null) {
+                rows.push(['Plan', `#${prepaid.old_plan_id}`]);
+              }
+              if (prepaid.old_pending_plan_id != null) {
+                rows.push([
+                  'Pending plan change',
+                  `#${prepaid.old_pending_plan_id}`
+                  + (prepaid.old_pending_plan_effective_at
+                    ? ` on ${formatSnapshotDate(prepaid.old_pending_plan_effective_at)}`
+                    : ''),
+                ]);
+              }
+
+              return (
+                <div className={`mb-6 rounded-lg border p-3 ${isDarkMode
+                  ? 'bg-amber-950/30 border-amber-800/60'
+                  : 'bg-amber-50 border-amber-300'
+                  }`}>
+                  <p className={`text-xs font-bold uppercase tracking-wide mb-2 ${isDarkMode ? 'text-amber-300' : 'text-amber-800'
+                    }`}>
+                    Prepaid customer — service will also roll back
+                  </p>
+                  <p className={`text-xs mb-2 ${isDarkMode ? 'text-amber-200/80' : 'text-amber-900'}`}>
+                    These will be restored to their values from before the payment was approved,
+                    which may disconnect the customer:
+                  </p>
+                  <div className="space-y-1">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="flex items-start justify-between gap-3 text-xs">
+                        <span className={isDarkMode ? 'text-amber-200/70' : 'text-amber-800'}>{label}</span>
+                        <span className={`font-semibold text-right ${isDarkMode ? 'text-amber-100' : 'text-amber-900'}`}>
+                          {value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* A transaction approved before prepaid capture existed cannot have its prepaid
+                state restored. Say so plainly instead of implying a clean rollback. */}
+            {!findPrepaidSnapshot(transaction.updated_column) && (
+              <div className={`mb-6 rounded-lg border p-3 text-xs ${isDarkMode
+                ? 'bg-gray-900/60 border-gray-700 text-gray-400'
+                : 'bg-gray-50 border-gray-300 text-gray-600'
+                }`}>
+                This transaction was approved before prepaid state was recorded, so its prepaid
+                expiry and plan cannot be restored automatically. The balance and invoices will
+                still be reverted.
+              </div>
+            )}
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setShowRevertModal(false)}
@@ -1012,11 +1334,11 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showDeleteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1043,7 +1365,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       <TransactionRevertModal
@@ -1057,7 +1379,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       />
 
       {showFailedConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <DialogOverlay>
           <div className={`rounded-lg p-6 max-w-md w-full mx-4 border transform transition-all duration-300 ${isDarkMode
             ? 'bg-gray-800 border-gray-700 shadow-2xl'
             : 'bg-white border-gray-300 shadow-xl'
@@ -1084,7 +1406,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {showEditModal && (
@@ -1105,6 +1427,16 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           initialTransactionData={transaction}
         />
       )}
+
+      {/* Opens on the 80mm thermal slip — that is what a cashier prints; the A4
+          invoice is the deliberate opt-in for when a customer asks for one. */}
+      <ReceiptPreviewModal
+        isOpen={showReceiptPreview}
+        onClose={() => setShowReceiptPreview(false)}
+        data={receiptData}
+        isDarkMode={isDarkMode}
+        initialFormat="pos80"
+      />
     </>
   );
 };

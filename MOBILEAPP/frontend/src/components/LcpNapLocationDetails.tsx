@@ -5,7 +5,6 @@ import { WebView } from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getRelatedCustomers, RelatedCustomer } from '../services/lcpnapService';
-import { RecordCard } from './common';
 
 interface LocationMarker {
   id: number;
@@ -276,22 +275,48 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
                 <ActivityIndicator color={primaryColor} />
               ) : relatedCustomers.length > 0 ? (
                 <View style={[styles.table, { borderColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
-                  {/* Cards, not a four-column table: on a phone "Full Name" had
-                      a third of the width and was truncated to one line, which
-                      is the column that identifies the customer. */}
+                  {/* Table Header */}
+                  <View style={[styles.tableHeader, { backgroundColor: isDarkMode ? '#1f2937' : '#f3f4f6' }]}>
+                    <Text style={[styles.columnHeader, styles.colAccNo, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>Acc No</Text>
+                    <Text style={[styles.columnHeader, styles.colName, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>Full Name</Text>
+                    <Text style={[styles.columnHeader, styles.colPort, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>Port</Text>
+                    <Text style={[styles.columnHeader, styles.colStatus, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>Status</Text>
+                  </View>
+                  {/* Table Rows */}
                   {paginatedCustomers.map((customer, index) => (
-                    <RecordCard
-                      key={index}
-                      title={customer.full_name || customer.account_no}
-                      subtitle={[
-                        customer.account_no ? `Acc No: ${customer.account_no}` : null,
-                        customer.port ? `Port: ${customer.port}` : null,
-                      ].filter(Boolean).join('  |  ')}
-                      status={customer.status || null}
-                      style={index === 0 ? { borderTopWidth: 0 } : undefined}
-                    />
+                    <View 
+                      key={index} 
+                      style={[
+                        styles.tableRow, 
+                        { borderTopColor: isDarkMode ? '#374151' : '#e5e7eb' },
+                        index % 2 === 1 && { backgroundColor: isDarkMode ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' }
+                      ]}
+                    >
+                      <Text style={[styles.cellText, styles.colAccNo, { color: isDarkMode ? '#ffffff' : '#111827' }]} numberOfLines={1}>{customer.account_no}</Text>
+                      <Text style={[styles.cellText, styles.colName, { color: isDarkMode ? '#ffffff' : '#111827' }]} numberOfLines={1}>{customer.full_name}</Text>
+                      <Text style={[styles.cellText, styles.colPort, { color: isDarkMode ? '#ffffff' : '#111827' }]} numberOfLines={1}>{customer.port}</Text>
+                      <View style={[styles.colStatus, styles.statusCell]}>
+                        <View style={[
+                          styles.statusBadgeSmall, 
+                          { 
+                            backgroundColor: customer.status === 'Online' ? '#dcfce7' : 
+                                            customer.status === 'Offline' ? '#fee2e2' : '#f3f4f6' 
+                          }
+                        ]}>
+                          <Text style={[
+                            styles.statusBadgeTextSmall, 
+                            { 
+                              color: customer.status === 'Online' ? '#166534' : 
+                                     customer.status === 'Offline' ? '#991b1b' : '#374151' 
+                            }
+                          ]}>
+                            {customer.status || 'N/A'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
                   ))}
-
+                  
                   {/* Pagination Controls */}
                   {totalPages > 1 && (
                     <View style={[styles.paginationContainer, { borderTopColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
@@ -623,11 +648,56 @@ const styles = StyleSheet.create({
     marginTop: 4,
     width: '100%',
   },
-  // The bordered box the related-customer cards sit in.
   table: {
     borderWidth: 1,
     borderRadius: 8,
     overflow: 'hidden',
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderTopWidth: 1,
+    alignItems: 'center',
+  },
+  columnHeader: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  cellText: {
+    fontSize: 13,
+  },
+  colAccNo: {
+    flex: 2,
+  },
+  colName: {
+    flex: 3,
+  },
+  colPort: {
+    flex: 1,
+    textAlign: 'center',
+  },
+  colStatus: {
+    flex: 2,
+    alignItems: 'flex-end',
+  },
+  statusCell: {
+    justifyContent: 'center',
+  },
+  statusBadgeSmall: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  statusBadgeTextSmall: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   noDataText: {
     fontSize: 14,

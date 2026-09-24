@@ -1,19 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  ScrollView,
-  Modal,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronLeft } from 'lucide-react-native';
-import { SearchablePicker, SearchablePickerTrigger } from '../components/SearchablePicker';
+import { X, ChevronDown, Loader2 } from 'lucide-react';
 import { createApplicationVisit, ApplicationVisitData } from '../services/applicationVisitService';
 import { updateApplication } from '../services/applicationService';
 import { UserData } from '../types/api';
@@ -73,18 +59,20 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
   onSave,
   applicationData
 }) => {
-  // Auth lives in AsyncStorage on RN, so the user is loaded after mount rather than
-  // read synchronously during render the way the web build did.
-  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
-  const currentUserEmail = currentUser?.email || 'unknown@email.com';
+  const getCurrentUser = (): UserData | null => {
+    try {
+      const authData = localStorage.getItem('authData');
+      if (authData) {
+        return JSON.parse(authData);
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    }
+    return null;
+  };
 
-  useEffect(() => {
-    AsyncStorage.getItem('authData')
-      .then((authData) => {
-        if (authData) setCurrentUser(JSON.parse(authData));
-      })
-      .catch((error) => console.error('Error getting current user:', error));
-  }, []);
+  const currentUser = getCurrentUser();
+  const currentUserEmail = currentUser?.email || 'unknown@email.com';
 
   useEffect(() => {
     if (isOpen && applicationData) {
@@ -141,18 +129,16 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
-  // Which dropdown is open, and the term typed into its search box.
-  const [activePicker, setActivePicker] = useState<string | null>(null);
-  const [pickerSearch, setPickerSearch] = useState<string>('');
   const [technicians, setTechnicians] = useState<Array<{ email: string; name: string }>>([]);
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(localStorage.getItem('theme') === 'dark');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
-  // RN has no document/MutationObserver — read the stored theme once on mount.
   useEffect(() => {
-    AsyncStorage.getItem('theme')
-      .then((theme) => setIsDarkMode(theme === 'dark'))
-      .catch(() => { });
+    const observer = new MutationObserver(() => {
+      setIsDarkMode(localStorage.getItem('theme') === 'dark');
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -595,266 +581,632 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
 
   if (!isOpen) return null;
 
-  const activeColor = colorPalette?.primary || '#7c3aed';
-
-  const pickerOptions: Record<string, { title: string; options: { label: string; value: string }[] }> = {
-    region: {
-      title: 'Select Region',
-      options: regions.map((r) => ({ label: r.name, value: r.name })),
-    },
-    city: {
-      title: 'Select City',
-      options: filteredCities.map((c) => ({ label: c.name, value: c.name })),
-    },
-    barangay: {
-      title: 'Select Barangay',
-      options: filteredBarangays.map((b) => ({ label: b.barangay, value: b.barangay })),
-    },
-    location: {
-      title: 'Select Location',
-      options: filteredLocations.map((l) => ({ label: l.location_name, value: l.location_name })),
-    },
-    choosePlan: {
-      title: 'Select Plan',
-      options: plans.map((plan) => {
-        const planWithPrice = plan.price ? `${plan.name} - P${plan.price}` : plan.name;
-        return { label: planWithPrice, value: planWithPrice };
-      }),
-    },
-    promo: {
-      title: 'Select Promo',
-      options: [{ label: 'None', value: 'None' }].concat(
-        promos.map((p) => ({
-          label: p.description ? `${p.promo_name} - ${p.description}` : p.promo_name,
-          value: p.promo_name,
-        }))
-      ),
-    },
-    assignedEmail: {
-      title: 'Select Assigned Email',
-      options: technicians.map((t) => ({ label: t.email, value: t.email })),
-    },
-  };
-
-  // A value already on the record that is no longer in the lookup list still needs to be
-  // selectable — mirrors the extra <option> the web form injects for stale values.
-  const optionsFor = (field: string) => {
-    const config = pickerOptions[field];
-    if (!config) return [];
-    const current = (formData as any)[field];
-    const options = current && !config.options.some((o) => o.value === current)
-      ? [{ label: String(current), value: String(current) }, ...config.options]
-      : config.options;
-    const term = pickerSearch.trim().toLowerCase();
-    return term ? options.filter((o) => o.label.toLowerCase().includes(term)) : options;
-  };
-
-  const renderInput = (
-    field: keyof VisitFormData,
-    label: string,
-    required: boolean = false,
-    options: { multiline?: boolean; maxLength?: number; keyboardType?: any } = {}
-  ) => (
-    <View style={vf.fieldGroup} key={String(field)}>
-      <Text style={[vf.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-        {label}{required && <Text style={vf.required}>*</Text>}
-      </Text>
-      <TextInput
-        value={String((formData as any)[field] ?? '')}
-        onChangeText={(text) => handleInputChange(field, text)}
-        multiline={options.multiline}
-        maxLength={options.maxLength}
-        keyboardType={options.keyboardType}
-        textAlignVertical={options.multiline ? 'top' : 'center'}
-        placeholderTextColor={isDarkMode ? '#6b7280' : '#9ca3af'}
-        style={[vf.input, {
-          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-          borderColor: errors[field as string] ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
-          color: isDarkMode ? '#ffffff' : '#111827',
-          minHeight: options.multiline ? 84 : 44,
-        }]}
-      />
-      {errors[field as string] ? <Text style={vf.errorText}>{errors[field as string]}</Text> : null}
-    </View>
-  );
-
-  const renderSelect = (
-    field: string,
-    label: string,
-    required: boolean = false,
-    disabledReason?: string
-  ) => (
-    <SearchablePickerTrigger
-      key={field}
-      label={label}
-      value={String((formData as any)[field] || '')}
-      onPress={() => {
-        if (disabledReason) return;
-        setPickerSearch('');
-        setActivePicker(field);
-      }}
-      error={errors[field]}
-      isDarkMode={isDarkMode}
-      placeholder={disabledReason || pickerOptions[field]?.title || 'Select...'}
-      required={required}
-    />
-  );
-
   return (
-    <Modal visible={isOpen} animationType="slide" onRequestClose={handleCancel}>
-      <View style={[vf.container, { backgroundColor: isDarkMode ? '#111827' : '#f9fafb' }]}>
-        <View style={[vf.header, {
-          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-          borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb'
-        }]}>
-          <Pressable onPress={handleCancel} disabled={loading} style={vf.headerBack}>
-            <ChevronLeft size={26} color={activeColor} />
-          </Pressable>
-          <Text style={[vf.headerTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]} numberOfLines={1}>
-            Application Form Visit
-          </Text>
-          <Pressable
-            onPress={handleSave}
-            disabled={loading}
-            style={[vf.saveBtn, { backgroundColor: loading ? '#9ca3af' : activeColor }]}
-          >
-            {loading
-              ? <ActivityIndicator size="small" color="#ffffff" />
-              : <Text style={vf.saveBtnText}>Save</Text>}
-          </Pressable>
-        </View>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+      <div className={`h-full w-full max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
+        }`}>
+        <div className={`px-6 py-4 flex items-center justify-between border-b ${isDarkMode
+          ? 'bg-gray-800 border-gray-700'
+          : 'bg-gray-100 border-gray-300'
+          }`}>
+          <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>Application Form Visit</h2>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={handleCancel}
+              className={`px-4 py-2 rounded text-sm ${isDarkMode
+                ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                }`}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={loading}
+              className="px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm flex items-center"
+              style={{
+                backgroundColor: colorPalette?.primary || '#7c3aed'
+              }}
+              onMouseEnter={(e) => {
+                if (colorPalette?.accent && !loading) {
+                  e.currentTarget.style.backgroundColor = colorPalette.accent;
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+              }}
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Saving...
+                </>
+              ) : (
+                'Save'
+              )}
+            </button>
+            <button
+              onClick={onClose}
+              className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
+            >
+              <X size={24} />
+            </button>
+          </div>
+        </div>
 
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={vf.body}
-            keyboardShouldPersistTaps="handled"
-          >
-            {renderInput('firstName', 'First Name', true)}
-            {renderInput('middleInitial', 'Middle Initial', false, { maxLength: 1 })}
-            {renderInput('lastName', 'Last Name', true)}
-            {renderInput('contactNumber', 'Contact Number', true, { keyboardType: 'phone-pad' })}
-            {renderInput('secondContactNumber', 'Second Contact Number', false, { keyboardType: 'phone-pad' })}
-            {renderInput('email', 'Applicant Email Address', true, { keyboardType: 'email-address' })}
-            {renderInput('address', 'Address', true)}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="space-y-4">
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                First Name<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.firstName}
+                onChange={(e) => handleInputChange('firstName', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.firstName ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.firstName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
+            </div>
 
-            {renderSelect('region', 'Region', true)}
-            {renderSelect('city', 'City', true, !formData.region ? 'Select Region First' : undefined)}
-            {renderSelect('barangay', 'Barangay', true, !formData.city ? 'Select City First' : undefined)}
-            {renderSelect('location', 'Location', true, !formData.barangay ? 'Select Barangay First' : undefined)}
-            {renderSelect('choosePlan', 'Choose Plan', true)}
-            {renderSelect('promo', 'Promo')}
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Middle Initial
+              </label>
+              <input
+                type="text"
+                value={formData.middleInitial}
+                onChange={(e) => handleInputChange('middleInitial', e.target.value)}
+                maxLength={1}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode
+                  ? 'bg-gray-800 border-gray-700 text-white'
+                  : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+              />
+            </div>
 
-            {renderInput('remarks', 'Remarks', false, { multiline: true })}
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Last Name<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.lastName}
+                onChange={(e) => handleInputChange('lastName', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.lastName ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.lastName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
+            </div>
 
-            {renderSelect('assignedEmail', 'Assigned Email', true)}
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </View>
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Contact Number<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.contactNumber}
+                onChange={(e) => handleInputChange('contactNumber', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.contactNumber ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.contactNumber ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              {errors.contactNumber && <p className="text-red-500 text-xs mt-1">{errors.contactNumber}</p>}
+            </div>
 
-      <SearchablePicker
-        isOpen={!!activePicker}
-        onClose={() => setActivePicker(null)}
-        title={activePicker ? (pickerOptions[activePicker]?.title || 'Select') : 'Select'}
-        data={activePicker ? optionsFor(activePicker) : []}
-        onSelect={(item: any) => {
-          if (activePicker) handleInputChange(activePicker as keyof VisitFormData, item.value);
-          setActivePicker(null);
-        }}
-        keyExtractor={(item: any, index: number) => `${item.value}-${index}`}
-        searchValue={pickerSearch}
-        onSearchChange={setPickerSearch}
-        isDarkMode={isDarkMode}
-        activeColor={activeColor}
-        selectedItemValue={activePicker ? (formData as any)[activePicker] : undefined}
-      />
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Second Contact Number
+              </label>
+              <input
+                type="text"
+                value={formData.secondContactNumber || ''}
+                onChange={(e) => handleInputChange('secondContactNumber', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode
+                  ? 'bg-gray-800 border-gray-700 text-white'
+                  : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+              />
+            </div>
 
-      {/* Status / progress dialog */}
-      <Modal visible={modal.isOpen} transparent animationType="fade" statusBarTranslucent>
-        <View style={vf.statusOverlay}>
-          <View style={[vf.statusCard, {
-            backgroundColor: isDarkMode ? '#111827' : '#ffffff',
-            borderColor: isDarkMode ? '#374151' : '#d1d5db'
-          }]}>
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Applicant Email Address<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="email"
+                value={formData.email}
+                onChange={(e) => handleInputChange('email', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.email ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.email ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Address<span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={formData.address}
+                onChange={(e) => handleInputChange('address', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.address ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.address ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              />
+              {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Region<span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.region}
+                  onChange={(e) => handleInputChange('region', e.target.value)}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = errors.region ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${errors.region ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value="">Select Region</option>
+                  {formData.region && !regions.some(reg => reg.name === formData.region) && (
+                    <option value={formData.region}>{formData.region}</option>
+                  )}
+                  {regions.map((region) => (
+                    <option key={region.id} value={region.name}>
+                      {region.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                  }`} size={20} />
+              </div>
+              {errors.region && <p className="text-red-500 text-xs mt-1">{errors.region}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                City<span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.city}
+                  onChange={(e) => handleInputChange('city', e.target.value)}
+                  disabled={!formData.region}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary && !e.currentTarget.disabled) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = errors.city ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none disabled:opacity-50 disabled:cursor-not-allowed ${errors.city ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value="">{formData.region ? 'Select City' : 'Select Region First'}</option>
+                  {formData.city && !filteredCities.some(city => city.name === formData.city) && (
+                    <option value={formData.city}>{formData.city}</option>
+                  )}
+                  {filteredCities.map((city) => (
+                    <option key={city.id} value={city.name}>
+                      {city.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+              </div>
+              {errors.city && <p className="text-red-500 text-xs mt-1">{errors.city}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Barangay<span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.barangay}
+                  onChange={(e) => handleInputChange('barangay', e.target.value)}
+                  disabled={!formData.city}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary && !e.currentTarget.disabled) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = errors.barangay ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none disabled:opacity-50 disabled:cursor-not-allowed ${errors.barangay ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value="">{formData.city ? 'Select Barangay' : 'Select City First'}</option>
+                  {formData.barangay && !filteredBarangays.some(brgy => brgy.barangay === formData.barangay) && (
+                    <option value={formData.barangay}>{formData.barangay}</option>
+                  )}
+                  {filteredBarangays.map((barangay) => (
+                    <option key={barangay.id} value={barangay.barangay}>
+                      {barangay.barangay}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+              </div>
+              {errors.barangay && <p className="text-red-500 text-xs mt-1">{errors.barangay}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Location<span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.location}
+                  onChange={(e) => handleInputChange('location', e.target.value)}
+                  disabled={!formData.barangay}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary && !e.currentTarget.disabled) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = errors.location ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none disabled:opacity-50 disabled:cursor-not-allowed ${errors.location ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value="">{formData.barangay ? 'Select Location' : 'Select Barangay First'}</option>
+                  {formData.location && formData.location.trim() !== '' && !filteredLocations.some(loc => loc.location_name === formData.location) && (
+                    <option value={formData.location}>{formData.location}</option>
+                  )}
+                  {filteredLocations.map((location) => (
+                    <option key={location.id} value={location.location_name}>
+                      {location.location_name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+              </div>
+              {errors.location && <p className="text-red-500 text-xs mt-1">{errors.location}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Choose Plan<span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.choosePlan}
+                  onChange={(e) => handleInputChange('choosePlan', e.target.value)}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = errors.choosePlan ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${errors.choosePlan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value="">Select Plan</option>
+                  {formData.choosePlan && !plans.some(plan => {
+                    const planWithPrice = plan.price ? `${plan.name} - P${plan.price}` : plan.name;
+                    return planWithPrice === formData.choosePlan || plan.name === formData.choosePlan;
+                  }) && (
+                      <option value={formData.choosePlan}>{formData.choosePlan}</option>
+                    )}
+                  {plans.map((plan) => {
+                    const planWithPrice = plan.price ? `${plan.name} - P${plan.price}` : plan.name;
+                    return (
+                      <option key={plan.id} value={planWithPrice}>
+                        {planWithPrice}
+                      </option>
+                    );
+                  })}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+              </div>
+              {errors.choosePlan && <p className="text-red-500 text-xs mt-1">{errors.choosePlan}</p>}
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Promo
+              </label>
+              <div className="relative">
+                <select
+                  value={formData.promo}
+                  onChange={(e) => handleInputChange('promo', e.target.value)}
+                  onFocus={(e) => {
+                    if (colorPalette?.primary) {
+                      e.currentTarget.style.borderColor = colorPalette.primary;
+                      e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                    }
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${isDarkMode
+                    ? 'bg-gray-800 border-gray-700 text-white'
+                    : 'bg-white border-gray-300 text-gray-900'
+                    }`}
+                >
+                  <option value="">Select Promo</option>
+                  <option value="None">None</option>
+                  {formData.promo && formData.promo !== 'None' && !promos.some(p => p.promo_name === formData.promo) && (
+                    <option value={formData.promo}>{formData.promo}</option>
+                  )}
+                  {promos.map((promo) => (
+                    <option key={promo.id} value={promo.promo_name}>
+                      {promo.promo_name}{promo.description ? ` - ${promo.description}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+              </div>
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Remarks
+              </label>
+              <textarea
+                value={formData.remarks}
+                onChange={(e) => handleInputChange('remarks', e.target.value)}
+                rows={3}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors resize-none ${isDarkMode
+                  ? 'bg-gray-800 border-gray-700 text-white'
+                  : 'bg-white border-gray-300 text-gray-900'
+                  }`}
+              />
+            </div>
+
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>
+                Assigned Email<span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formData.assignedEmail}
+                onChange={(e) => handleInputChange('assignedEmail', e.target.value)}
+                onFocus={(e) => {
+                  if (colorPalette?.primary) {
+                    e.currentTarget.style.borderColor = colorPalette.primary;
+                    e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                  }
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = errors.assignedEmail ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${errors.assignedEmail ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  }`}
+              >
+                <option value="">Select Assigned Email</option>
+                {formData.assignedEmail && !technicians.some(t => t.email === formData.assignedEmail) && (
+                  <option value={formData.assignedEmail}>{formData.assignedEmail}</option>
+                )}
+                {technicians.map((technician, index) => (
+                  <option key={index} value={technician.email}>{technician?.name || technician.email}</option>
+                ))}
+              </select>
+              {errors.assignedEmail && <p className="text-red-500 text-xs mt-1">{errors.assignedEmail}</p>}
+            </div>
+
+            <input type="hidden" value={formData.visit_by || formData.assignedEmail} />
+            <input type="hidden" value={formData.visitType} />
+            <input type="hidden" value={formData.status} />
+          </div>
+        </div>
+      </div>
+
+      {modal.isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[60]">
+          <div className={`border rounded-lg p-8 max-w-md w-full mx-4 ${isDarkMode
+            ? 'bg-gray-900 border-gray-700'
+            : 'bg-white border-gray-300'
+            }`}>
             {modal.type === 'loading' ? (
-              <View style={{ alignItems: 'center', gap: 16 }}>
-                <ActivityIndicator size="large" color={activeColor} />
-                <Text style={[vf.statusPercent, { color: isDarkMode ? '#ffffff' : '#111827' }]}>
-                  {Math.round(loadingPercentage)}%
-                </Text>
-              </View>
+              <div className="text-center">
+                <div className="flex justify-center mb-6">
+                  <div className="animate-spin rounded-full h-20 w-20 border-b-4 border-orange-500"></div>
+                </div>
+                <p className="text-white text-4xl font-bold">{loadingPercentage}%</p>
+              </div>
             ) : (
               <>
-                <Text style={[vf.statusTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]}>{modal.title}</Text>
-                <Text style={[vf.statusMessage, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>{modal.message}</Text>
-                <View style={vf.statusActions}>
+                <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'
+                  }`}>{modal.title}</h3>
+                <p className={`mb-6 whitespace-pre-line ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>{modal.message}</p>
+                <div className="flex items-center justify-end gap-3">
                   {modal.type === 'confirm' ? (
                     <>
-                      <Pressable
-                        onPress={modal.onCancel}
-                        style={[vf.statusCancelBtn, { borderColor: isDarkMode ? '#4b5563' : '#d1d5db' }]}
+                      <button
+                        onClick={modal.onCancel}
+                        className={`px-4 py-2 rounded transition-colors ${isDarkMode
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                          }`}
                       >
-                        <Text style={{ color: isDarkMode ? '#d1d5db' : '#374151', fontWeight: '500' }}>Cancel</Text>
-                      </Pressable>
-                      <Pressable onPress={modal.onConfirm} style={[vf.statusOkBtn, { backgroundColor: activeColor }]}>
-                        <Text style={vf.statusOkText}>Confirm</Text>
-                      </Pressable>
+                        Cancel
+                      </button>
+                      <button
+                        onClick={modal.onConfirm}
+                        className="px-4 py-2 text-white rounded transition-colors"
+                        style={{
+                          backgroundColor: colorPalette?.primary || '#7c3aed'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (colorPalette?.accent) {
+                            e.currentTarget.style.backgroundColor = colorPalette.accent;
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                        }}
+                      >
+                        Confirm
+                      </button>
                     </>
                   ) : (
-                    <Pressable
-                      onPress={() => {
+                    <button
+                      onClick={() => {
                         if (modal.onConfirm) {
                           modal.onConfirm();
                         } else {
                           setModal({ ...modal, isOpen: false });
                         }
                       }}
-                      style={[vf.statusOkBtn, { backgroundColor: activeColor }]}
+                      className="px-4 py-2 text-white rounded transition-colors"
+                      style={{
+                        backgroundColor: colorPalette?.primary || '#7c3aed'
+                      }}
+                      onMouseEnter={(e) => {
+                        if (colorPalette?.accent) {
+                          e.currentTarget.style.backgroundColor = colorPalette.accent;
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                      }}
                     >
-                      <Text style={vf.statusOkText}>OK</Text>
-                    </Pressable>
+                      OK
+                    </button>
                   )}
-                </View>
+                </div>
               </>
             )}
-          </View>
-        </View>
-      </Modal>
-    </Modal>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
-
-const vf = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingTop: 48,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-  },
-  headerBack: { padding: 4 },
-  headerTitle: { flex: 1, fontSize: 17, fontWeight: '600' },
-  saveBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6, minWidth: 72, alignItems: 'center' },
-  saveBtnText: { color: '#ffffff', fontWeight: '600' },
-  body: { padding: 16, paddingBottom: 80, gap: 4 },
-  fieldGroup: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
-  required: { color: '#ef4444' },
-  input: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
-  errorText: { color: '#ef4444', fontSize: 11, marginTop: 4 },
-  statusOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  statusCard: { width: '100%', maxWidth: 420, borderRadius: 10, borderWidth: 1, padding: 24, gap: 12 },
-  statusTitle: { fontSize: 17, fontWeight: '600' },
-  statusMessage: { fontSize: 14, lineHeight: 20 },
-  statusPercent: { fontSize: 34, fontWeight: '700' },
-  statusActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 },
-  statusCancelBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6, borderWidth: 1 },
-  statusOkBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 6 },
-  statusOkText: { color: '#ffffff', fontWeight: '600' },
-});
 
 export default ApplicationVisitFormModal;

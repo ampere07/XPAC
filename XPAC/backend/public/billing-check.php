@@ -3,7 +3,7 @@
  * Billing Cron Job Verification Script
  * 
  * Upload this file to: backend/public/billing-check.php
- * Access: https://backend.atssfiber.ph/billing-check.php?key=YOUR_SECRET_KEY
+ * Access: https://backend.gowiser.ph/billing-check.php?key=YOUR_SECRET_KEY
  * 
  * Security: Change the SECRET_KEY below before uploading
  */
@@ -284,7 +284,7 @@ use Carbon\Carbon;
         echo "<h2>🔧 Cron Job Command Reference</h2>";
         echo "<div class='status-box'>";
         echo "<p><strong>Recommended Command for Hostinger:</strong></p>";
-        echo "<code>cd /home/u450636736/domains/atssfiber.ph/public_html/backend && /usr/bin/php artisan schedule:run >> /dev/null 2>&1</code>";
+        echo "<code>cd /home/u450636736/domains/gowiser.ph/public_html/backend && /usr/bin/php artisan schedule:run >> /dev/null 2>&1</code>";
         echo "<p style='margin-top: 15px;'><strong>Schedule:</strong> Every minute (* * * * *)</p>";
         echo "<p><strong>Actual Execution:</strong> Daily at 1:00 AM</p>";
         echo "</div>";

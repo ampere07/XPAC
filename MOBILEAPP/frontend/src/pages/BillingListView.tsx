@@ -21,6 +21,7 @@ import { BillingDetailRecord } from '../types/billing';
 import { getCities, City } from '../services/cityService';
 import { getRegions, Region } from '../services/regionService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 // ─── Converter ────────────────────────────────────────────────────────────────
 
@@ -30,9 +31,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -63,7 +64,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageType || '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',

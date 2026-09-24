@@ -57,6 +57,16 @@ interface JOFormData {
   remarks: string;
   installationFee: number | string;
   billingDay: string;
+  generationType: string;
+  /** Unchecked = No VAT (bill the plan price). Checked = VAT Included (VAT added on top). */
+  vatEnabled: boolean;
+  withholdingEnabled: boolean;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. Only used when withholding is on. */
+  withholdingPercentage: number | string;
+  /** Approves the account straight into the VIP billing status. Excludes VAT and withholding. */
+  vipEnabled: boolean;
+  /** yyyy-MM-dd. Copied to billing_accounts.vip_expiration, the existing VIP expiry. */
+  vipExpiration: string;
 
   onsiteStatus: string;
   assignedEmail: string;
@@ -116,6 +126,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     remarks: '',
     installationFee: 0,
     billingDay: '',
+    generationType: '',
+    vatEnabled: false,
+    withholdingEnabled: false,
+    withholdingPercentage: '',
+    vipEnabled: false,
+    vipExpiration: '',
 
     onsiteStatus: 'In Progress',
     assignedEmail: '',
@@ -534,12 +550,34 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
         newData.barangay = '';
       } else if (field === 'city') {
         newData.barangay = '';
+      } else if (field === 'withholdingEnabled' && value === false) {
+        // Clear the hidden input so an unchecked box never submits a stale percentage.
+        newData.withholdingPercentage = '';
+      } else if (field === 'vipEnabled') {
+        if (value === true) {
+          // A VIP is comped — it is never billed, so VAT and withholding cannot apply. Clearing
+          // them here (on top of disabling the checkboxes) means ticking VIP after configuring
+          // VAT/withholding can't leave contradictory values behind.
+          newData.vatEnabled = false;
+          newData.withholdingEnabled = false;
+          newData.withholdingPercentage = '';
+        } else {
+          newData.vipExpiration = '';
+        }
       }
 
       return newData;
     });
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+    // A dependent field is hidden once its checkbox is cleared, so drop any error it left behind
+    // — otherwise submission is blocked by a message the user can no longer see or fix.
+    if ((field === 'withholdingEnabled' && value === false) || (field === 'vipEnabled' && value === true)) {
+      setErrors(prev => ({ ...prev, withholdingPercentage: '' }));
+    }
+    if (field === 'vipEnabled' && value === false) {
+      setErrors(prev => ({ ...prev, vipExpiration: '' }));
     }
   };
 
@@ -575,6 +613,18 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       }
     });
   };
+
+  /**
+   * Prepaid accounts have no billing day: they are billed on a rolling 30-day period that starts
+   * when they pay, and are excluded from the fixed-billing-day generator entirely. So the Billing
+   * Day field is hidden and not required for them.
+   *
+   * Letters-only compare so a job order still holding the older 'Pre Paid' also resolves.
+   */
+  const isPrepaidGenerationType = (generationType?: string | null): boolean =>
+    String(generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+  const isPrepaidBillingType = isPrepaidGenerationType(formData.generationType);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -635,11 +685,37 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
 
 
-    const billingDayNum = parseInt(formData.billingDay);
-    if (isNaN(billingDayNum) || billingDayNum < 1) {
-      newErrors.billingDay = 'Billing Day must be at least 1';
-    } else if (billingDayNum > 30) {
-      newErrors.billingDay = 'Billing Day cannot exceed 30';
+    // Skipped for prepaid: the field is hidden, so requiring it would block submission with an
+    // error the user cannot see or fix.
+    if (!isPrepaidBillingType) {
+      const billingDayNum = parseInt(formData.billingDay);
+      if (isNaN(billingDayNum) || billingDayNum < 1) {
+        newErrors.billingDay = 'Billing Day must be at least 1';
+      } else if (billingDayNum > 30) {
+        newErrors.billingDay = 'Billing Day cannot exceed 30';
+      }
+    }
+
+    if (!formData.generationType.trim()) {
+      newErrors.generationType = 'Billing Type is required';
+    }
+
+    // Only validated when the checkbox is on: the inputs below are hidden otherwise, so
+    // requiring them would block submission with an error the user cannot see or fix.
+    // VIP suppresses withholding entirely, so its percentage is not validated in that case.
+    if (formData.withholdingEnabled && !formData.vipEnabled) {
+      const withholdingPercentage = parseFloat(String(formData.withholdingPercentage));
+      if (isNaN(withholdingPercentage)) {
+        newErrors.withholdingPercentage = 'Withholding Percentage is required';
+      } else if (withholdingPercentage <= 0) {
+        newErrors.withholdingPercentage = 'Withholding Percentage must be greater than 0';
+      } else if (withholdingPercentage > 100) {
+        newErrors.withholdingPercentage = 'Withholding Percentage cannot exceed 100';
+      }
+    }
+
+    if (formData.vipEnabled && !formData.vipExpiration.trim()) {
+      newErrors.vipExpiration = 'Expiration Date is required when VIP is enabled';
     }
 
     if (formData.status === 'Confirmed') {
@@ -680,7 +756,29 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       application_id: applicationId,
       timestamp: formattedTimestamp,
       installation_fee: Number(data.installationFee) || 0,
-      billing_day: parseInt(data.billingDay) || 30,
+      // NULL for prepaid: the field is hidden for them, and `parseInt('') || 30` was quietly
+      // storing a billing day of 30 on every prepaid job order. Prepaid bills on a rolling 30-day
+      // period from the payment date, so any fixed day here is fiction — and it would become a
+      // real billing day the moment someone switched the account to postpaid.
+      billing_day: isPrepaidGenerationType(data.generationType) ? null : (parseInt(data.billingDay) || 30),
+      generation_type: toNullIfEmpty(data.generationType),
+      // A VIP is comped and never billed, so VAT and withholding are forced off for it. The
+      // backend applies the same rule, so a direct API caller cannot bypass it either.
+      vat_enabled: !data.vipEnabled && Boolean(data.vatEnabled),
+      // Legacy text column, kept in sync with the boolean for older readers of vat_type.
+      // 'Excluded Vat' is the OLD three-mode vocabulary for "VAT is added on top" — it is not a
+      // label any more (the UI says "VAT Included") and is written only so existing consumers of
+      // this column keep resolving the right computation. Renaming it would invert the meaning of
+      // every historical row, where 'Vat Included' meant the price already contained VAT.
+      vat_type: !data.vipEnabled && data.vatEnabled ? 'Excluded Vat' : 'No Vat',
+      withholding_enabled: !data.vipEnabled && Boolean(data.withholdingEnabled),
+      withholding_percentage: !data.vipEnabled && data.withholdingEnabled
+        ? Number(data.withholdingPercentage) || 0
+        : null,
+      vip_enabled: Boolean(data.vipEnabled),
+      // Existing VIP expiry column. Approval copies it to the billing account and creates that
+      // account with the VIP billing status, so no post-approval edit is needed.
+      vip_expiration: data.vipEnabled ? toNullIfEmpty(data.vipExpiration) : null,
       billing_status: 'In Progress',
       modem_router_sn: null,
       onsite_status: data.onsiteStatus || 'In Progress',
@@ -1197,6 +1295,146 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
+                  Billing Type<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={formData.generationType}
+                    onChange={(e) => handleInputChange('generationType', e.target.value)}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
+                      ? 'bg-gray-800 text-white border-gray-700'
+                      : 'bg-white text-gray-900 border-gray-300'
+                      } ${errors.generationType ? 'border-red-500' : ''}`}
+                  >
+                    <option value="" disabled>Select Billing Type</option>
+                    <option value="Prepaid">Prepaid</option>
+                    <option value="Postpaid">Postpaid</option>
+                  </select>
+                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                    }`} size={20} />
+                </div>
+                {errors.generationType && <p className="text-red-500 text-xs mt-1">{errors.generationType}</p>}
+              </div>
+
+              <div>
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                  }`}>
+                  <input
+                    type="checkbox"
+                    checked={formData.vatEnabled}
+                    onChange={(e) => handleInputChange('vatEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>VAT</span>
+                </label>
+                <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                  {formData.vipEnabled
+                    ? 'Not applicable to VIP accounts — they are not billed.'
+                    : formData.vatEnabled
+                      ? 'VAT Included — VAT is added on top of the plan price.'
+                      : 'No VAT — the customer is billed the plan price.'}
+                </p>
+              </div>
+
+              <div>
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                  }`}>
+                  <input
+                    type="checkbox"
+                    checked={formData.withholdingEnabled}
+                    onChange={(e) => handleInputChange('withholdingEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>Withholding</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                    }`}>
+                    Not applicable to VIP accounts — they are not billed.
+                  </p>
+                )}
+
+                {formData.withholdingEnabled && !formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Withholding Percentage<span className="text-red-500">*</span>
+                    </label>
+                    <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+                      } ${errors.withholdingPercentage ? 'border-red-500' : ''}`}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.withholdingPercentage}
+                        onChange={(e) => handleInputChange('withholdingPercentage', e.target.value)}
+                        placeholder="e.g. 5"
+                        className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'
+                          }`}
+                      />
+                      <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                        }`}>%</span>
+                    </div>
+                    {errors.withholdingPercentage && <p className="text-red-500 text-xs mt-1">{errors.withholdingPercentage}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.vipEnabled}
+                    onChange={(e) => handleInputChange('vipEnabled', e.target.checked)}
+                    className="w-4 h-4 rounded cursor-pointer"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>VIP</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Expiration Date<span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="date"
+                        value={formData.vipExpiration}
+                        onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
+                        className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
+                          ? 'bg-gray-800 text-white border-gray-700'
+                          : 'bg-white text-gray-900 border-gray-300'
+                          } ${errors.vipExpiration ? 'border-red-500' : ''}`}
+                      />
+                      <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                        }`} size={20} />
+                    </div>
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'
+                      }`}>
+                      Approving this job order creates the account with the VIP billing status, so
+                      it is not billed. On this date the VIP check restricts the account, exactly
+                      as it does for a VIP set from Customer Details.
+                    </p>
+                    {errors.vipExpiration && <p className="text-red-500 text-xs mt-1">{errors.vipExpiration}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}>
                   Promo
                 </label>
                 <div className="relative">
@@ -1263,6 +1501,22 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
 
 
+              {/* Hidden for prepaid — they bill on a rolling period, not a fixed day. */}
+              {isPrepaidBillingType ? (
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>
+                    Billing Day
+                  </label>
+                  <p className={`text-xs px-3 py-2 rounded border ${isDarkMode
+                    ? 'text-gray-400 border-gray-700 bg-gray-800'
+                    : 'text-gray-500 border-gray-300 bg-gray-50'
+                    }`}>
+                    Not applicable to prepaid accounts — billing runs on a rolling 30-day period
+                    that starts when the customer pays.
+                  </p>
+                </div>
+              ) : (
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>
@@ -1309,6 +1563,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
                 {errors.billingDay && <p className="text-red-500 text-xs mt-1">{errors.billingDay}</p>}
               </div>
+              )}
             </div>
 
             <div className="space-y-4">

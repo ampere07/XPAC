@@ -12,7 +12,7 @@ import type { GroupableColumn } from '../utils/groupTree';
  * Rather than guess, the grouping becomes the operator's to define — one to N levels,
  * over any column the screen declares as groupable.
  *
- * Sibling of {@link statusSliceService}, and deliberately a separate preference key.
+ * Sibling of statusSliceService, and deliberately a separate preference key.
  * The curated status slices are a *vocabulary* the server owns; grouping is an
  * arbitrary hierarchy the operator builds over columns. Storing them together would
  * mean reconfiguring one silently reset the other.

@@ -134,26 +134,6 @@ export const approveJobOrder = async (id: string | number) => {
   }
 };
 
-/**
- * Release a job order to its technician ahead of their oldest-first queue.
- *
- * Administrator-only on the server, so the flag cannot be flipped by the
- * technician whose queue it governs.
- */
-export const enableJobOrderForTechnician = async (id: string | number) => {
-  try {
-    const idStr = id.toString();
-    const authData = await AsyncStorage.getItem('authData');
-    const currentUser = authData ? JSON.parse(authData) : null;
-    const payload = currentUser?.email ? { updated_by_user_email: currentUser.email } : {};
-    const response = await apiClient.post<ApiResponse<any>>(`/job-orders/${idStr}/enable-technician`, payload);
-    return response.data;
-  } catch (error) {
-    console.error('Error enabling job order for technician:', error);
-    throw error;
-  }
-};
-
 export const uploadJobOrderImages = async (id: string | number, formData: FormData) => {
   try {
     const idStr = id.toString();

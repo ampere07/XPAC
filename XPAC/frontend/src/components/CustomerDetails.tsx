@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, MessageSquare } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, Paperclip, Wrench, Edit, ChevronLeft, ChevronRight as ChevronRightNav, Maximize2, X, ExternalLink, Settings, Circle, CircleArrowRight, Loader2, Download, Clock } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import TransactConfirmationModal from '../modals/TransactConfirmationModal';
 import TransactionFormModal from '../modals/TransactionFormModal';
+import PrepaidOverrideModal from '../modals/PrepaidOverrideModal';
 import StaggeredInstallationFormModal from '../modals/StaggeredInstallationFormModal';
 import DiscountFormModal from '../modals/DiscountFormModal';
 import SORequestFormModal from '../modals/SORequestFormModal';
 import CustomerDetailsEditModal from '../modals/CustomerDetailsEditModal';
 import CustomerAttachmentModal from '../modals/CustomerAttachmentModal';
-import SoloSMSModal from '../modals/SoloSMSModal';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { BillingDetailRecord } from '../types/billing';
@@ -25,6 +26,8 @@ import PaymentPortalDetails from './PaymentPortalDetails';
 import TransactionListDetails from './TransactionListDetails';
 import * as lcpnapService from '../services/lcpnapService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
+import apiClient from '../config/api';
+import { getOnlineStatusInfo } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Break circular dependency with lazy loading
@@ -37,6 +40,9 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
+/** Placeholder for always-rendered fields that hold no value. */
+const NOT_SET = 'Not Set';
 
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
@@ -106,9 +112,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 }) => {
 
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -120,38 +123,12 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
 
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in CustomerDetails:', error);
-      }
-    }
-  }, []);
+  const { can } = usePermissions();
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   const [selectedSOARecord, setSelectedSOARecord] = useState<any>(null);
   const [loadingSOARecord, setLoadingSOARecord] = useState(false);
@@ -328,6 +305,42 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     }
   };
 
+  /**
+   * Scheme picker for the IP row in Technical Details.
+   *
+   * Holds the IP plus the on-screen position of the arrow that opened it, because
+   * the popover is portalled to <body> (see the render at the bottom of this
+   * component) and therefore positions itself in viewport coordinates.
+   *
+   * Portalled rather than absolutely positioned inside the row: the details
+   * sections are scroll containers and the whole panel is `overflow-hidden` on
+   * mobile, so an in-flow popover would be clipped.
+   */
+  const [ipSchemeMenu, setIpSchemeMenu] = useState<{ ip: string; top: number; right: number } | null>(null);
+
+  // Dismiss the scheme menu on Escape, on any outside click, and on scroll or
+  // resize — its position is captured from the trigger, so it would otherwise
+  // drift away from the row it belongs to.
+  useEffect(() => {
+    if (!ipSchemeMenu) return;
+
+    const close = () => setIpSchemeMenu(null);
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', close);
+    // Capture phase so scrolling in any nested container also dismisses it.
+    window.addEventListener('scroll', close, true);
+    document.addEventListener('mousedown', close);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      document.removeEventListener('mousedown', close);
+    };
+  }, [ipSchemeMenu]);
+
   const [showTransactModal, setShowTransactModal] = useState(false);
   const [showTransactionFormModal, setShowTransactionFormModal] = useState(false);
   const [showStaggeredInstallationModal, setShowStaggeredInstallationModal] = useState(false);
@@ -336,7 +349,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   const [showSORequestFormModal, setShowSORequestFormModal] = useState(false);
   const [showDetailsEditModal, setShowDetailsEditModal] = useState(false);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
-  const [showSoloSMSModal, setShowSoloSMSModal] = useState(false);
   const [editType, setEditType] = useState<'customer_details' | 'billing_details' | 'technical_details'>('customer_details');
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
@@ -432,6 +444,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       'usageType',
       'dateInstalled',
       'username',
+      'pppoePassword',
       'connectionType',
       'routerModel',
       'routerModemSN',
@@ -451,6 +464,10 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       'accountNumber',
       'billingStatus',
       'billingDay',
+      'generationType',
+      'vatType',
+      'withholding',
+      'prepaidExpiration',
       'vip_expiration',
       'vip_remarks',
       'plan',
@@ -535,27 +552,11 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     localStorage.setItem(FIELD_ORDER_KEY, JSON.stringify(fieldOrder));
   }, [fieldOrder]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || 'disconnected';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', color: 'text-green-500', hex: '#22c55e', fillColor: 'bg-green-500', hollow: false };
-    if (lower === 'offline') return { label: 'OFFLINE', color: 'text-yellow-400', hex: '#facc15', hollow: true };
-    if (lower === 'not found') return { label: 'NOT FOUND', color: 'text-red-600', hex: '#dc2626', fillColor: 'bg-red-600', hollow: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', color: 'text-gray-400', hex: '#9ca3af', fillColor: 'bg-gray-400', hollow: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', color: 'text-gray-400', hex: '#be6b33', fillColor: 'bg-orange-500', hollow: false };
-    if (lower === 'empty') return { label: 'EMPTY', color: 'text-slate-400', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), color: 'text-blue-500', hex: '#3b82f6', fillColor: 'bg-blue-500', hollow: false };
-  };
+  // Shared with the customer list so the panel and the row behind it can never
+  // disagree. This was a local copy that had drifted — it lacked the Inactive rule
+  // and the Empty guard, so an inactive account with a stale session read ONLINE
+  // here while the list correctly read OFFLINE.
+  const getStatusInfo = getOnlineStatusInfo;
 
   const fetchRelatedData = useCallback(async () => {
     const accountNo = billingRecord.accountNo || billingRecord.account_no || billingRecord.applicationId;
@@ -616,6 +617,26 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   useEffect(() => {
     fetchRelatedData();
   }, [billingRecord.applicationId, billingRecord.accountNo, billingRecord.account_no, refreshKey]);
+
+  /*
+   * ── Prepaid Expiration Override ──────────────────────────────────────────
+   *
+   * Took over the toolbar slot the "Print latest SOA" action used to occupy. Printing a statement
+   * from here is no loss — SOADetails still does it, per statement, which is where anyone printing
+   * one is choosing from anyway.
+   *
+   * The action only appears for prepaid accounts: a postpaid customer's access is governed by
+   * invoices, so there is no service period on them to adjust.
+   *
+   * Letters-only compare so accounts still carrying the older 'Pre Paid' spelling resolve too —
+   * the same normalisation BillingAccount::isPrepaidType() applies on the backend.
+   */
+  const [showPrepaidOverrideModal, setShowPrepaidOverrideModal] = useState(false);
+
+  const isPrepaidAccount = useMemo(
+    () => String(billingRecord.generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid',
+    [billingRecord.generationType]
+  );
 
   // Resolve user IDs for Created By / Updated By fields
   useEffect(() => {
@@ -721,6 +742,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       usageType: 'Usage Type',
       dateInstalled: 'Date Installed',
       username: 'PPPOE Username',
+      pppoePassword: 'PPPOE Password',
       connectionType: 'Connection Type',
       routerModel: 'Router Model',
       routerModemSN: 'Router Serial Number',
@@ -736,6 +758,10 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       accountNumber: 'Account Number',
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
+      generationType: 'Billing Type',
+      vatType: 'VAT',
+      withholding: 'Withholding',
+      prepaidExpiration: 'Prepaid Expiration',
       plan: 'Plan',
       accountBalance: 'Account Balance',
       totalPaid: 'Total Paid',
@@ -766,7 +792,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>Full Name</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+          <span className={`font-medium truncate text-right min-w-0 uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`} title={billingRecord.customerName}>{billingRecord.customerName}</span>
         </div>
       ) : null,
@@ -798,7 +824,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>Address</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+          <span className={`font-medium truncate text-right min-w-0 uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`} title={billingRecord.address}>{billingRecord.address.split(',')[0]}</span>
         </div>
       ) : null,
@@ -889,8 +915,8 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                 />
                 <Marker position={[lat, lng]}>
                   <Popup>
-                    {billingRecord.customerName}<br />
-                    {billingRecord.address}
+                    <span className="uppercase">{billingRecord.customerName}</span><br />
+                    <span className="uppercase">{billingRecord.address}</span>
                   </Popup>
                 </Marker>
               </MapContainer>
@@ -911,7 +937,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             className={`${isDarkMode
               ? 'text-blue-400 hover:text-blue-300'
               : 'text-blue-600 hover:text-blue-700'
-              } flex items-center space-x-1 min-w-0 max-w-[180px] sm:max-w-[300px]`}
+            } flex items-center space-x-1 min-w-0 max-w-[180px] sm:max-w-[300px]`}
           >
             <span className="text-sm truncate" title={billingRecord.houseFrontPicture}>{billingRecord.houseFrontPicture}</span>
             <ExternalLink size={14} className="flex-shrink-0" />
@@ -1046,6 +1072,18 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.username}>{billingRecord.username}</span>
         </div>
       ) : null,
+      // Always rendered, unlike the username row above: staff need to see that an account has
+      // no PPPoE password on record, and a silently missing row cannot convey that.
+      pppoePassword: () => (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>PPPOE Password</span>
+          <span className={`font-medium truncate text-right min-w-0 font-mono ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`} title={billingRecord.pppoePassword || NOT_SET}>
+            {billingRecord.pppoePassword || NOT_SET}
+          </span>
+        </div>
+      ),
       sessionGroup: () => billingRecord.sessionGroup ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Group</span>
@@ -1157,14 +1195,60 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.vlan}>{billingRecord.vlan}</span>
         </div>
       ) : null,
-      sessionIp: () => (billingRecord.sessionIp || billingRecord.sessionIP) ? (
-        <div className="flex justify-between items-center gap-4">
-          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>IP</span>
-          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`} title={billingRecord.sessionIp || billingRecord.sessionIP}>{billingRecord.sessionIp || billingRecord.sessionIP}</span>
-        </div>
-      ) : null,
+      sessionIp: () => {
+        const rawIp = String(billingRecord.sessionIp || billingRecord.sessionIP || '').trim();
+        if (!rawIp) return null;
+
+        // Strip any scheme already stored on the value. Today every row is a bare
+        // IPv4, but if one ever arrives as "http://10.0.0.1" the naive join would
+        // build "https://http://10.0.0.1", which opens a broken tab.
+        const ip = rawIp.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>IP</span>
+            <span className="flex items-center gap-1 min-w-0">
+              <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+                }`} title={ip}>{ip}</span>
+              <button
+                type="button"
+                title="Open as URL"
+                aria-label="Open IP as a URL"
+                aria-haspopup="menu"
+                aria-expanded={ipSchemeMenu?.ip === ip}
+                // mousedown is the document-level dismiss handler, so stop it here
+                // or opening the menu would immediately close it again.
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (ipSchemeMenu?.ip === ip) {
+                    setIpSchemeMenu(null);
+                    return;
+                  }
+                  // Anchor to the trigger in viewport coordinates; the menu is
+                  // portalled to <body> and right-aligned under the arrow.
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setIpSchemeMenu({
+                    ip,
+                    top: r.bottom + 6,
+                    right: Math.max(8, window.innerWidth - r.right),
+                  });
+                }}
+                className={`flex-shrink-0 p-0.5 rounded transition-colors ${isDarkMode
+                  ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200'
+                  }`}
+              >
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-150 ${ipSchemeMenu?.ip === ip ? 'rotate-180' : ''}`}
+                />
+              </button>
+            </span>
+          </div>
+        );
+      },
       accountNumber: () => billingRecord.applicationId ? (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -1181,14 +1265,78 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`} title={billingRecord.billingStatus}>{billingRecord.billingStatus}</span>
         </div>
       ) : null,
-      vip_expiration: () => billingRecord.vip_expiration ? (
+      // Billing Type / VAT / Withholding / VIP are ALWAYS rendered, even with no value, so the
+      // Billing Details section keeps a stable shape and a missing setting is visibly missing
+      // rather than silently absent. NOT_SET is the placeholder for "no value stored".
+      generationType: () => (
+        <div className="flex justify-between items-center gap-4">
+          <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>Billing Type</span>
+          <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+            }`} title={billingRecord.generationType || NOT_SET}>{billingRecord.generationType || NOT_SET}</span>
+        </div>
+      ),
+      vatType: () => {
+        // Prefers the boolean; falls back to the legacy free-text mode for accounts created
+        // before vat_enabled existed. Only when neither is present is it genuinely unset.
+        const vatLabel = typeof billingRecord.vatEnabled === 'boolean'
+          ? (billingRecord.vatEnabled ? 'VAT Included' : 'No VAT')
+          : (billingRecord.vatType || NOT_SET);
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>VAT</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`} title={vatLabel}>{vatLabel}</span>
+          </div>
+        );
+      },
+      withholding: () => {
+        // Explicit false is a real answer ("No"), not a missing value — only null/undefined,
+        // meaning an account predating the column, reads as unset.
+        const withholdingLabel = billingRecord.withholdingEnabled
+          ? `${billingRecord.withholdingPercentage ?? 0}%`
+          : (billingRecord.withholdingEnabled === false ? 'No' : NOT_SET);
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>Withholding</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>{withholdingLabel}</span>
+          </div>
+        );
+      },
+      prepaidExpiration: () => {
+        // Letters-only compare so accounts still carrying the older 'Pre Paid'
+        // spelling resolve too — same normalisation the backend uses.
+        const isPrepaid = String(billingRecord.generationType ?? '')
+          .toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+        // Shown for every prepaid account, NOT only those with a date. A prepaid
+        // account with no expiry is a real state (it is only set on the first
+        // payment), and "Not set" tells you that — whereas hiding the row made it
+        // indistinguishable from the field not existing. Postpaid accounts have no
+        // prepaid period, so the row stays hidden for them unless a stray value
+        // exists, in which case it is surfaced rather than swallowed.
+        if (!isPrepaid && !billingRecord.prepaidExpiration) return null;
+
+        return (
+          <div className="flex justify-between items-center gap-4">
+            <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>Prepaid Expiration</span>
+            <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>{billingRecord.prepaidExpiration ? formatDateTime(billingRecord.prepaidExpiration) : NOT_SET}</span>
+          </div>
+        );
+      },
+      vip_expiration: () => (
         <div className="flex justify-between items-center gap-4">
           <span className={`text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>VIP Expiration Date</span>
           <span className={`font-medium truncate text-right min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>{formatDate(billingRecord.vip_expiration)}</span>
+            }`}>{billingRecord.vip_expiration ? formatDate(billingRecord.vip_expiration) : NOT_SET}</span>
         </div>
-      ) : null,
+      ),
       vip_remarks: () => billingRecord.vip_remarks ? (
         <div className="flex justify-between items-start gap-4 flex-col sm:flex-row sm:items-center">
           <span className={`text-xs sm:text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>VIP Remarks</span>
@@ -1458,7 +1606,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     if (onExpandSection && sectionKey === 'detailsUpdateLogs') {
       const name = billingRecord.customerName || '';
       const nameSuffix = name ? ` (${name})` : '';
-
+      
       const labels: Record<string, string> = {
         invoices: `All Related Invoices${nameSuffix}`,
         statementOfAccounts: `All Related Statement of Accounts${nameSuffix}`,
@@ -1475,7 +1623,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         changeDueLogs: `All Related Change Due Logs${nameSuffix}`,
         securityDeposits: `All Related Security Deposits${nameSuffix}`
       };
-
+      
       onExpandSection(
         sectionKey,
         labels[sectionKey] || sectionKey,
@@ -1505,7 +1653,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 
   const handleExportCSV = () => {
     let csvContent = "";
-
+    
     const addRow = (row: any[]) => {
       csvContent += row.map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(",") + "\r\n";
     };
@@ -1542,6 +1690,24 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     addRow(["Account Number", billingRecord.applicationId || billingRecord.accountNo || (billingRecord as any).account_no]);
     addRow(["Billing Status", billingRecord.billingStatus]);
     addRow(["Billing Day", billingRecord.billingDay]);
+    // Billing Type, VAT Type and Prepaid Expiration are each rendered conditionally in the
+    // Billing Details section, so the export guards them the same way — an account without a
+    // value produces no row instead of a blank one. Order matches the on-screen section.
+    if (billingRecord.generationType) {
+      addRow(["Billing Type", billingRecord.generationType]);
+    }
+    const vatExportLabel = typeof billingRecord.vatEnabled === 'boolean'
+      ? (billingRecord.vatEnabled ? 'VAT Included' : 'No VAT')
+      : billingRecord.vatType;
+    if (vatExportLabel) {
+      addRow(["VAT", vatExportLabel]);
+    }
+    if (billingRecord.withholdingEnabled) {
+      addRow(["Withholding", `${billingRecord.withholdingPercentage ?? 0}%`]);
+    }
+    if (billingRecord.prepaidExpiration) {
+      addRow(["Prepaid Expiration", formatDateTime(billingRecord.prepaidExpiration)]);
+    }
     addRow(["Plan", billingRecord.plan]);
     addRow(["Account Balance", billingRecord.accountBalance]);
     addRow(["Total Paid", billingRecord.totalPaid]);
@@ -1575,12 +1741,12 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         addRow(headers);
         data.forEach((item: any) => {
           const rowData = keys.map((k: string) => {
-            let val = item[k];
-            if (k === 'created_at' || k === 'updated_at' || k === 'date') val = formatDate(val);
-            if (typeof val === 'object' && val !== null) {
-              try { val = JSON.stringify(val); } catch (e) { }
-            }
-            return val;
+             let val = item[k];
+             if (k === 'created_at' || k === 'updated_at' || k === 'date') val = formatDate(val);
+             if (typeof val === 'object' && val !== null) {
+                try { val = JSON.stringify(val); } catch(e) {}
+             }
+             return val;
           });
           addRow(rowData);
         });
@@ -1602,10 +1768,11 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   // Unified return with resizing wrapper
   return (
     <div
-      className={`flex flex-col relative md:border-l overflow-hidden ${isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
-        } ${isDarkMode
-          ? 'bg-gray-900 text-white border-white border-opacity-30'
-          : 'bg-white text-gray-900 border-gray-300'
+      className={`flex flex-col relative md:border-l overflow-hidden ${
+        isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
+      } ${isDarkMode
+        ? 'bg-gray-900 text-white border-white border-opacity-30'
+        : 'bg-white text-gray-900 border-gray-300'
         }`}
       style={{ width: isMobile ? '100%' : `${detailsWidth}px` }}
     >
@@ -1705,7 +1872,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             }`}>
             <h1 className={`text-base sm:text-lg font-semibold truncate pr-4 min-w-0 flex-1 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`} title={`${billingRecord.applicationId} | ${billingRecord.customerName} | ${billingRecord.address}`}>
-              {billingRecord.applicationId} | {billingRecord.customerName} | {billingRecord.address}
+              {billingRecord.applicationId} | <span className="uppercase">{billingRecord.customerName}</span> | <span className="uppercase">{billingRecord.address}</span>
             </h1>
             <div className="flex items-center justify-end space-x-1.5 sm:space-x-2 flex-shrink-0">
               <button
@@ -1718,6 +1885,21 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               >
                 <Download size={18} />
               </button>
+              {/* Prepaid Expiration Override — replaces the old Print action.
+                  Hidden for anything but a prepaid account: postpaid access is governed by
+                  invoices, so there is no service period here to adjust. */}
+              {isPrepaidAccount && hasPermission('customer.prepaid-override') && (
+                <button
+                  onClick={() => setShowPrepaidOverrideModal(true)}
+                  className={`p-2 rounded transition-colors ${isDarkMode
+                    ? 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+                    }`}
+                  title="Request Prepaid Expiration Override"
+                >
+                  <Clock size={18} />
+                </button>
+              )}
               {hasPermission('customer.so-request') && (
                 <button
                   onClick={handleWrenchClick}
@@ -1754,21 +1936,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                   <Paperclip size={18} />
                 </button>
               )}
-              {/* Sending is gated on sms-blast because that is the key the API
-                  itself requires of POST /sms/send (App\Support\ApiPermissionMap),
-                  so a user without it would only get a 403 from the panel. */}
-              {hasPermission('sms-blast') && (
-                <button
-                  onClick={() => setShowSoloSMSModal(true)}
-                  className={`p-2 rounded transition-colors ${isDarkMode
-                    ? 'text-gray-400 hover:text-white hover:bg-gray-700'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
-                    }`}
-                  title="Send SMS"
-                >
-                  <MessageSquare size={18} />
-                </button>
-              )}
               {hasPermission('customer.transact') && (
                 <button
                   onClick={handleTransactClick}
@@ -1790,7 +1957,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                   Transact
                 </button>
               )}
-
+              
               {/* Navigation Chevrons */}
               {(onPrevious || onNext) && (
                 <div className="flex items-center">
@@ -2371,8 +2538,9 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       {expandedModalSection && (
         <div className="absolute inset-0 flex flex-col" style={{ backgroundColor: isDarkMode ? '#111827' : '#ffffff', zIndex: 10000 }}>
           {/* Header */}
-          <div className={`px-4 md:px-6 py-4 flex items-center justify-between border-b ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
-            }`}>
+          <div className={`px-4 md:px-6 py-4 flex items-center justify-between border-b ${
+            isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
+          }`}>
             <div className="flex items-center space-x-2 md:space-x-4">
               <div className="flex items-center space-x-2 md:space-x-3">
                 <h2 className={`text-lg md:text-xl font-bold truncate max-w-[200px] md:max-w-none ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
@@ -2391,10 +2559,11 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                   {expandedModalSection === 'changeDueLogs' && 'All Related Change Due Logs'}
                   {expandedModalSection === 'securityDeposits' && 'All Related Security Deposits'}
                 </h2>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] md:text-xs font-bold border transition-colors ${isDarkMode
-                    ? 'bg-gray-800 text-gray-400 border-gray-700'
+                <span className={`px-2 py-0.5 rounded-full text-[10px] md:text-xs font-bold border transition-colors ${
+                  isDarkMode 
+                    ? 'bg-gray-800 text-gray-400 border-gray-700' 
                     : 'bg-gray-100 text-gray-500 border-gray-200'
-                  }`}>
+                }`}>
                   {relatedDataCounts[expandedModalSection]} items
                 </span>
               </div>
@@ -2402,8 +2571,9 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 
             <button
               onClick={handleExpandModalClose}
-              className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'
-                }`}
+              className={`p-2 rounded-full transition-colors ${
+                isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'
+              }`}
             >
               <X size={20} />
             </button>
@@ -2447,21 +2617,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         editType={editType}
       />
 
-      {showSoloSMSModal && (
-        <SoloSMSModal
-          isOpen={showSoloSMSModal}
-          onClose={() => setShowSoloSMSModal(false)}
-          customer={{
-            accountNo: billingRecord.applicationId || billingRecord.accountNo || (billingRecord as any).account_no || '',
-            contactNumber: billingRecord.contactNumber || '',
-            customerName: billingRecord.customerName || '',
-            accountBalance: billingRecord.accountBalance ?? billingRecord.balance ?? null,
-            emailAddress: billingRecord.emailAddress || billingRecord.email || '',
-            plan: billingRecord.plan || ''
-          }}
-        />
-      )}
-
       {showAttachmentModal && (
         <CustomerAttachmentModal
           isOpen={showAttachmentModal}
@@ -2470,18 +2625,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             if (onRefresh) onRefresh();
           }}
           customerData={{
-            // The account number, which is what both mappings put in `id` —
-            // convertCustomerDataToBillingDetail and billingService alike set it
-            // from accountNo, not from customers.id. CustomerController::
-            // uploadImages takes either: it tries the primary key first and then
-            // falls back to matching account_no on the customer and on its
-            // billing accounts, which is the path this takes.
-            //
-            // There was a `billingRecord.customerId` ahead of these two. No
-            // mapping has ever produced that field and it is not on
-            // BillingDetailRecord, so it read as undefined and fell through to
-            // exactly the value below — it only stopped being invisible when
-            // the build started type-checking this file.
             id: billingRecord.id || billingRecord.applicationId,
             first_name: billingRecord.firstName || billingRecord.customerName?.split(' ')[0],
             last_name: billingRecord.lastName || billingRecord.customerName?.split(' ').slice(1).join(' '),
@@ -2494,6 +2637,69 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
           }}
         />
       )}
+
+      {/* ── IP scheme picker ──────────────────────────────────────────────────
+          Portalled to <body> so the details sections' scrolling and the panel's
+          overflow-hidden cannot clip it, and so it sits above the panel's own
+          stacking context. Positioned in viewport coordinates from the arrow that
+          opened it, which is why scroll/resize dismiss it. */}
+      {ipSchemeMenu && createPortal(
+        <div
+          role="menu"
+          aria-label="Open IP as URL"
+          // Keep clicks inside from reaching the document-level dismiss handler.
+          onMouseDown={(e) => e.stopPropagation()}
+          className={`fixed z-[10070] w-52 rounded-lg border shadow-2xl overflow-hidden ${isDarkMode
+            ? 'bg-gray-800 border-gray-700'
+            : 'bg-white border-gray-200'
+            }`}
+          style={{ top: ipSchemeMenu.top, right: ipSchemeMenu.right }}
+        >
+          <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider ${isDarkMode
+            ? 'bg-gray-900/50 text-gray-500'
+            : 'bg-gray-50 text-gray-400'
+            }`}>
+            Open in new tab
+          </div>
+
+          {(['https', 'http'] as const).map(scheme => {
+            const url = `${scheme}://${ipSchemeMenu.ip}`;
+
+            return (
+              // A real anchor rather than a button calling window.open: popup blockers leave
+              // user-initiated anchors alone, and it keeps the browser's own affordances —
+              // middle-click, ctrl/cmd-click, "Open in new window", copy link address — which a
+              // click handler would swallow. rel guards the opener against the target page.
+              <a
+                key={scheme}
+                role="menuitem"
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setIpSchemeMenu(null)}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors border-t first:border-t-0 ${isDarkMode
+                  ? 'border-gray-700 hover:bg-gray-700 text-gray-200'
+                  : 'border-gray-100 hover:bg-gray-50 text-gray-700'
+                  }`}
+              >
+                <span className="truncate font-mono text-xs" title={url}>{url}</span>
+                <ExternalLink size={14} className="flex-shrink-0 opacity-50" />
+              </a>
+            );
+          })}
+        </div>,
+        document.body
+      )}
+
+      {/* Prepaid Expiration Override request form. Portals itself to body, so it clears the
+          overlay panel CustomerDetails is rendered inside. */}
+      <PrepaidOverrideModal
+        isOpen={showPrepaidOverrideModal}
+        onClose={() => setShowPrepaidOverrideModal(false)}
+        accountNo={billingRecord.applicationId}
+        customerName={billingRecord.customerName}
+        currentExpiration={billingRecord.prepaidExpiration}
+      />
     </div>
   );
 };

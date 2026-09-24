@@ -297,9 +297,9 @@ class ReportDispatchService
                     'subject'         => $this->subject($reportForPdf, $occurrence),
                     'body_html'       => $this->body($reportForPdf, $occurrence, basename($attachmentPath)),
                     'attachment_path' => $recipientPath,
-                    'email_sender'    => config('reports.mail.from', 'billing@atssfiber.ph'),
-                    'reply_to'        => config('reports.mail.reply_to', 'billing@atssfiber.ph'),
-                    'sender_name'     => config('reports.mail.from_name', 'ATSS Fiber Reports'),
+                    'email_sender'    => config('reports.mail.from', 'billing@gowiser.ph'),
+                    'reply_to'        => config('reports.mail.reply_to', 'billing@gowiser.ph'),
+                    'sender_name'     => config('reports.mail.from_name', 'GOWISER Reports'),
                     'status'          => 'pending',
                     'attempts'        => 0,
                 ]);
@@ -477,7 +477,7 @@ class ReportDispatchService
 
     private function body(Report $report, Carbon $occurrence, string $fileName): string
     {
-        $brand    = e((string) config('reports.brand', 'ATSS FIBER'));
+        $brand    = e((string) config('reports.brand', 'GOWISER'));
         // Same palette the attached PDF uses, so the email and the document it
         // carries are not two different brand colours.
         $theme    = \App\Support\ReportTheme::resolve();

@@ -61,6 +61,31 @@ class GenerateDailyBillingsCron extends Command
                 'target_billing_day' => $targetBillingDay
             ]);
 
+            // ── Prepaid expiry notices ──────────────────────────────────────────────────
+            // Prepaid raises NO renewal SOA and NO renewal invoice: the amount is settled at
+            // checkout from the plan the customer picks, so billing one in advance could only
+            // price the plan they were last on. They are notified instead.
+            // This runs EVERY day, independent of the postpaid billing-day, so it must execute
+            // before the postpaid "no accounts due today" early return further below.
+            try {
+                $prepaidNotices = $this->billingService->notifyExpiredPrepaidAccounts($today);
+                $logger->info('Prepaid expiry notices completed', [
+                    'notified' => $prepaidNotices['success'],
+                    'skipped'  => $prepaidNotices['skipped'],
+                    'failed'   => $prepaidNotices['failed'],
+                ]);
+            } catch (\Throwable $prepaidEx) {
+                $logger->error('Prepaid expiry notices failed', ['error' => $prepaidEx->getMessage()]);
+            }
+
+            // ── Prepaid PRE-expiry warnings ─────────────────────────────────────────────
+            // NOT run here. The heads-up sent billing_config.prepaid_pre_expiry_days BEFORE a
+            // prepaid period lapses concerns prepaid accounts only and raises no bill, so it does
+            // not belong inside the bill-generation run: a failure in either would sit in the
+            // other's log, and the warning could not be re-run without also re-entering billing.
+            // It has its own command and its own schedule entry —
+            // {@see \App\Console\Commands\NotifyPrepaidPreExpiry} / 'billing:notify-prepaid-pre-expiry'.
+
             $logger->info('Checking billing_accounts table for eligible accounts...', [
                 'criteria' => [
                     'billing_status_id' => 1,
@@ -74,6 +99,14 @@ class GenerateDailyBillingsCron extends Command
                 ->whereNotNull('date_installed')
                 ->whereNotNull('account_no')
                 ->where('billing_day', $targetBillingDay)
+                // Mirror the exclusion in EnhancedBillingGenerationServiceWithNotifications::
+                // getActiveAccountsForBillingDay(): prepaid accounts do not bill on the fixed
+                // billing day — their renewals raise no bill at all (see notifyExpiredPrepaidAccounts
+                // above), so they are excluded from this billing-day count.
+                ->where(function ($q) {
+                    $q->whereNotIn('generation_type', \App\Models\BillingAccount::PREPAID_ALIASES)
+                      ->orWhereNull('generation_type');
+                })
                 ->select('account_no')
                 ->get();
 

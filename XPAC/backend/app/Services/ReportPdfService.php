@@ -20,7 +20,7 @@ class ReportPdfService
         // Deliberately NOT config('app.name'): that is the Laravel instance name
         // ("Testing Development" on this deployment) and would end up printed as
         // the company name on documents mailed to customers.
-        $this->brand = $brand ?: (string) config('reports.brand', 'ATSS FIBER');
+        $this->brand = $brand ?: (string) config('reports.brand', 'GOWISER');
     }
 
     /**

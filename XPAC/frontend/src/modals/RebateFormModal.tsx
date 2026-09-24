@@ -5,6 +5,7 @@ import * as lcpnapService from '../services/lcpnapService';
 import * as lcpService from '../services/lcpService';
 import { barangayService, Barangay } from '../services/barangayService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 interface ModalConfig {
@@ -60,7 +61,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
   const [lcpnapList, setLcpnapList] = useState<lcpnapService.LCPNAP[]>([]);
   const [lcpList, setLcpList] = useState<lcpService.LCP[]>([]);
   const [barangayList, setBarangayList] = useState<Barangay[]>([]);
-  const [usersList, setUsersList] = useState<Array<{ email: string }>>([]);
+  const [usersList, setUsersList] = useState<Array<{ email: string; name: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -142,9 +143,11 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
       }
 
       if (usersResponse.success && usersResponse.data) {
-        const users = usersResponse.data.map((user: any) => ({
-          email: user.email_address || user.username || 'No email'
-        }));
+        const users = usersResponse.data.map((user: any) => {
+          const email = user.email_address || user.username || 'No email';
+          // Carried alongside the email so the dropdown can label by name without a second lookup.
+          return { email, name: getUserDisplayName(user, email) };
+        });
         setUsersList(users);
       }
     } catch (error) {
@@ -863,7 +866,7 @@ const RebateFormModal: React.FC<RebateFormModalProps> = ({
                   <option value="">Select Approver</option>
                   {usersList.map((user, index) => (
                     <option key={index} value={user.email}>
-                      {user.email}
+                      {user?.name || user.email}
                     </option>
                   ))}
                 </select>

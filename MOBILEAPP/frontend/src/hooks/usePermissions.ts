@@ -1,10 +1,9 @@
 // One way to ask "may this user do X?" anywhere in the mobile app.
 //
-// The web portal's equivalent (ATSS2_0/frontend/src/hooks/usePermissions.ts)
-// reads localStorage synchronously. AsyncStorage is not synchronous, so this
-// version loads once and reports `ready` while it is still loading — callers
-// that draw destructive controls should wait for `ready` rather than treat a
-// not-yet-loaded user as having no permissions and then flash the controls in.
+// AsyncStorage is not synchronous, so this loads once and reports `ready` while
+// it is still loading. Callers that draw controls should wait for `ready`
+// rather than treat a not-yet-loaded user as having no permissions and then
+// flash the controls in.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -48,8 +47,8 @@ export const readStoredAuth = async (): Promise<AuthLike | null> => {
 /**
  * Permissions for the signed-in user.
  *
- * `auth` may be passed in by a caller that has already loaded it — Dashboard
- * does — which avoids a second read and a second render.
+ * `auth` may be passed in by a caller that has already loaded it (Dashboard,
+ * Menu), which avoids a second read and a second render.
  */
 export const usePermissions = (auth?: AuthLike | null): PermissionApi => {
   const [loaded, setLoaded] = useState<AuthLike | null>(auth ?? null);

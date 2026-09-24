@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Columns3, Download, RotateCcw, Search, X } from 'lucide-react';
 import type { DataGridColumn, DataGridFilter, SortDirection } from '../hooks/useDataGrid';
-import DropdownPortal from './common/DropdownPortal';
 
 /**
  * Presentational pieces for the reconciliation data grids.
@@ -24,6 +23,29 @@ const tokens = (isDarkMode: boolean) => ({
   menu: isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200',
   hover: isDarkMode ? 'hover:bg-gray-800/60' : 'hover:bg-gray-50',
 });
+
+/** Close a popover on outside click or Escape. */
+const useDismiss = (open: boolean, close: () => void) => {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, close]);
+
+  return ref;
+};
 
 // ---- Sortable column header -------------------------------------------------
 
@@ -106,10 +128,8 @@ export const SelectAllHeaderCell: React.FC<SelectAllHeaderCellProps> = ({
 }) => {
   const t = tokens(isDarkMode);
   const [open, setOpen] = useState(false);
+  const ref = useDismiss(open, () => setOpen(false));
   const boxRef = useRef<HTMLInputElement | null>(null);
-  // This cell lives inside the table's own scroll container and inside a sticky
-  // header, so an absolutely positioned menu here is clipped on two axes at once.
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Indeterminate is a DOM property, not an attribute — React cannot set it via JSX.
   useEffect(() => {
@@ -122,7 +142,7 @@ export const SelectAllHeaderCell: React.FC<SelectAllHeaderCellProps> = ({
 
   return (
     <th className="px-3 py-2.5 w-16">
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1" ref={ref}>
         <input
           ref={boxRef}
           type="checkbox"
@@ -132,9 +152,8 @@ export const SelectAllHeaderCell: React.FC<SelectAllHeaderCellProps> = ({
           title={isPageSelected ? 'Clear this page' : 'Select this page'}
           className="rounded disabled:opacity-30"
         />
-        <div>
+        <div className="relative">
           <button
-            ref={triggerRef}
             type="button"
             onClick={() => setOpen((prev) => !prev)}
             title="Selection options"
@@ -143,39 +162,34 @@ export const SelectAllHeaderCell: React.FC<SelectAllHeaderCellProps> = ({
             <ChevronsUpDown className="w-3 h-3" />
           </button>
 
-          <DropdownPortal
-            anchorRef={triggerRef}
-            open={open}
-            onClose={() => setOpen(false)}
-            align="left"
-            width={224}
-            className={`rounded-lg border shadow-lg overflow-hidden ${t.menu}`}
-          >
-            <button
-              type="button"
-              className={item}
-              disabled={selectablePageCount === 0}
-              onClick={() => { onSelectPage(); setOpen(false); }}
-            >
-              Select page ({selectablePageCount})
-            </button>
-            <button
-              type="button"
-              className={item}
-              disabled={selectableFilteredCount === 0 || isAllFilteredSelected}
-              onClick={() => { onSelectAllFiltered(); setOpen(false); }}
-            >
-              Select all filtered ({selectableFilteredCount})
-            </button>
-            <button
-              type="button"
-              className={item}
-              disabled={selectedCount === 0}
-              onClick={() => { onClearSelection(); setOpen(false); }}
-            >
-              Clear selection ({selectedCount})
-            </button>
-          </DropdownPortal>
+          {open && (
+            <div className={`absolute left-0 top-full mt-1 z-30 w-56 rounded-lg border shadow-lg overflow-hidden ${t.menu}`}>
+              <button
+                type="button"
+                className={item}
+                disabled={selectablePageCount === 0}
+                onClick={() => { onSelectPage(); setOpen(false); }}
+              >
+                Select page ({selectablePageCount})
+              </button>
+              <button
+                type="button"
+                className={item}
+                disabled={selectableFilteredCount === 0 || isAllFilteredSelected}
+                onClick={() => { onSelectAllFiltered(); setOpen(false); }}
+              >
+                Select all filtered ({selectableFilteredCount})
+              </button>
+              <button
+                type="button"
+                className={item}
+                disabled={selectedCount === 0}
+                onClick={() => { onClearSelection(); setOpen(false); }}
+              >
+                Clear selection ({selectedCount})
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </th>
@@ -203,16 +217,15 @@ export function ColumnMenu<Row>({
 }: ColumnMenuProps<Row>) {
   const t = tokens(isDarkMode);
   const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const ref = useDismiss(open, () => setOpen(false));
 
   // Locked columns (checkbox, row actions) are structural — not offered here.
   const adjustable = columns.filter((column) => !column.locked);
   const hidden = new Set(hiddenKeys);
 
   return (
-    <div>
+    <div className="relative" ref={ref}>
       <button
-        ref={triggerRef}
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         title="Show, hide and reorder columns"
@@ -222,60 +235,55 @@ export function ColumnMenu<Row>({
         {hidden.size > 0 && <span className="text-cyan-500 font-bold">({adjustable.length - hidden.size})</span>}
       </button>
 
-      <DropdownPortal
-        anchorRef={triggerRef}
-        open={open}
-        onClose={() => setOpen(false)}
-        align="right"
-        width={288}
-        className={`rounded-lg border shadow-lg flex flex-col ${t.menu}`}
-      >
-        <div className={`px-3 py-2 text-[11px] uppercase tracking-wide border-b shrink-0 ${t.muted} ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-          Columns
-        </div>
+      {open && (
+        <div className={`absolute right-0 top-full mt-1 z-30 w-72 rounded-lg border shadow-lg ${t.menu}`}>
+          <div className={`px-3 py-2 text-[11px] uppercase tracking-wide border-b ${t.muted} ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+            Columns
+          </div>
 
-        <div className="overflow-y-auto py-1 flex-1">
-          {adjustable.map((column, index) => (
-            <div key={column.key} className={`flex items-center gap-2 px-3 py-1.5 ${t.hover}`}>
-              <input
-                type="checkbox"
-                checked={!hidden.has(column.key)}
-                onChange={() => onToggle(column.key)}
-                className="rounded shrink-0"
-              />
-              <span className={`flex-1 text-xs truncate ${t.text}`} title={column.label}>
-                {column.label}
-              </span>
-              <button
-                type="button"
-                onClick={() => onMove(column.key, -1)}
-                disabled={index === 0}
-                title="Move left"
-                className={`p-0.5 rounded ${t.muted} hover:text-cyan-500 disabled:opacity-20 disabled:hover:text-current`}
-              >
-                <ArrowUp className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onMove(column.key, 1)}
-                disabled={index === adjustable.length - 1}
-                title="Move right"
-                className={`p-0.5 rounded ${t.muted} hover:text-cyan-500 disabled:opacity-20 disabled:hover:text-current`}
-              >
-                <ArrowDown className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
-        </div>
+          <div className="max-h-72 overflow-y-auto py-1">
+            {adjustable.map((column, index) => (
+              <div key={column.key} className={`flex items-center gap-2 px-3 py-1.5 ${t.hover}`}>
+                <input
+                  type="checkbox"
+                  checked={!hidden.has(column.key)}
+                  onChange={() => onToggle(column.key)}
+                  className="rounded shrink-0"
+                />
+                <span className={`flex-1 text-xs truncate ${t.text}`} title={column.label}>
+                  {column.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onMove(column.key, -1)}
+                  disabled={index === 0}
+                  title="Move left"
+                  className={`p-0.5 rounded ${t.muted} hover:text-cyan-500 disabled:opacity-20 disabled:hover:text-current`}
+                >
+                  <ArrowUp className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onMove(column.key, 1)}
+                  disabled={index === adjustable.length - 1}
+                  title="Move right"
+                  className={`p-0.5 rounded ${t.muted} hover:text-cyan-500 disabled:opacity-20 disabled:hover:text-current`}
+                >
+                  <ArrowDown className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
 
-        <button
-          type="button"
-          onClick={() => { onReset(); setOpen(false); }}
-          className={`w-full px-3 py-2 text-xs flex items-center gap-1.5 border-t shrink-0 ${t.muted} ${t.hover} ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}
-        >
-          <RotateCcw className="w-3 h-3" /> Reset to defaults
-        </button>
-      </DropdownPortal>
+          <button
+            type="button"
+            onClick={() => { onReset(); setOpen(false); }}
+            className={`w-full px-3 py-2 text-xs flex items-center gap-1.5 border-t ${t.muted} ${t.hover} ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}
+          >
+            <RotateCcw className="w-3 h-3" /> Reset to defaults
+          </button>
+        </div>
+      )}
     </div>
   );
 }

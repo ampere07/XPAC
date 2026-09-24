@@ -452,7 +452,7 @@ const PaymentPortalFunnelFilter: React.FC<PaymentPortalFunnelFilterProps> = ({
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <View style={{ gap: 4 }}>
-                  {allColumns.map((col) => {
+                  {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map((col) => {
                     const isActive = !!filterValues[col.key];
                     return (
                       <TouchableOpacity

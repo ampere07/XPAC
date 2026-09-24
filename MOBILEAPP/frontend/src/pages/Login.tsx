@@ -42,6 +42,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [forgotPasswordTimer, setForgotPasswordTimer] = useState(0);
   const [showSuspendedModal, setShowSuspendedModal] = useState(false);
+  const [showForceLoginModal, setShowForceLoginModal] = useState(false);
+  const [forceLoginMessage, setForceLoginMessage] = useState('');
 
 
 
@@ -118,24 +120,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   }, [forgotPasswordTimer]);
 
 
-  const handleSubmit = async () => {
-    // Trimmed before anything looks at them. A mobile keyboard's autocomplete
-    // and a pasted account number both bring a trailing space along, and the
-    // server compares the password character for character - so an untrimmed
-    // space reads as a wrong password against a number that looks correct.
-    const account = accountNo.trim();
-    const mobile = mobileNo.trim();
-
-    if (!account || !mobile) {
-      setError('Please enter your account number and mobile number');
-      return;
-    }
-
+  /**
+   * Shared by the login button and by the takeover confirmation, so the confirmed retry goes
+   * through exactly the same path as a first attempt — only force_login differs.
+   */
+  const submitLogin = async (forceLogin: boolean) => {
     setIsLoading(true);
     setError('');
 
     try {
-      const response = await loginUser(account, mobile);
+      const response = await loginUser(accountNo, mobileNo, forceLogin);
       if (response.status === 'success') {
         const userData: UserData = {
           id: response.data.user.id,
@@ -144,30 +138,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           full_name: response.data.user.full_name,
           role: response.data.user.role,
           role_id: response.data.user.role_id,
-          // The role's effective permission keys, as the server resolved them.
-          // These were dropped here before, so a custom role signed in with no
-          // permissions at all and the app fell back to whatever its role name
-          // happened to match.
+          // The role's effective permission keys and landing page, as the server
+          // resolved them. Read by config/permissions for a custom role; a seeded
+          // role is answered from the table there.
           permissions: response.data.user.permissions || null,
-          // The section this role lands on.
           home: response.data.user.home || null,
           organization: response.data.user.organization
         };
-        // No token, no sign-in.
-        //
-        // This used to store the token only if one came back and sign the customer
-        // in either way, which meant a response missing it produced an app that
-        // believed it was authenticated and held nothing to prove it: the dashboard
-        // rendered name and account number from authData while every request 401'd.
-        // The server always issues one today, so this guards a path that cannot
-        // currently fire — but it is what makes "signed in without a credential"
-        // impossible by construction rather than by coincidence.
-        if (!response.data.token) {
-          setError('Login failed. Please try again.');
-          return;
+        if (response.data.token) {
+          await AsyncStorage.setItem('authToken', response.data.token);
         }
-
-        await AsyncStorage.setItem('authToken', response.data.token);
+        setShowForceLoginModal(false);
         onLogin(userData);
       } else if (response.status === 'suspended') {
         setShowSuspendedModal(true);
@@ -179,12 +160,27 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     } catch (err: any) {
       if (err.response?.data?.status === 'suspended') {
         setShowSuspendedModal(true);
+      } else if (err.response?.status === 409 && err.response?.data?.require_confirmation) {
+        // Technician already signed in elsewhere. Nothing has been authenticated yet — the
+        // login only completes if they confirm and it is re-sent with force_login.
+        setForceLoginMessage(err.response?.data?.message || '');
+        setShowForceLoginModal(true);
       } else {
+        setShowForceLoginModal(false);
         setError(err.response?.data?.message || 'Invalid credentials. Please try again.');
       }
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!accountNo || !mobileNo) {
+      setError('Please enter your account number and mobile number');
+      return;
+    }
+
+    await submitLogin(false);
   };
 
   const handleForgotPassword = async () => {
@@ -389,7 +385,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               textAlign: 'center',
             }}>Apply online in just 2 minutes.</Text>
             <TouchableOpacity
-              onPress={() => Linking.openURL('https://apply.atssfiber.ph')}
+              onPress={() => Linking.openURL('https://apply.gowiser.ph')}
               style={{
                 paddingVertical: 16,
                 paddingHorizontal: 48,
@@ -601,6 +597,104 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             >
               <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 16 }}>Confirm</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Technician Already Signed In Elsewhere Modal */}
+      <Modal
+        visible={showForceLoginModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowForceLoginModal(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 20
+        }}>
+          <View style={{
+            backgroundColor: '#ffffff',
+            padding: 30,
+            borderRadius: 24,
+            width: '100%',
+            maxWidth: 400,
+            elevation: 10,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.25,
+            shadowRadius: 10,
+            alignItems: 'center'
+          }}>
+            <View style={{
+              width: 60,
+              height: 60,
+              borderRadius: 30,
+              backgroundColor: '#fef3c7',
+              justifyContent: 'center',
+              alignItems: 'center',
+              marginBottom: 20
+            }}>
+              <Text style={{ fontSize: 30 }}>📱</Text>
+            </View>
+
+            <Text style={{
+              fontSize: 22,
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: 12,
+              textAlign: 'center'
+            }}>Account Active Elsewhere</Text>
+
+            <Text style={{
+              fontSize: 16,
+              color: '#4b5563',
+              marginBottom: 24,
+              textAlign: 'center',
+              lineHeight: 24
+            }}>
+              {forceLoginMessage || 'Account active on another device. Proceed and log out previous session?'}
+            </Text>
+
+            <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowForceLoginModal(false);
+                  setForceLoginMessage('');
+                  setError('');
+                }}
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  backgroundColor: '#ffffff',
+                  borderWidth: 1,
+                  borderColor: '#d1d5db',
+                  paddingVertical: 14,
+                  borderRadius: 30,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: '#4b5563', fontWeight: '700', fontSize: 15 }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => submitLogin(true)}
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  backgroundColor: isLoading ? '#6b7280' : (colorPalette?.primary || '#6d28d9'),
+                  paddingVertical: 14,
+                  borderRadius: 30,
+                  alignItems: 'center'
+                }}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 15 }}>
+                  {isLoading ? 'Logging in...' : 'Proceed & Log In'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

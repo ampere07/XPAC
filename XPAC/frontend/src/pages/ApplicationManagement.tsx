@@ -51,14 +51,21 @@ const allColumns = [
   { key: 'promo', label: 'Promo', width: 'min-w-28' },
   { key: 'referredBy', label: 'Referred By', width: 'min-w-32' },
   { key: 'createDate', label: 'Create Date', width: 'min-w-32' },
-  { key: 'createTime', label: 'Create Time', width: 'min-w-28' }
+  { key: 'createTime', label: 'Create Time', width: 'min-w-28' },
+  { key: 'updated_by', label: 'Modified By', width: 'min-w-32' },
+  { key: 'updated_at', label: 'Modified Date', width: 'min-w-40' }
 ];
 
 interface ApplicationManagementProps {
   onNavigate?: (section: string, extra?: string) => void;
+  /**
+   * Application to open on arrival, sent when an "Application" notification is
+   * clicked. Empty for ordinary navigation.
+   */
+  autoOpenApplicationId?: string;
 }
 
-const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate }) => {
+const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate, autoOpenApplicationId }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [currentUserOrgId, setCurrentUserOrgId] = useState<number | null>(() => {
     try {
@@ -144,6 +151,11 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
+
+  // Download options. The button used to export immediately; it now opens a chooser
+  // so the plain row export and the status summary can live side by side.
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const [timestampFrom, setTimestampFrom] = useState<string>('');
   const [timestampTo, setTimestampTo] = useState<string>('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -569,15 +581,26 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
           }
           else if (typedFilter.type === 'date') {
             if (appValue) {
-              const dateValue = new Date(appValue).getTime();
+              const normalizeDate = (d: any, isEnd: boolean = false) => {
+                if (!d) return NaN;
+                let s = String(d).trim().replace(' ', 'T');
+                if (s.length === 10) {
+                  s = isEnd ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+                } else if (s.length === 16) {
+                  s = isEnd ? `${s}:59.999` : `${s}:00`;
+                }
+                return new Date(s).getTime();
+              };
+
+              const dateValue = normalizeDate(appValue);
               if (!isNaN(dateValue)) {
                 if (typedFilter.from) {
-                  const fromDate = new Date(typedFilter.from).getTime();
-                  if (dateValue < fromDate) { matchesFunnel = false; break; }
+                  const fromDate = normalizeDate(typedFilter.from, false);
+                  if (!isNaN(fromDate) && dateValue < fromDate) { matchesFunnel = false; break; }
                 }
                 if (typedFilter.to) {
-                  const toDate = new Date(typedFilter.to).getTime();
-                  if (dateValue > toDate + 86400000) { matchesFunnel = false; break; }
+                  const toDate = normalizeDate(typedFilter.to, true);
+                  if (!isNaN(toDate) && dateValue > toDate) { matchesFunnel = false; break; }
                 }
               } else {
                 matchesFunnel = false; break;
@@ -796,6 +819,14 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
             aValue = a.create_time || '';
             bValue = b.create_time || '';
             break;
+          case 'updated_by':
+            aValue = a.updated_by || '';
+            bValue = b.updated_by || '';
+            break;
+          case 'updated_at':
+            aValue = a.updated_at || '';
+            bValue = b.updated_at || '';
+            break;
           default:
             return 0;
         }
@@ -860,6 +891,36 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       setCurrentPage(newPage);
     }
   };
+
+  /**
+   * Open the application a notification pointed at.
+   *
+   * Goes through handleRowClick so the details panel opens exactly as it does on a
+   * real click, including the presence broadcast — a record opened this way should
+   * not be invisible to whoever else is looking at it.
+   *
+   * Tracked by id so it fires once: without this, closing the panel would reopen it
+   * on the next render and the user could never get back to the list.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenApplicationId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenApplicationId) return;
+
+    const target = applications.find(app => String(app.id) === String(autoOpenApplicationId));
+
+    // The list loads in pages; wait for it rather than fetching separately, so the
+    // opened record is the same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenApplicationId;
+    handleRowClick(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenApplicationId, applications]);
 
   const handleRowClick = async (application: Application) => {
     // If we were already viewing something else, broadcast that we stopped
@@ -1107,12 +1168,20 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
         return formatDate(application.create_date) || '-';
       case 'createTime':
         return application.create_time || '-';
+      case 'updated_by':
+        return application.updated_by || '-';
+      case 'updated_at':
+        return application.updated_at ? formatDate(application.updated_at) : '-';
       default:
         return '-';
     }
   };
 
-  const handleExport = () => {
+  /**
+   * The row-per-application export. Unchanged — it is what the Download button has
+   * always produced, and is still the default choice in the chooser.
+   */
+  const exportDefaultCsv = () => {
     if (!filteredApplications || filteredApplications.length === 0) return;
 
     const exportColumns = allColumns
@@ -1124,6 +1193,65 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       });
 
     exportToCSV('applications_export', exportColumns, filteredApplications, renderCellValue);
+  };
+
+  /** Label used when an application records no status. */
+  const UNSPECIFIED = 'Unspecified';
+
+  /**
+   * Counts of applications per status.
+   *
+   * Built from filteredApplications, the same set the default export uses, so the
+   * report always describes what is on screen — a report that ignored the active
+   * filters would quietly disagree with the table beside it.
+   */
+  const statusReport = useMemo(() => {
+    const rows = filteredApplications || [];
+    const counts = new Map<string, number>();
+
+    for (const app of rows) {
+      const status = String(app.status || '').trim() || UNSPECIFIED;
+      counts.set(status, (counts.get(status) || 0) + 1);
+    }
+
+    // Largest first, ties broken by name so repeated exports are identical.
+    const statuses = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([status, count]) => ({ status, count }));
+
+    return { statuses, total: statuses.reduce((sum, s) => sum + s.count, 0) };
+  }, [filteredApplications]);
+
+  /**
+   * The status summary as CSV, through the same exportToCSV the row export uses so
+   * both files share one escaping and filename convention.
+   */
+  const exportStatusReport = () => {
+    if (statusReport.statuses.length === 0) return;
+
+    const reportRows: Array<{ status: string; count: number | string }> = [
+      ...statusReport.statuses,
+      { status: '', count: '' },
+      { status: 'TOTAL', count: statusReport.total },
+    ];
+
+    exportToCSV(
+      'applications_status_report',
+      [
+        { key: 'status', label: 'Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      reportRows,
+      (row, key) => (row as any)[key]
+    );
+  };
+
+  /** Runs whichever mode the chooser is on, then closes it. */
+  const handleConfirmDownload = () => {
+    if (downloadMode === 'report') exportStatusReport();
+    else exportDefaultCsv();
+
+    setIsDownloadModalOpen(false);
   };
 
   const renderCellDisplay = (application: Application, columnKey: string) => {
@@ -1211,7 +1339,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                     console.error('Failed to parse authData');
                   }
                 }
-                const url = email ? `https://apply.atssfiber.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.atssfiber.ph';
+                const url = email ? `https://apply.gowiser.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.gowiser.ph';
                 window.open(url, '_blank', 'noopener,noreferrer');
               }}
               className="px-2.5 py-1 text-xs font-medium rounded flex items-center transition-colors shadow-sm text-white hover:opacity-90"
@@ -1591,7 +1719,12 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                   )}
                 </div>
                 <button
-                  onClick={handleExport}
+                  onClick={() => {
+                    // Always reopens on the default choice, so a previous report
+                    // selection cannot silently hand the next click a different file.
+                    setDownloadMode('default');
+                    setIsDownloadModalOpen(true);
+                  }}
                   disabled={isLoading || filteredApplications.length === 0}
                   title="Export to CSV"
                   className="p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border relative flex-shrink-0"
@@ -2061,6 +2194,106 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       />
 
       {/* Session Expired Modal */}
+      {/* ── Download options ─────────────────────────────────────────────── */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
+            // The backdrop closes the chooser; a click inside it must not.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Download
+              </h2>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-3">
+              {[
+                {
+                  value: 'default' as const,
+                  title: 'Default Download',
+                  description: `All ${filteredApplications.length.toLocaleString()} application${filteredApplications.length === 1 ? '' : 's'} currently shown, one row each.`,
+                },
+                {
+                  value: 'report' as const,
+                  title: 'Data Report',
+                  description: statusReport.statuses.length > 0
+                    ? `Counts grouped by status — ${statusReport.statuses.length} status${statusReport.statuses.length === 1 ? '' : 'es'}, ${statusReport.total.toLocaleString()} record${statusReport.total === 1 ? '' : 's'} in total.`
+                    : 'No applications to summarise.',
+                },
+              ].map(option => {
+                const isSelected = downloadMode === option.value;
+                // Offering a choice that would produce an empty file is worse than
+                // showing it as unavailable.
+                const isDisabled = option.value === 'report' && statusReport.statuses.length === 0;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 p-4 rounded-lg border transition-all ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'bg-gray-900/40' : 'bg-white'}`}
+                    style={{
+                      borderColor: isSelected
+                        ? (colorPalette?.primary || '#7c3aed')
+                        : (isDarkMode ? '#374151' : '#e5e7eb'),
+                      backgroundColor: isSelected
+                        ? hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.15 : 0.06)
+                        : undefined,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadMode"
+                      value={option.value}
+                      checked={isSelected}
+                      disabled={isDisabled}
+                      onChange={() => setDownloadMode(option.value)}
+                      className="mt-1 h-4 w-4 flex-shrink-0"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {option.title}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {option.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className={`flex justify-end gap-3 px-6 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isDarkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDownload}
+                disabled={downloadMode === 'report' && statusReport.statuses.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <SessionExpiredModal
         isOpen={showSessionExpired}
         isDarkMode={isDarkMode}

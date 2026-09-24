@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import apiClient from '../config/api';
+import { API_BASE_URL } from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { userService } from '../services/userService';
 import { referredByEcho } from '../utils/referredByField';
@@ -256,39 +256,41 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
-      // Routed through apiClient so the session cookie and CSRF token are attached —
-      // the /applications endpoints sit behind auth:sanctum.
-      const path = editingApplication
-        ? `/applications/${editingApplication.id}`
-        : '/applications';
+      const url = editingApplication
+        ? `${API_BASE_URL}/applications/${editingApplication.id}`
+        : `${API_BASE_URL}/applications`;
 
-      type SaveResponse = { success?: boolean; message?: string; errors?: Record<string, string[]> };
+      const method = editingApplication ? 'PUT' : 'POST';
 
-      const response = editingApplication
-        ? await apiClient.put<SaveResponse>(path, payload)
-        : await apiClient.post<SaveResponse>(path, payload);
+      const response = await fetch(url, {
+        method,
+        // The session cookie: these routes sit behind auth:sanctum, and the API
+        // is on another origin, where fetch sends no cookies by default.
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
 
-      const data = response.data;
+      const data = await response.json();
 
-      if (data?.success) {
+      if (response.ok && data.success) {
         alert(data.message || `Application ${editingApplication ? 'updated' : 'created'} successfully`);
         onSave();
         handleClose();
       } else {
-        alert(data?.message || `Failed to ${editingApplication ? 'update' : 'create'} application`);
+        if (data.errors) {
+          const errorMessages = Object.values(data.errors).flat().join('\n');
+          alert('Validation errors:\n' + errorMessages);
+        } else {
+          alert(data.message || `Failed to ${editingApplication ? 'update' : 'create'} application`);
+        }
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error submitting form:', error);
-      const data = error?.response?.data;
-      if (data?.errors) {
-        const errorMessages = Object.values(data.errors).flat().join('\n');
-        alert('Validation errors:\n' + errorMessages);
-      } else {
-        alert(
-          data?.message ||
-          `Failed to ${editingApplication ? 'update' : 'create'} application: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      }
+      alert(`Failed to ${editingApplication ? 'update' : 'create'} application: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setLoading(false);
     }

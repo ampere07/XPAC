@@ -314,6 +314,39 @@ class AgentReferral
     }
 
     /**
+     * The value to store when a form writes `referred_by` back.
+     *
+     * Read endpoints show an agent-id referral as the agent's NAME. A client that
+     * echoes that displayed value back on save (any edit form not taught to send
+     * the id) would silently turn "37" into "Brigs Ranay", which the id-exact
+     * matching can then no longer pin to one account. So when the stored value
+     * is an agent id and the incoming value is exactly what we display for it,
+     * the stored id is kept. Any other incoming value — a different agent, free
+     * text, an explicit clear — is written as given.
+     */
+    public static function preserveOnWrite($incoming, $stored)
+    {
+        if ($incoming === null || $stored === null) {
+            return $incoming;
+        }
+
+        $incomingText = trim((string) $incoming);
+        $storedText   = trim((string) $stored);
+
+        if ($incomingText === '' || $incomingText === $storedText) {
+            return $incoming;
+        }
+
+        if (self::agentIdIfAgent($storedText) === null) {
+            return $incoming;
+        }
+
+        $shown = (string) self::displayName($storedText);
+
+        return strcasecmp($incomingText, trim($shown)) === 0 ? $stored : $incoming;
+    }
+
+    /**
      * Drops every cached lookup.
      *
      * For tests and long-running workers, where an agent renamed mid-run would

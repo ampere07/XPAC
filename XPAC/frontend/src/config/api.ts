@@ -21,83 +21,6 @@ const apiClient = axios.create({
   },
 });
 
-/*
- * ── Bearer token fallback ───────────────────────────────────────────────────
- *
- * The session cookie stays the primary credential and nothing below changes
- * how it is used. This is the fallback for a browser that will not return it.
- *
- * The SPA is served from sync.atssfiber.ph and the API lives on
- * backend.atssfiber.ph. A normal browser treats those as the same site and
- * sends the session cookie with every API call. An in-app browser — the one
- * inside Messenger above all — is a WebView with its own cookie policy, and
- * the restrictive ones drop a cookie set by a host other than the page's.
- * Login then appears to succeed and every request after it is a 401, because
- * the cookie the server issued is never sent back.
- *
- * A token in an Authorization header does not depend on cookie policy at all,
- * so it survives where the cookie does not. The server tries the cookie
- * session first and only falls back to the token, so a browser where cookies
- * work is completely unaffected by this.
- *
- * localStorage rather than a cookie, deliberately: a cookie is exactly the
- * thing that does not survive here.
- */
-const AUTH_TOKEN_KEY = 'authToken';
-
-/**
- * A stable id for this browser profile, generated once and kept.
- *
- * The server names each personal access token after the device that asked for
- * it, so signing in again replaces that browser's own credential rather than
- * somebody else's. It used to name them after the User-Agent, which is not
- * device-identifying at all — two Chrome-on-Windows machines send byte-identical
- * strings — so a second sign-in on the same account silently revoked the first
- * machine's token. See the login route in ATSS2_0/backend/routes/api.php.
- *
- * Not a secret and never used to authenticate: it only says which row to
- * replace, and only from a caller that has just proved who it is.
- */
-const DEVICE_ID_KEY = 'deviceId';
-
-export const getDeviceId = (): string | null => {
-  try {
-    const stored = localStorage.getItem(DEVICE_ID_KEY);
-    if (stored) return stored;
-
-    const chunk = () => Math.random().toString(36).slice(2, 10);
-    const fresh = `${chunk()}${chunk()}${chunk()}`;
-    localStorage.setItem(DEVICE_ID_KEY, fresh);
-
-    return fresh;
-  } catch {
-    // Private-mode browsers can refuse localStorage. The server then falls back
-    // to its old naming, which is no worse than before this existed.
-    return null;
-  }
-};
-
-export const setAuthToken = (token: string | null): void => {
-  try {
-    if (token) {
-      localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-      localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-  } catch {
-    // Private-mode WebViews can refuse localStorage. The cookie session is
-    // still in play, so this is a degraded fallback rather than a failure.
-  }
-};
-
-export const getAuthToken = (): string | null => {
-  try {
-    return localStorage.getItem(AUTH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-};
-
 let csrfInitialized = false;
 
 let csrfInitializationPromise: Promise<void> | null = null;
@@ -119,8 +42,8 @@ export const initializeCsrf = async (): Promise<void> => {
       });
       csrfInitialized = true;
     } catch (error) {
-      console.warn('CSRF cookie endpoint unavailable, proceeding with Authorization token:', error);
-      csrfInitialized = true;
+      console.error('CSRF Initialization failed:', error);
+      throw error;
     } finally {
       csrfInitializationPromise = null;
     }
@@ -144,39 +67,51 @@ apiClient.interceptors.request.use(
       config.headers['X-XSRF-TOKEN'] = xsrfToken;
     }
 
-    // Sent on every request, not only when the cookie is known to be missing.
-    // There is no reliable way for the page to tell whether the browser will
-    // return a cookie set by another host — document.cookie cannot see it —
-    // so the token always rides along and the server decides. It tries the
-    // cookie session first and only reads this if that fails, which leaves a
-    // working cookie browser behaving exactly as before.
-    const authToken = getAuthToken();
-    if (authToken) {
-      config.headers = config.headers || {};
-      config.headers['Authorization'] = `Bearer ${authToken}`;
-      // The same token under a plain header name. Authorization is the one
-      // header the chain to PHP is liable to eat — Apache withholds it from a
-      // CGI/FastCGI process unless .htaccess copies it across, and proxies strip
-      // it — and when that happens the token authenticates nobody despite being
-      // issued, stored and sent correctly. A custom header nothing treats
-      // specially survives that. Read as a fallback in AppServiceProvider::boot.
-      config.headers['X-Auth-Token'] = authToken;
-    }
-
-    // Which browser profile this is, so the server replaces this one's
-    // credential and not one belonging to another machine on the same account.
-    const deviceId = getDeviceId();
-    if (deviceId) {
-      config.headers = config.headers || {};
-      config.headers['X-Device-Id'] = deviceId;
-    }
-
     return config;
   },
   (error) => {
     return Promise.reject(error);
   }
 );
+
+/**
+ * Asks the backend whether the session is still good.
+ *
+ * Resolving the guard server-side is what triggers Laravel's recaller-cookie path, so simply
+ * calling this rebuilds a session that lapsed through inactivity. The endpoint answers 200
+ * with authenticated:false rather than 401, so it can never recurse into this interceptor.
+ *
+ * Returns true when the caller should retry, false when the user genuinely has to sign in.
+ * A network/5xx failure returns null — unknown, and must NOT be treated as logged out.
+ */
+let sessionProbeInFlight: Promise<boolean | null> | null = null;
+
+export const revalidateSession = async (): Promise<boolean | null> => {
+  // A page issues many parallel requests; a burst of 401s must produce ONE probe, not one
+  // per request, otherwise every in-flight call races to declare the session dead.
+  if (sessionProbeInFlight) return sessionProbeInFlight;
+
+  sessionProbeInFlight = (async () => {
+    try {
+      const { data } = await axios.get<{ authenticated: boolean }>(
+        `${API_BASE_URL}/auth/session`,
+        { withCredentials: true, timeout: 15000 }
+      );
+      return data?.authenticated === true;
+    } catch (probeError: any) {
+      // Reachable and explicitly unauthorised: genuinely signed out.
+      if (probeError?.response?.status === 401 || probeError?.response?.status === 419) {
+        return false;
+      }
+      // Offline, timeout, 500: we do not know, so do not log anyone out over it.
+      return null;
+    } finally {
+      sessionProbeInFlight = null;
+    }
+  })();
+
+  return sessionProbeInFlight;
+};
 
 apiClient.interceptors.response.use(
   (response) => {
@@ -185,93 +120,52 @@ apiClient.interceptors.response.use(
   async (error) => {
     if (error.response) {
       const status = error.response.status;
-      
+      const config = error.config || {};
+
       // Handle CSRF expiration
       if (status === 419) {
         csrfInitialized = false;
         try {
           await initializeCsrf();
-          const config = error.config;
           config.headers['X-XSRF-TOKEN'] = getCookie('XSRF-TOKEN') || '';
           return apiClient(config);
         } catch (retryError) {
           return Promise.reject(retryError);
         }
       }
-      
-      // Handle Session expiration (401)
-      if (status === 401) {
-        console.warn('[API] Unauthorized (401). Triggering session expiration modal...');
-        // Neither credential is good any more: the cookie session has gone and
-        // the token was either rejected or absent. Dropping it here stops a
-        // dead token being replayed on every later request.
-        setAuthToken(null);
-        // Dispatch custom event so App.tsx can show the modal
-        window.dispatchEvent(new CustomEvent('auth:session-expired'));
+
+      // Handle Session expiration (401).
+      //
+      // A 401 is no longer taken at face value. The session may simply have gone idle past
+      // SESSION_LIFETIME while a valid recaller cookie is still held, in which case one probe
+      // restores it and the original request succeeds on retry — the user sees nothing. Only
+      // a probe that comes back definitively unauthenticated raises the expiry modal.
+      if (status === 401 && !config.__sessionRetried) {
+        const stillValid = await revalidateSession();
+
+        if (stillValid === true) {
+          config.__sessionRetried = true;   // retry exactly once, never loop
+          // The CSRF token is rotated along with the rebuilt session.
+          if (['post', 'put', 'patch', 'delete'].includes(String(config.method).toLowerCase())) {
+            config.headers = config.headers || {};
+            config.headers['X-XSRF-TOKEN'] = getCookie('XSRF-TOKEN') || '';
+          }
+          return apiClient(config);
+        }
+
+        if (stillValid === false) {
+          console.warn('[API] Session is genuinely expired. Prompting re-login.');
+          window.dispatchEvent(new CustomEvent('auth:session-expired'));
+        } else {
+          // Could not reach the server to find out — surface the request failure, but keep
+          // the user signed in. A dropped connection is not a logout.
+          console.warn('[API] Got 401 but the session probe was unreachable; staying signed in.');
+        }
       }
     }
     return Promise.reject(error);
   }
 );
-
-/**
- * `fetch` with the same credentials apiClient sends.
- *
- * A number of call sites use `fetch` directly rather than the axios client —
- * file downloads, streamed responses, a few one-off admin actions. They passed
- * `credentials: 'include'` and nothing else, which was enough while the
- * endpoints they call checked nothing. Now that every endpoint is authorized,
- * they need the bearer token too, for exactly the reason the axios client sends
- * it: a browser that drops a cross-site cookie has no other credential.
- *
- * Same signature as `fetch`, so a call site changes by name only.
- */
-export const authFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
-  const method = (init.method || 'GET').toUpperCase();
-  const requiresCsrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-
-  if (requiresCsrf && !csrfInitialized) {
-    try {
-      await initializeCsrf();
-    } catch {
-      // Carry on with whatever credential is already held; the request will
-      // fail on its own terms if that is not enough.
-    }
-  }
-
-  const headers = new Headers(init.headers || {});
-
-  const authToken = getAuthToken();
-  if (authToken && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${authToken}`);
-  }
-  // The same fallback the axios interceptor sends, for the same reason: this
-  // path must not be the one place a stripped Authorization header goes unnoticed.
-  if (authToken && !headers.has('X-Auth-Token')) {
-    headers.set('X-Auth-Token', authToken);
-  }
-
-  const deviceId = getDeviceId();
-  if (deviceId && !headers.has('X-Device-Id')) {
-    headers.set('X-Device-Id', deviceId);
-  }
-
-  const xsrfToken = getCookie('XSRF-TOKEN');
-  if (requiresCsrf && xsrfToken && !headers.has('X-XSRF-TOKEN')) {
-    headers.set('X-XSRF-TOKEN', xsrfToken);
-  }
-
-  const response = await fetch(input, { credentials: 'include', ...init, headers });
-
-  // Same treatment the axios interceptor gives a 401, so a session that has
-  // gone ends the same way whichever transport noticed.
-  if (response.status === 401) {
-    setAuthToken(null);
-    window.dispatchEvent(new CustomEvent('auth:session-expired'));
-  }
-
-  return response;
-};
 
 export default apiClient;
 export { API_BASE_URL };

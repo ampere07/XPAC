@@ -24,8 +24,6 @@ interface ApplicationState {
     lastSyncTime: string | null;
     currentFetchId: number | null; // Track current valid fetch
     isFullyLoaded: boolean;
-    /** True while the progressive page-by-page load is still streaming chunks in. */
-    isBackgroundLoading: boolean;
 
     fetchApplications: (search?: string, silent?: boolean, since?: string) => Promise<void>;
     refreshApplications: () => Promise<void>;
@@ -45,18 +43,15 @@ export const useApplicationStore = create<ApplicationState>((set, get) => ({
     lastSyncTime: null,
     currentFetchId: null,
     isFullyLoaded: false,
-    isBackgroundLoading: false,
 
     fetchApplications: async (search = '', silent = false, since?: string) => {
-        const { applications, isLoading } = get();
-
-        // If already loading and this is not a forced re-load, ignore. This check has to
-        // happen before currentFetchId is claimed — otherwise the bail-out still cancels
-        // the fetch that is already running, and nothing takes over from it.
-        if (isLoading) return;
-
         const fetchId = Date.now();
         set({ currentFetchId: fetchId });
+
+        const { applications, isLoading } = get();
+
+        // If already loading and this is not a forced re-load, ignore
+        if (isLoading) return;
 
         // Show loading if not silent OR if we have no data
         if (!silent || applications.length === 0) {
@@ -110,8 +105,6 @@ export const useApplicationStore = create<ApplicationState>((set, get) => ({
             let currentPageNum = 2;
             let hasMoreData = allFetchedRecords.length < dbTotal;
 
-            set({ isBackgroundLoading: hasMoreData });
-
             while (hasMoreData) {
                 // Check validity inside the loop
                 if (get().currentFetchId !== fetchId) {
@@ -158,7 +151,7 @@ export const useApplicationStore = create<ApplicationState>((set, get) => ({
         } finally {
             // Only stop loading if this is the active fetch
             if (get().currentFetchId === fetchId) {
-                set({ isLoading: false, isBackgroundLoading: false });
+                set({ isLoading: false });
             }
         }
     },
@@ -172,14 +165,7 @@ export const useApplicationStore = create<ApplicationState>((set, get) => ({
     },
 
     syncLatest: async () => {
-        const { lastSyncTime, applications, isLoading, isBackgroundLoading } = get();
-
-        // The first load streams pages in the background and aborts as soon as
-        // currentFetchId changes under it. Polling used to claim that id every few
-        // seconds, killing the load partway through — the list would stall at whatever
-        // had arrived so far. Leave an in-progress load alone; it is already current.
-        if (isLoading || isBackgroundLoading) return;
-
+        const { lastSyncTime, applications } = get();
         // If no lastSyncTime, fall back to full refresh
         if (!lastSyncTime || applications.length === 0) {
             return get().refreshApplications();
@@ -257,7 +243,6 @@ export const useApplicationStore = create<ApplicationState>((set, get) => ({
             lastSyncTime: null,
             currentFetchId: null,
             isFullyLoaded: false,
-            isBackgroundLoading: false,
         });
     },
 

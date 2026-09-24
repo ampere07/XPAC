@@ -35,7 +35,7 @@ class SystemConfigController extends Controller
     {
         try {
             $request->validate([
-                'logo' => 'required|image|mimes:jpeg,png,jpg,gif,svg|max:5120',
+                'logo' => 'required|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'updated_by' => 'required|string'
             ]);
 

@@ -20,8 +20,6 @@ export interface PayoutHistoryData {
     updated_by?: string;
     updated_at?: string;
     approved_by?: string;
-    /** Approval state, matching transactions: Pending / Approved / Rejected. */
-    status?: string;
     commission_id_list?: string;
     [key: string]: any;
 }

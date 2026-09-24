@@ -989,6 +989,32 @@ const LiveMonitor: React.FC = () => {
 
               {/* Name - Top Center (slightly pushed down to not overlap with status if name is long) */}
               <div className="w-full text-center mt-6">
+                {/* JO / SO worked on in the period, sitting directly above the name. Rendered
+                    whenever the API supplies them — including at zero, since "0 today" is the
+                    useful reading here. Centred, so it clears the absolutely-positioned status
+                    badge on the left and the admin action on the right. Colours match the
+                    job-order/service-order badge below. */}
+                {(meta.jo_count !== undefined || meta.so_count !== undefined) && (
+                  <div className="flex items-center justify-center gap-3 mb-2">
+                    {/* Sized at 1.4x the widget font — deliberately larger than the daily-time
+                        lines (0.9x) so the counts read at a glance on a wall monitor, while
+                        staying below the name (1.9x). Still scales with the font-size control. */}
+                    <span
+                      className="px-3 py-1 rounded-lg font-bold uppercase tracking-tight bg-blue-600/20 text-blue-500 border-2 border-blue-500/40"
+                      style={{ fontSize: `${fontSize * 1.4}px` }}
+                      title="Job Orders completed"
+                    >
+                      JO: {meta.jo_count ?? 0}
+                    </span>
+                    <span
+                      className="px-3 py-1 rounded-lg font-bold uppercase tracking-tight bg-purple-600/20 text-purple-500 border-2 border-purple-500/40"
+                      style={{ fontSize: `${fontSize * 1.4}px` }}
+                      title="Service Orders completed"
+                    >
+                      SO: {meta.so_count ?? 0}
+                    </span>
+                  </div>
+                )}
                 <div className={`font-bold truncate px-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`} style={{ fontSize: `${fontSize * 1.9}px` }} title={row.label}>
                   {row.label}
                 </div>
@@ -1160,6 +1186,7 @@ const LiveMonitor: React.FC = () => {
     );
   };
 
+
   const renderTable = (data: any[], id: string, fontSize: number) => {
     if (!Array.isArray(data) || data.length === 0) {
       return (
@@ -1190,9 +1217,6 @@ const LiveMonitor: React.FC = () => {
               const isDuplicate = idx > 0 && data[idx - 1].team_name === row.team_name;
               const borderClass = (!isDuplicate && idx > 0) ? (isDarkMode ? 'border-t border-gray-700/50' : 'border-t border-gray-200') : '';
               const hasEnd = !!row.end;
-              // A restarted row's stored end belongs to the attempt before this
-              // one, so the timer runs from the new start rather than freezing at
-              // an end that has already been superseded.
               // Open-ended: still running. A restarted row's stored end belongs to
               // the attempt before this one, so it is not an end at all — the
               // timer runs from the new start, and the End Time column shows "-"
@@ -1232,7 +1256,6 @@ const LiveMonitor: React.FC = () => {
                   <td className="py-2 px-3">
                     {(() => {
                       const s = row.status?.toLowerCase() ?? '';
-
                       // "On Going" means the work is running right now, which the
                       // timestamps say and the stored status does not.
                       //
@@ -1996,6 +2019,7 @@ const LiveMonitor: React.FC = () => {
                           </button>
                         </>
                       )}
+
 
                       {id === 'team_detailed_queue' && (() => {
                         const { jobOrders, services, others } = typeFilterGroups(

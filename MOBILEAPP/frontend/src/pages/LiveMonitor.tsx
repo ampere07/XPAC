@@ -50,7 +50,6 @@ import {
   DEFAULT_VISIBLE_WIDGETS,
   CURRENCY_WIDGETS,
 } from '../types/monitor.types';
-import TechLiveLocationMap from '../components/TechLiveLocationMap';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const isDarkMode = false; // FORCED LIGHT MODE
@@ -658,25 +657,7 @@ const LiveMonitor: React.FC = () => {
     );
   };
 
-  // Started again since it last stopped: the recorded end precedes the current
-  // start, so it belongs to an earlier attempt and a new run is underway.
-  // Compared on the ISO fields the widget sends beside the display strings.
-  // Mirrors ATSS2_0's LiveMonitor so the two boards cannot disagree.
-  const isRestarted = (row: any) => {
-    const started = Date.parse(row?.start_time ?? '');
-    const ended = Date.parse(row?.end_time ?? '');
-    return Number.isFinite(started) && Number.isFinite(ended) && started > ended;
-  };
-
-  // Statuses that mean the work is over, whatever the timestamps say — a Failed
-  // visit whose times happen to look restarted must not come back to life.
-  const FINISHED_STATUSES = ['done', 'resolved', 'completed', 'failed', 'cancelled', 'canceled'];
-
-  const isFinishedStatus = (status: any) =>
-    FINISHED_STATUSES.includes(String(status ?? '').trim().toLowerCase());
-
-  // Cards, not a table — the name used to say otherwise.
-  const renderQueueCards = (data: any[], id: string) => {
+  const renderQueueTable = (data: any[], id: string) => {
     if (!Array.isArray(data) || data.length === 0) {
       return <Text style={{ color: '#9ca3af', textAlign: 'center', padding: 16 }}>No Data Available</Text>;
     }
@@ -685,29 +666,16 @@ const LiveMonitor: React.FC = () => {
       <ScrollView style={{ flex: 1 }}>
         {data.map((row, idx) => {
           const s = (row.status || '').toLowerCase();
-          const hasEnd = !!row.end;
-          // Open-ended: still running. A row whose start is LATER than its end has
-          // been picked back up — the stored end belongs to the previous attempt —
-          // which is what a rescheduled visit looks like when a technician starts
-          // it again without the stored status ever leaving "Reschedule".
-          const openEnded = !isFinishedStatus(row.status) && (!hasEnd || isRestarted(row));
-
-          // "On Going" is decided by the clock, not the stored status — a
-          // rescheduled visit a technician starts again keeps visit_status
-          // "Reschedule" while carrying a fresh start_time and no end_time, and
-          // was reading RESCHEDULE on a job actively being worked. Mirrors the
-          // web board in ATSS2_0's LiveMonitor so the two cannot disagree.
-          const hasStarted = !!row.start && row.start !== '-';
-          const isOngoing = hasStarted && openEnded;
+          const isOngoing = s === 'in progress' && row.start && row.start !== '-';
           const label = isOngoing ? 'On Going' : (row.status || '-');
-          const statusColor = isOngoing ? '#3b82f6' :
-            s === 'reschedule' ? '#8b5cf6' :
+          const statusColor = s === 'reschedule' ? '#8b5cf6' :
             s === 'done' || s === 'resolved' || s === 'completed' ? '#16a34a' :
             s === 'failed' ? '#ef4444' :
-            '#f97316';
+            isOngoing ? '#3b82f6' : '#f97316';
           const typeColor = row.type?.toLowerCase().includes('joborder') ? '#3b82f6' :
             row.type?.toLowerCase().includes('work order') ? '#f97316' : '#8b5cf6';
-          const duration = isTeamQueue ? formatDuration(row.start, openEnded ? null : row.end, nowMs) : null;
+          const hasEnd = !!row.end;
+          const duration = isTeamQueue ? formatDuration(row.start, hasEnd ? row.end : null, nowMs) : null;
 
           return (
             <View key={idx} style={{
@@ -741,7 +709,7 @@ const LiveMonitor: React.FC = () => {
                   <Text style={{ fontSize: 11, color: '#9ca3af' }}>End: <Text style={{ color: '#374151' }}>{row.end || '-'}</Text></Text>
                 )}
                 {isTeamQueue && duration && (
-                  <Text style={{ fontSize: 11, color: openEnded ? '#16a34a' : '#9ca3af', fontWeight: '700' }}>
+                  <Text style={{ fontSize: 11, color: hasEnd ? '#9ca3af' : '#16a34a', fontWeight: '700' }}>
                     {duration}
                   </Text>
                 )}
@@ -766,21 +734,6 @@ const LiveMonitor: React.FC = () => {
       );
     }
 
-    // Technician Live Location — a real map, and the one widget that is worth
-    // drawing with nothing in it. An empty technician list is a meaningful
-    // answer here ("nobody is reporting"), whereas the "No Data Available"
-    // below would read as a broken widget. Checked before that guard for the
-    // same reason the web version is.
-    if (id === 'tech_live_location') {
-      return (
-        <TechLiveLocationMap
-          data={Array.isArray(widget.data) ? (widget.data as any) : []}
-          isDarkMode={isDarkMode}
-          colorPalette={colorPalette}
-        />
-      );
-    }
-
     const hasData = widget.data && (Array.isArray(widget.data) ? widget.data.length > 0 : true);
     if (!hasData) {
       return <Text style={{ color: '#9ca3af', textAlign: 'center', padding: 16, fontSize: 12 }}>No Data Available</Text>;
@@ -793,7 +746,7 @@ const LiveMonitor: React.FC = () => {
 
     // Detailed queues
     if (id === 'team_detailed_queue' || id === 'agent_detailed_queue') {
-      return renderQueueCards(widget.data, id);
+      return renderQueueTable(widget.data, id);
     }
 
     // Standard list view

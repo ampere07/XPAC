@@ -53,15 +53,9 @@ export interface LCPNAPMapData {
   modified_date?: string;
 }
 
-export const getAllLCPNAPs = async (search?: string, page: number = 1, limit?: number): Promise<ApiResponse<LCPNAP[]>> => {
+export const getAllLCPNAPs = async (search?: string, page: number = 1, limit: number = 100): Promise<ApiResponse<LCPNAP[]>> => {
   try {
-    const params: any = { page };
-    if (limit !== undefined && limit > 0) {
-      params.limit = limit;
-    } else {
-      params.all = true;
-      params.no_limit = true;
-    }
+    const params: any = { page, limit };
     if (search) {
       params.search = search;
     }

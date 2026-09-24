@@ -10,11 +10,7 @@ import {
   ScrollView,
   Dimensions,
   StyleSheet,
-  AppState,
-  AppStateStatus,
-  Animated,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Circle,
@@ -22,9 +18,8 @@ import {
   ChevronRight,
   ChevronDown,
   Download,
-  Filter,
-  Menu,
-  LogOut,
+  SlidersHorizontal,
+  ChevronLeft,
   X,
 } from 'lucide-react-native';
 import BillingDetails from '../components/CustomerDetails';
@@ -40,9 +35,7 @@ import { billingStatusService, BillingStatus } from '../services/billingStatusSe
 import { userService } from '../services/userService';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { exportToCSV } from '../utils/exportUtils';
-import CustomerFunnelFilter, { allColumns as filterColumns, FilterValues } from '../filter/CustomerFunnelFilter';
-import pusher from '../services/pusherService';
-import apiClient from '../config/api';
+import { accountStatusFrom, sessionStatusFrom, getOnlineStatusInfo } from '../utils/onlineStatus';
 
 const isDarkMode = false;
 
@@ -69,9 +62,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     middleInitial: customerData.middleInitial,
     lastName: customerData.lastName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 1 ? 'Active' : 'Disconnected'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -101,7 +94,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageType || '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',
@@ -162,16 +154,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>(initialSearchQuery || '');
-  const {
-    billingRecords,
-    totalCount,
-    isLoading: isTableLoading,
-    isBackgroundLoading,
-    error: contextError,
-    fetchBillingRecords,
-    refreshBillingRecords,
-    refreshLatestData,
-  } = useBillingStore();
+  const { billingRecords, totalCount, isLoading: isTableLoading, error: contextError, fetchBillingRecords, refreshLatestData } = useBillingStore();
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetailData | null>(null);
   const selectedCustomerRef = useRef<CustomerDetailData | null>(null);
   const [cities, setCities] = useState<City[]>([]);
@@ -190,21 +173,6 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
   const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(false);
-
-  const [activeFilters, setActiveFilters] = useState<FilterValues>({});
-  const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
-  const [hasNewData, setHasNewData] = useState<boolean>(false);
-  const [viewers, setViewers] = useState<Record<string, string[]>>({});
-  const [showSessionExpired, setShowSessionExpired] = useState<boolean>(false);
-  const [customerRefreshKey, setCustomerRefreshKey] = useState<number>(0);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [itemsPerPage, setItemsPerPage] = useState<number>(25);
-  const listRef = useRef<FlatList<BillingRecord>>(null);
-  const knownCountRef = useRef<number>(0);
-  const hasCountBaselineRef = useRef<boolean>(false);
-  const [sidebarRendered, setSidebarRendered] = useState(false);
-  const sidebarSlideX = useRef(new Animated.Value(-width)).current;
-  const sidebarBackdrop = useRef(new Animated.Value(0)).current;
 
   const error = localError || contextError;
   const primaryColor = colorPalette?.primary || '#7c3aed';
@@ -265,162 +233,13 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     fetchBillingRecords();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Slide the location drawer in from the left, out to the left.
-  useEffect(() => {
-    if (sidebarVisible) {
-      setSidebarRendered(true);
-      Animated.parallel([
-        Animated.timing(sidebarSlideX, { toValue: 0, duration: 260, useNativeDriver: true }),
-        Animated.timing(sidebarBackdrop, { toValue: 0.4, duration: 260, useNativeDriver: true }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.timing(sidebarSlideX, { toValue: -width, duration: 220, useNativeDriver: true }),
-        Animated.timing(sidebarBackdrop, { toValue: 0, duration: 220, useNativeDriver: true }),
-      ]).start(({ finished }) => {
-        if (finished) setSidebarRendered(false);
-      });
-    }
-  }, [sidebarVisible]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Restore saved funnel filters
-  useEffect(() => {
-    AsyncStorage.getItem('customerFunnelFilters')
-      .then((saved) => {
-        if (!saved) return;
-        try { setActiveFilters(JSON.parse(saved)); } catch { /* ignore */ }
-      })
-      .catch(() => { });
-  }, []);
-
-  // Real-time. `pusherService` is an RN-safe stub today, so these callbacks never fire
-  // and the polling below is what keeps the list fresh; the wiring matches the web
-  // screen so restoring pusher-js turns real-time back on with no change here.
-  useEffect(() => {
-    const handleDataChange = async () => {
-      setHasNewData(true);
-      try {
-        await refreshLatestData();
-        const accountNo = selectedCustomerRef.current?.billingAccount?.accountNo;
-        if (accountNo) {
-          const updatedCustomer = await getCustomerDetail(accountNo);
-          if (updatedCustomer) setSelectedCustomer(updatedCustomer);
-          setCustomerRefreshKey((prev) => prev + 1);
-        }
-      } catch (err) {
-        console.error('[Customer] Failed to fetch latest data:', err);
-      }
-    };
-
-    const appChannel = pusher.subscribe('applications');
-    const jobChannel = pusher.subscribe('job-orders');
-    const customerChannel = pusher.subscribe('customers');
-
-    appChannel.bind('new-application', handleDataChange);
-    jobChannel.bind('job-order-done', handleDataChange);
-    customerChannel.bind('customer-updated', handleDataChange);
-
-    return () => {
-      appChannel.unbind('new-application', handleDataChange);
-      jobChannel.unbind('job-order-done', handleDataChange);
-      customerChannel.unbind('customer-updated', handleDataChange);
-      pusher.unsubscribe('applications');
-      pusher.unsubscribe('job-orders');
-      pusher.unsubscribe('customers');
-    };
-  }, [refreshLatestData]);
-
-  // Presence channel — who is viewing which customer.
-  useEffect(() => {
-    const presenceChannel = pusher.subscribe('presence-customers-presence');
-
-    presenceChannel.bind('viewing-update', (data: { customer_id: string; username: string; action: string }) => {
-      setViewers((prev) => {
-        const current = prev[data.customer_id] || [];
-        if (data.action === 'started_viewing') {
-          if (!current.includes(data.username)) {
-            return { ...prev, [data.customer_id]: [...current, data.username] };
-          }
-        } else if (data.action === 'stopped_viewing') {
-          return { ...prev, [data.customer_id]: current.filter((n) => n !== data.username) };
-        }
-        return prev;
-      });
-    });
-
-    presenceChannel.bind('pusher:member_removed', (member: any) => {
-      const identifier = member?.info?.username || member?.info?.email;
-      if (!identifier) return;
-      setViewers((prev) => {
-        const next = { ...prev };
-        Object.keys(next).forEach((id) => {
-          next[id] = (next[id] || []).filter((n) => n !== identifier);
-        });
-        return next;
-      });
-    });
-
-    return () => {
-      presenceChannel.unbind();
-      pusher.unsubscribe('presence-customers-presence');
-    };
-  }, []);
-
-  // Foreground polling — the RN stand-in for the web screen's Soketi push. Paused while
-  // the app is backgrounded so a pocketed phone is not polling over cellular.
-  useEffect(() => {
-    const POLLING_INTERVAL = 30 * 1000;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    const start = () => {
-      if (intervalId) return;
-      intervalId = setInterval(() => {
-        refreshLatestData().catch((err) => console.error('[Customer] Polling failed:', err));
-      }, POLLING_INTERVAL);
-    };
-    const stop = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = null;
-    };
-
-    if (AppState.currentState === 'active') start();
-    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active') {
-        refreshLatestData().catch(() => { });
-        start();
-      } else {
-        stop();
-      }
-    });
-
-    return () => { stop(); sub.remove(); };
-  }, [refreshLatestData]);
-
-  // Idle auto-refresh — a full sweep every 15 minutes of no interaction.
+  // Silent refresh every 15 minutes (pusher is a no-op stub in RN)
   useEffect(() => {
     const intervalId = setInterval(() => {
       refreshLatestData().catch((err) => console.error('[Customer] Idle refresh failed:', err));
     }, 15 * 60 * 1000);
     return () => clearInterval(intervalId);
   }, [refreshLatestData]);
-
-  // Flag newly-arrived records so the refresh button can show the "new data" dot.
-  useEffect(() => {
-    if (!hasCountBaselineRef.current) {
-      hasCountBaselineRef.current = true;
-      knownCountRef.current = billingRecords.length;
-      return;
-    }
-    if (billingRecords.length > knownCountRef.current) setHasNewData(true);
-    knownCountRef.current = billingRecords.length;
-  }, [billingRecords.length]);
-
-  // Session expiry — the store surfaces the auth failure through `error`.
-  useEffect(() => {
-    if (contextError && (contextError.includes('401') || contextError.toLowerCase().includes('unauthorized'))) {
-      setShowSessionExpired(true);
-    }
-  }, [contextError]);
 
   // Sync initialSearchQuery
   useEffect(() => {
@@ -460,104 +279,14 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     if (!isValid) setSelectedLocation('all');
   }, [regions, cities, barangays, selectedLocation]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || '';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
+  // Delegated to the shared resolver — this list and the Customer Details panel it opens
+  // must bucket an account the same way. Returned shape is unchanged.
+  const getStatusInfo = getOnlineStatusInfo;
 
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (lowerStatus === 'inactive') bucket = 'offline';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', hex: '#22c55e', hollow: false, hideCircle: false };
-    if (lower === 'offline') return { label: 'OFFLINE', hex: '#facc15', hollow: true, hideCircle: false };
-    if (lower === 'not found') return { label: 'NOT FOUND', hex: '#dc2626', hollow: false, hideCircle: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', hex: '#9ca3af', hollow: false, hideCircle: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', hex: '#f97316', hollow: false, hideCircle: false };
-    if (lower === 'empty') return { label: 'EMPTY', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), hex: '#3b82f6', hollow: false, hideCircle: false };
-  };
-
-  /** Field accessor used by the funnel filters — mirrors the web `getVal`. */
-  const getVal = (item: BillingRecord, key: string): any => {
-    switch (key) {
-      case 'id':
-      case 'accountNo': return item.id || item.applicationId;
-      case 'customerName': return item.customerName;
-      case 'firstName': return item.firstName;
-      case 'middleInitial': return item.middleInitial;
-      case 'lastName': return item.lastName;
-      case 'address': return item.address;
-      case 'contactNumber': return item.contactNumber;
-      case 'secondContactNumber': return item.secondContactNumber;
-      case 'emailAddress': return item.emailAddress;
-      case 'plan': return item.plan;
-      case 'balance':
-      case 'accountBalance': return item.balance;
-      case 'status': return item.status;
-      case 'onlineStatus': return getStatusInfo(item).label.toLowerCase();
-      case 'billingStatus': return item.billingStatus || 'Active';
-      case 'dateInstalled': return item.dateInstalled;
-      case 'username': return item.username;
-      case 'connectionType': return item.connectionType;
-      case 'routerModel': return item.routerModel;
-      case 'sessionGroup': return item.sessionGroup;
-      default: return (item as any)[key];
-    }
-  };
-
-  const applyFunnelFilters = (records: BillingRecord[], filters: FilterValues): BillingRecord[] => {
-    if (!filters || Object.keys(filters).length === 0) return records;
-
-    return records.filter((record) =>
-      Object.entries(filters).every(([key, filter]: [string, any]) => {
-        const recordValue = getVal(record, key);
-
-        if (filter.type === 'checklist') {
-          if (!filter.value || !Array.isArray(filter.value) || filter.value.length === 0) return true;
-          const valStr = String(recordValue || '').toLowerCase();
-          // Exact match, so "Ultra" cannot match "Ultra-Plus 2099".
-          return filter.value.some((v: string) => valStr === String(v).toLowerCase());
-        }
-
-        if (filter.type === 'text') {
-          if (!filter.value) return true;
-          const value = String(recordValue || '').toLowerCase();
-          if (key === 'billing_status_id') return value === String(filter.value).toLowerCase();
-          return value.includes(String(filter.value).toLowerCase());
-        }
-
-        if (filter.type === 'number') {
-          const numValue = Number(recordValue);
-          if (isNaN(numValue)) return false;
-          if (filter.from !== undefined && filter.from !== '' && numValue < Number(filter.from)) return false;
-          if (filter.to !== undefined && filter.to !== '' && numValue > Number(filter.to)) return false;
-          return true;
-        }
-
-        if (filter.type === 'date') {
-          if (!recordValue) return false;
-          const dateValue = new Date(recordValue).getTime();
-          if (isNaN(dateValue)) return false;
-          if (filter.from && dateValue < new Date(filter.from).getTime()) return false;
-          if (filter.to && dateValue > new Date(filter.to).getTime()) return false;
-          return true;
-        }
-
-        return true;
-      })
-    );
-  };
-
-  // 1. Global filtered set (org + search + funnel) — powers sidebar counts
+  // 1. Global filtered set (org + search) — powers sidebar counts
   const globalFilteredRecords = useMemo(() => {
     const normalizedQuery = searchQuery.toLowerCase().replace(/\s+/g, '');
-    const searched = billingRecords.filter((record) => {
+    return billingRecords.filter((record) => {
       if (userOrgId) {
         if ((record as any).organization_id !== userOrgId) return false;
       } else {
@@ -571,9 +300,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         })
       );
     });
-
-    return applyFunnelFilters(searched, activeFilters);
-  }, [billingRecords, searchQuery, userOrgId, activeFilters]);
+  }, [billingRecords, searchQuery, userOrgId]);
 
   // 2. Status tree (Status > (Session) > Billing Status > Barangay)
   const statusTree = useMemo(() => {
@@ -722,31 +449,6 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     });
   }, [globalFilteredRecords, selectedLocation]);
 
-  // ─── Pagination ──────────────────────────────────────────────────────────────
-
-  const totalPages = useMemo(
-    () => Math.max(1, Math.ceil(filteredBillingRecords.length / itemsPerPage)),
-    [filteredBillingRecords.length, itemsPerPage]
-  );
-
-  const paginatedRecords = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    return filteredBillingRecords.slice(startIndex, startIndex + itemsPerPage);
-  }, [filteredBillingRecords, currentPage, itemsPerPage]);
-
-  const handlePageChange = (newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages) setCurrentPage(newPage);
-  };
-
-  // Any change to the result set puts you back on page 1
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, selectedLocation, activeFilters, itemsPerPage]);
-
-  useEffect(() => {
-    listRef.current?.scrollToOffset({ offset: 0, animated: true });
-  }, [currentPage]);
-
   // Resolve user IDs for Modified By display (visible records)
   useEffect(() => {
     const resolveUserIds = async () => {
@@ -774,22 +476,12 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
   // ─── Handlers ────────────────────────────────────────────────────────────────
 
-  const broadcastViewing = (customerId: string, action: 'started_viewing' | 'stopped_viewing') =>
-    apiClient
-      .post('/customers/broadcast-viewing', { customer_id: customerId, action })
-      .catch((err) => console.error(`[Viewing] Failed to broadcast ${action}:`, err));
-
   const handleRecordClick = async (record: BillingRecord) => {
-    const previous = selectedCustomerRef.current?.billingAccount?.accountNo;
-    if (previous && previous !== record.applicationId) {
-      broadcastViewing(previous, 'stopped_viewing');
-    }
     try {
       setIsLoadingDetails(true);
       setDetailsModalVisible(true);
       const customerData = await getCustomerDetail(record.applicationId);
       setSelectedCustomer(customerData);
-      broadcastViewing(record.applicationId, 'started_viewing');
     } catch (err) {
       console.error('Failed to fetch customer details:', err);
       setLocalError('Failed to load customer details');
@@ -799,74 +491,33 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
   };
 
   const handleCloseDetails = () => {
-    const previous = selectedCustomerRef.current?.billingAccount?.accountNo;
-    if (previous) broadcastViewing(previous, 'stopped_viewing');
     setDetailsModalVisible(false);
     setSelectedCustomer(null);
   };
 
-  // Pull-to-refresh pulls only what changed since the last sync — re-downloading every
-  // record on each pull is what made this feel like a cold start.
-  const handlePullRefresh = async () => {
-    setRefreshing(true);
-    setHasNewData(false);
-    try {
-      await refreshLatestData();
-    } catch (err) {
-      console.error('Failed to refresh latest billing records:', err);
-    } finally {
-      setRefreshing(false);
+  const currentRecordIndex = selectedCustomer?.billingAccount?.accountNo
+    ? filteredBillingRecords.findIndex((r) => r.applicationId === selectedCustomer.billingAccount!.accountNo)
+    : -1;
+
+  const handlePreviousRecord = () => {
+    if (currentRecordIndex > 0) handleRecordClick(filteredBillingRecords[currentRecordIndex - 1]);
+  };
+
+  const handleNextRecord = () => {
+    if (currentRecordIndex !== -1 && currentRecordIndex < filteredBillingRecords.length - 1) {
+      handleRecordClick(filteredBillingRecords[currentRecordIndex + 1]);
     }
   };
 
-  // The toolbar button is the deliberate full reload.
   const handleRefresh = async () => {
     setRefreshing(true);
-    setHasNewData(false);
     try {
-      await refreshBillingRecords();
+      await refreshLatestData();
     } catch (err) {
       console.error('Failed to refresh billing records:', err);
     } finally {
       setRefreshing(false);
     }
-  };
-
-  const handleApplyFilters = async (filters: FilterValues) => {
-    setActiveFilters(filters);
-    try { await AsyncStorage.setItem('customerFunnelFilters', JSON.stringify(filters)); } catch { /* ignore */ }
-  };
-
-  const removeFilter = async (key: string) => {
-    const next = { ...activeFilters };
-    delete next[key];
-    setActiveFilters(next);
-    try { await AsyncStorage.setItem('customerFunnelFilters', JSON.stringify(next)); } catch { /* ignore */ }
-  };
-
-  const handleClearAllFilters = async () => {
-    setActiveFilters({});
-    try { await AsyncStorage.removeItem('customerFunnelFilters'); } catch { /* ignore */ }
-  };
-
-  const activeFilterKeys = Object.keys(activeFilters);
-
-  const getFilterDisplayValue = (filter: any): string => {
-    if (filter.type === 'checklist') {
-      return Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value ?? '');
-    }
-    if (filter.type === 'text' || filter.type === 'boolean') return String(filter.value ?? '');
-    if (filter.type === 'number' || filter.type === 'date') {
-      if (filter.from && filter.to) return `${filter.from} - ${filter.to}`;
-      if (filter.from) return `> ${filter.from}`;
-      if (filter.to) return `< ${filter.to}`;
-    }
-    return '';
-  };
-
-  const handleRelogin = () => {
-    setShowSessionExpired(false);
-    AsyncStorage.removeItem('authData').catch(() => { });
   };
 
   const getExportValue = (record: BillingRecord, key: string): string => {
@@ -922,49 +573,27 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     return (
       <TouchableOpacity
         onPress={() => handleRecordClick(item)}
-        style={{
-          paddingHorizontal: 16,
-          paddingVertical: 12,
-          borderBottomWidth: 1,
-          borderBottomColor: '#e5e7eb',
-          backgroundColor: isSelected ? '#f3f4f6' : 'transparent',
-        }}
-        activeOpacity={0.7}
+        style={[styles.card, isSelected && { borderColor: primaryColor, borderWidth: 2 }]}
+        activeOpacity={0.75}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text
-              style={{ fontSize: 14, fontWeight: '500', color: '#111827', marginBottom: 4, textTransform: 'capitalize' }}
-              numberOfLines={1}
-            >
-              {(item.customerName || '-').toLowerCase()}
-            </Text>
-            {(viewers[item.applicationId] || []).length > 0 && (
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
-                {(viewers[item.applicationId] || []).map((username) => (
-                  <View
-                    key={username}
-                    style={{ backgroundColor: primaryColor, borderRadius: 99, paddingHorizontal: 6, paddingVertical: 2 }}
-                  >
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#fff', textTransform: 'lowercase' }}>
-                      {username} is viewing
-                    </Text>
-                  </View>
-                ))}
-              </View>
+        <View style={styles.cardHeader}>
+          <Text style={styles.accountNo} numberOfLines={1}>{item.applicationId}</Text>
+          <View style={styles.onlineRow}>
+            {!statusInfo.hideCircle && (
+              <Circle size={9} color={statusInfo.hex} fill={statusInfo.hollow ? 'transparent' : statusInfo.hex} strokeWidth={statusInfo.hollow ? 3 : 1} />
             )}
-            <Text style={{ fontSize: 12, color: '#4b5563' }} numberOfLines={2}>
-              {[item.applicationId, item.plan, item.address].filter(Boolean).join(' | ') || 'Not specified'}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 16, flexShrink: 0 }}>
-            <Text style={{ fontWeight: 'bold', textTransform: 'uppercase', color: statusInfo.hex }}>
-              {statusInfo.label}
-            </Text>
-            <Text style={{ fontSize: 12, color: '#4b5563' }}>₱{item.balance?.toFixed(2) ?? '0.00'}</Text>
-            <Text style={{ fontSize: 11, color: '#9ca3af' }}>{item.billingStatus || 'Active'}</Text>
+            <Text style={[styles.onlineLabel, { color: statusInfo.hex }]}>{statusInfo.label}</Text>
           </View>
         </View>
+        <Text style={styles.customerName} numberOfLines={1}>{item.customerName || '-'}</Text>
+        {item.address ? <Text style={styles.cardAddress} numberOfLines={1}>{item.address}</Text> : null}
+        <View style={styles.cardFooter}>
+          <Text style={styles.cardBalance}>
+            Balance: <Text style={{ fontWeight: '700', color: '#111827' }}>₱{item.balance?.toFixed(2) ?? '0.00'}</Text>
+          </Text>
+          <Text style={styles.billingStatusBadge}>{item.billingStatus || 'Active'}</Text>
+        </View>
+        {item.plan ? <Text style={styles.cardMuted} numberOfLines={1}>{item.plan}</Text> : null}
       </TouchableOpacity>
     );
   };
@@ -1029,20 +658,16 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
   };
 
   const renderSidebar = () => (
-    <Modal visible={sidebarRendered} animationType="none" transparent onRequestClose={() => setSidebarVisible(false)}>
-      <View style={{ flex: 1, flexDirection: 'row' }}>
-        <Animated.View
-          pointerEvents="none"
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000', opacity: sidebarBackdrop }}
-        />
-        <Animated.View style={[styles.sidebarContainer, { transform: [{ translateX: sidebarSlideX }] }]}>
+    <Modal visible={sidebarVisible} animationType="slide" transparent onRequestClose={() => setSidebarVisible(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.sidebarContainer}>
           <View style={styles.sidebarHeader}>
             <Text style={styles.sidebarTitle}>Customers</Text>
             <TouchableOpacity onPress={() => setSidebarVisible(false)}>
               <X size={22} color="#6b7280" />
             </TouchableOpacity>
           </View>
-          <ScrollView style={{ flex: 1 }}>
+          <ScrollView>
             {/* All */}
             <View style={[styles.treeRow, selectedLocation === 'all' && { backgroundColor: `${primaryColor}22` }]}>
               <TouchableOpacity style={styles.treeRowMain} onPress={() => selectLocation('all')} activeOpacity={0.7}>
@@ -1099,18 +724,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
               );
             })}
           </ScrollView>
-
-          <View style={styles.sidebarFooter}>
-            <TouchableOpacity
-              onPress={() => setSidebarVisible(false)}
-              style={[styles.viewRecordsBtn, { backgroundColor: primaryColor }]}
-            >
-              <Text style={styles.viewRecordsText}>View Records</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setSidebarVisible(false)} />
+        </View>
       </View>
     </Modal>
   );
@@ -1124,12 +738,31 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         </View>
       ) : selectedCustomer ? (
         <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+          <View style={styles.detailNav}>
+            <TouchableOpacity
+              onPress={handlePreviousRecord}
+              disabled={currentRecordIndex <= 0}
+              style={[styles.navBtn, { opacity: currentRecordIndex <= 0 ? 0.4 : 1 }]}
+            >
+              <ChevronLeft size={18} color={primaryColor} />
+              <Text style={[styles.navBtnText, { color: primaryColor }]}>Prev</Text>
+            </TouchableOpacity>
+            <Text style={styles.navCounter}>
+              {currentRecordIndex >= 0 ? `${currentRecordIndex + 1} / ${filteredBillingRecords.length}` : ''}
+            </Text>
+            <TouchableOpacity
+              onPress={handleNextRecord}
+              disabled={currentRecordIndex === -1 || currentRecordIndex >= filteredBillingRecords.length - 1}
+              style={[styles.navBtn, { opacity: (currentRecordIndex === -1 || currentRecordIndex >= filteredBillingRecords.length - 1) ? 0.4 : 1 }]}
+            >
+              <Text style={[styles.navBtnText, { color: primaryColor }]}>Next</Text>
+              <ChevronRight size={18} color={primaryColor} />
+            </TouchableOpacity>
+          </View>
           <BillingDetails
             billingRecord={convertCustomerDataToBillingDetail(selectedCustomer)}
             onlineStatusRecords={[]}
             onClose={handleCloseDetails}
-            onRefresh={refreshLatestData}
-            refreshKey={customerRefreshKey}
           />
         </View>
       ) : (
@@ -1145,18 +778,17 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
   return (
     <View style={styles.root}>
-      {/* Top bar */}
-      <View style={[styles.topBar, { paddingTop: isTablet ? 16 : 60 }]}>
-        <TouchableOpacity
-          onPress={() => setSidebarVisible(true)}
-          style={[styles.iconBtn, {
-            borderColor: selectedLocation !== 'all' ? primaryColor : '#e5e7eb',
-            backgroundColor: selectedLocation !== 'all' ? `${primaryColor}12` : '#fff',
-          }]}
-        >
-          <Menu size={18} color={selectedLocation !== 'all' ? primaryColor : '#374151'} />
-        </TouchableOpacity>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: isTablet ? 16 : 60 }]}>
+        <Text style={styles.headerTitle}>Customers</Text>
+        <Text style={styles.headerSubtitle}>
+          {filteredBillingRecords.length} record{filteredBillingRecords.length !== 1 ? 's' : ''}
+          {!isTableLoading && totalCount > billingRecords.length ? ` (loading ${billingRecords.length}/${totalCount})` : ''}
+        </Text>
+      </View>
 
+      {/* Search + Controls */}
+      <View style={styles.searchRow}>
         <View style={{ flex: 1 }}>
           <GlobalSearch
             searchQuery={searchQuery}
@@ -1166,82 +798,24 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
             placeholder="Search customer records..."
           />
         </View>
-
-        <TouchableOpacity
-          onPress={() => setIsFunnelFilterOpen(true)}
-          style={[styles.iconBtn, { borderColor: activeFilterKeys.length > 0 ? '#ef4444' : '#e5e7eb' }]}
-        >
-          <Filter size={18} color={activeFilterKeys.length > 0 ? '#ef4444' : '#374151'} />
-          {activeFilterKeys.length > 0 && (
-            <View style={styles.filterBadge}>
-              <Text style={styles.filterBadgeText}>{activeFilterKeys.length}</Text>
-            </View>
-          )}
+        <TouchableOpacity onPress={() => setSidebarVisible(true)} style={[styles.iconBtn, { borderColor: primaryColor }]}>
+          <SlidersHorizontal size={18} color={primaryColor} />
         </TouchableOpacity>
-
         <TouchableOpacity
           onPress={handleExport}
           disabled={filteredBillingRecords.length === 0}
-          style={[styles.iconBtn, { borderColor: primaryColor, opacity: filteredBillingRecords.length === 0 ? 0.4 : 1 }]}
+          style={[styles.iconBtn, { borderColor: primaryColor, opacity: filteredBillingRecords.length === 0 ? 0.5 : 1 }]}
         >
           <Download size={18} color={primaryColor} />
         </TouchableOpacity>
-
         <TouchableOpacity
           onPress={handleRefresh}
-          disabled={isTableLoading || refreshing || isBackgroundLoading}
-          style={[styles.iconBtn, {
-            borderColor: primaryColor,
-            opacity: (isTableLoading || refreshing || isBackgroundLoading) ? 0.4 : 1,
-          }]}
+          disabled={isTableLoading || refreshing}
+          style={[styles.iconBtn, { borderColor: primaryColor, opacity: (isTableLoading || refreshing) ? 0.5 : 1 }]}
         >
-          {refreshing || isBackgroundLoading || (isTableLoading && billingRecords.length === 0)
-            ? <ActivityIndicator size="small" color={primaryColor} />
-            : <RefreshCw size={18} color={primaryColor} />}
-          {hasNewData && <View style={styles.newDataDot} />}
+          <RefreshCw size={18} color={primaryColor} />
         </TouchableOpacity>
       </View>
-
-      {/* Load progress */}
-      {!isTableLoading && totalCount > billingRecords.length && (
-        <View style={styles.progressRow}>
-          <Text style={styles.progressText}>Loading records… ({billingRecords.length}/{totalCount})</Text>
-        </View>
-      )}
-
-      {/* Active funnel filter chips */}
-      {activeFilterKeys.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.filterChipsRow}
-          contentContainerStyle={styles.filterChipsContent}
-        >
-          <Text style={styles.filterChipsLabel}>FILTERS:</Text>
-          {activeFilterKeys.map((key) => {
-            const filter = activeFilters[key] as any;
-            const label = filterColumns.find((c) => c.key === key)?.label || key;
-            return (
-              <View
-                key={key}
-                style={[styles.chip, { backgroundColor: `${primaryColor}14`, borderColor: `${primaryColor}44` }]}
-              >
-                <Text style={[styles.chipText, { color: primaryColor }]} numberOfLines={1}>
-                  {label}: {getFilterDisplayValue(filter)}
-                </Text>
-                <TouchableOpacity onPress={() => removeFilter(key)}>
-                  <X size={13} color={primaryColor} />
-                </TouchableOpacity>
-              </View>
-            );
-          })}
-          <TouchableOpacity onPress={handleClearAllFilters} style={{ paddingHorizontal: 8 }}>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: primaryColor, textDecorationLine: 'underline' }}>
-              Clear all
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
 
       {/* Active location chip */}
       {selectedLocation !== 'all' && (
@@ -1257,8 +831,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
       {/* List */}
       <FlatList
-        ref={listRef}
-        data={paginatedRecords}
+        data={filteredBillingRecords}
         keyExtractor={(item) => item.id}
         renderItem={renderCard}
         ListEmptyComponent={renderEmpty}
@@ -1266,117 +839,39 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         maxToRenderPerBatch={20}
         windowSize={10}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handlePullRefresh} colors={[primaryColor]} tintColor={primaryColor} />
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[primaryColor]} tintColor={primaryColor} />
         }
-        contentContainerStyle={paginatedRecords.length === 0 ? styles.flatListEmpty : styles.flatListContent}
+        contentContainerStyle={filteredBillingRecords.length === 0 ? styles.flatListEmpty : styles.flatListContent}
       />
-
-      {/* Pagination */}
-      {filteredBillingRecords.length > 0 && (
-        <View style={[styles.pagination, { paddingBottom: isTablet ? 12 : 110 }]}>
-          <View style={styles.paginationTop}>
-            <View style={styles.perPageWrap}>
-              <Text style={styles.paginationText}>Show</Text>
-              <View style={styles.pickerBox}>
-                <Picker
-                  selectedValue={itemsPerPage}
-                  onValueChange={(v) => setItemsPerPage(Number(v))}
-                  style={{ color: '#111827' }}
-                  dropdownIconColor="#6b7280"
-                >
-                  {[10, 25, 50, 100].map((v) => (
-                    <Picker.Item key={v} label={String(v)} value={v} />
-                  ))}
-                </Picker>
-              </View>
-              <Text style={styles.paginationText}>entries</Text>
-            </View>
-            <Text style={styles.paginationText}>
-              Showing <Text style={{ fontWeight: '600' }}>{(currentPage - 1) * itemsPerPage + 1}</Text> to{' '}
-              <Text style={{ fontWeight: '600' }}>{Math.min(currentPage * itemsPerPage, filteredBillingRecords.length)}</Text> of{' '}
-              <Text style={{ fontWeight: '600' }}>{filteredBillingRecords.length}</Text> results
-            </Text>
-          </View>
-
-          <View style={styles.paginationNav}>
-            {([
-              { label: '«', page: 1, disabled: currentPage === 1 },
-              { label: '‹', page: currentPage - 1, disabled: currentPage === 1 },
-            ] as const).map((btn) => (
-              <TouchableOpacity
-                key={btn.label}
-                onPress={() => handlePageChange(btn.page)}
-                disabled={btn.disabled}
-                style={[styles.pageBtn, btn.disabled && styles.pageBtnDisabled]}
-              >
-                <Text style={[styles.pageBtnText, btn.disabled && { color: '#9ca3af' }]}>{btn.label}</Text>
-              </TouchableOpacity>
-            ))}
-            <Text style={styles.pageIndicator}>Page {currentPage} of {totalPages}</Text>
-            {([
-              { label: '›', page: currentPage + 1, disabled: currentPage === totalPages },
-              { label: '»', page: totalPages, disabled: currentPage === totalPages },
-            ] as const).map((btn) => (
-              <TouchableOpacity
-                key={btn.label}
-                onPress={() => handlePageChange(btn.page)}
-                disabled={btn.disabled}
-                style={[styles.pageBtn, btn.disabled && styles.pageBtnDisabled]}
-              >
-                <Text style={[styles.pageBtnText, btn.disabled && { color: '#9ca3af' }]}>{btn.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      )}
 
       {renderSidebar()}
       {renderDetailsModal()}
-
-      <CustomerFunnelFilter
-        isOpen={isFunnelFilterOpen}
-        onClose={() => setIsFunnelFilterOpen(false)}
-        onApplyFilters={(filters) => {
-          handleApplyFilters(filters);
-          setIsFunnelFilterOpen(false);
-        }}
-        currentFilters={activeFilters}
-      />
-
-      {/* Session Expired */}
-      <Modal visible={showSessionExpired} transparent animationType="fade" statusBarTranslucent>
-        <View style={styles.sessionOverlay}>
-          <View style={styles.sessionCard}>
-            <LogOut size={44} color="#ef4444" />
-            <Text style={styles.sessionTitle}>Session Expired</Text>
-            <Text style={styles.sessionMessage}>Please re-login to continue using the application.</Text>
-            <TouchableOpacity onPress={handleRelogin} style={[styles.sessionBtn, { backgroundColor: primaryColor }]}>
-              <Text style={styles.sessionBtnText}>Re-login</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f9fafb' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  header: {
+    backgroundColor: '#ffffff',
     paddingHorizontal: 16,
     paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: '#111827' },
+  headerSubtitle: { fontSize: 13, color: '#6b7280', marginTop: 2 },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
     gap: 8,
   },
-  progressRow: { paddingHorizontal: 16, paddingVertical: 4, backgroundColor: '#ffffff' },
-  progressText: { fontSize: 10, color: '#9ca3af' },
   iconBtn: {
-    width: 38,
-    height: 38,
     borderWidth: 1,
     borderRadius: 8,
     padding: 9,
@@ -1384,66 +879,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  filterBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 3,
-    backgroundColor: '#ef4444',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterBadgeText: { fontSize: 9, color: '#fff', fontWeight: '700' },
-  newDataDot: {
-    position: 'absolute',
-    top: -3,
-    right: -3,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#ef4444',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  filterChipsRow: { backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
-  filterChipsContent: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
-  filterChipsLabel: { fontSize: 10, fontWeight: '700', color: '#9ca3af', letterSpacing: 1 },
-  pagination: {
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 10,
-  },
-  paginationTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 },
-  perPageWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pickerBox: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6, overflow: 'hidden', width: 92, height: 36, justifyContent: 'center' },
-  paginationText: { fontSize: 12, color: '#4b5563' },
-  paginationNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' },
-  pageBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-    minWidth: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-  },
-  pageBtnDisabled: { backgroundColor: '#f3f4f6', borderWidth: 0 },
-  pageBtnText: { fontSize: 18, fontWeight: 'bold', color: '#374151' },
-  pageIndicator: { paddingHorizontal: 8, fontSize: 14, color: '#111827' },
-  sessionOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  sessionCard: { backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', gap: 12 },
-  sessionTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
-  sessionMessage: { fontSize: 13, color: '#4b5563', textAlign: 'center' },
-  sessionBtn: { borderRadius: 8, paddingVertical: 12, width: '100%', alignItems: 'center', marginTop: 4 },
-  sessionBtnText: { color: '#fff', fontWeight: '700' },
   chipRow: { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8, backgroundColor: '#f9fafb' },
   chip: {
     flexDirection: 'row',
@@ -1456,25 +891,42 @@ const styles = StyleSheet.create({
     maxWidth: '80%',
   },
   chipText: { fontSize: 12, fontWeight: '600' },
-  // Rows carry their own padding and dividers, same as ApplicationManagement — any
-  // padding/gap here would double up as spacing around each card.
-  flatListContent: { flexGrow: 1 },
+  flatListContent: { padding: 12, gap: 10 },
   flatListEmpty: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  accountNo: { fontSize: 12, color: '#dc2626', fontWeight: '600', flex: 1, marginRight: 8 },
+  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  onlineLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
+  customerName: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 2 },
+  cardAddress: { fontSize: 12, color: '#6b7280', marginTop: 1 },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  cardBalance: { fontSize: 13, color: '#374151' },
+  billingStatusBadge: { fontSize: 12, fontWeight: '700', color: '#6b7280' },
+  cardMuted: { fontSize: 12, color: '#9ca3af', marginTop: 4 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 },
   emptyText: { fontSize: 14, color: '#6b7280', textAlign: 'center', marginTop: 12 },
   retryBtn: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8, marginTop: 8 },
   // Sidebar modal
-  sidebarContainer: { width: '85%', maxWidth: 520, height: '100%', backgroundColor: '#ffffff' },
-  sidebarFooter: { padding: 16, borderTopWidth: 1, borderTopColor: '#e5e7eb' },
-  viewRecordsBtn: { borderRadius: 6, paddingVertical: 10, alignItems: 'center' },
-  viewRecordsText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sidebarContainer: { backgroundColor: '#ffffff', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '85%', paddingBottom: 24 },
   sidebarHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 12,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
   },
@@ -1496,6 +948,19 @@ const styles = StyleSheet.create({
   detailsLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f9fafb', gap: 12 },
   detailsLoadingText: { fontSize: 14, color: '#6b7280', marginTop: 8 },
   closeBtn: { marginTop: 16, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, backgroundColor: '#f3f4f6' },
+  detailNav: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  navBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4 },
+  navBtnText: { fontSize: 13, fontWeight: '600' },
+  navCounter: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
 });
 
 export default Customer;

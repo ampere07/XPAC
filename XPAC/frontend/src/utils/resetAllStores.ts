@@ -13,6 +13,7 @@ import { useNapStore } from '../store/napStore';
 import { useOrganizationStore } from '../store/organizationStore';
 import { useOverdueStore } from '../store/overdueStore';
 import { usePaymentPortalStore } from '../store/paymentPortalStore';
+import { usePrepaidOverrideStore } from '../store/prepaidOverrideStore';
 import { useReconnectionStore } from '../store/reconnectionStore';
 import { useRoleStore } from '../store/roleStore';
 import { useServiceOrderStore } from '../store/serviceOrderStore';
@@ -51,12 +52,10 @@ export const resetAllStores = () => {
     isLoading: false,
     error: null,
     lastFetchTimestamp: null,
-    lastFetchAt: null,
   });
 
   useCommissionStore.setState({
     earnings: [],
-    // Cleared too, otherwise the previous session's rows stay visible to the next user.
     payoutHistory: [],
     stats: null,
     totalEarnings: 0,
@@ -68,27 +67,13 @@ export const resetAllStores = () => {
 
   useCustomerDashboardStore.setState({
     customerDetail: null,
-    paySummary: null,
     soaRecords: [],
     invoiceRecords: [],
     paymentRecords: [],
     serviceChargeRecords: [],
     isLoading: false,
-    // Every per-slice flag has to be cleared too. setState merges, so a reset during a
-    // load would otherwise leave one stuck on and the next screen waiting on a request
-    // that is never coming.
-    isDetailLoading: false,
-    isPaySummaryLoading: false,
-    isPaymentsLoading: false,
-    isInvoicesLoading: false,
-    isSoaLoading: false,
-    isServiceChargesLoading: false,
-    isFromCache: false,
     error: null,
     fetchedAccountNo: null,
-    // Cleared alongside fetchedAccountNo, or refreshCustomerData still has a target and
-    // can refetch the account that just signed out.
-    requestedAccountNo: null,
   });
 
   useDataLogsStore.setState({
@@ -168,6 +153,13 @@ export const resetAllStores = () => {
   usePaymentPortalStore.setState({
     paymentPortalRecords: [],
     totalCount: 0,
+    isLoading: false,
+    error: null,
+    lastUpdated: null,
+  });
+
+  usePrepaidOverrideStore.setState({
+    overrideRequests: [],
     isLoading: false,
     error: null,
     lastUpdated: null,

@@ -131,19 +131,15 @@ class AgentIncentiveService
      * Onsite statuses that abandon a job order, so a pre-installation visit on
      * it earns nothing.
      *
-     * Derived from JobOrder's own list of statuses that finish a job order for
-     * good, less the two that finish it successfully — so adding a terminal
-     * status to the model closes this hole for that status too, without anyone
-     * having to remember this file.
+     * GOWISER: upstream derives this from JobOrder's technician-queue status
+     * list, which GOWISER does not have; the terminal-but-unsuccessful statuses
+     * are listed here directly instead (the same two the upstream list yields).
      *
      * @return array<int, string>
      */
     private static function abandonedOnsiteStatuses(): array
     {
-        return array_values(array_diff(
-            \App\Models\JobOrder::TECHNICIAN_QUEUE_CLOSED_ONSITE_STATUSES,
-            self::SUCCESSFUL_ONSITE_STATUSES
-        ));
+        return ['failed', 'cancelled'];
     }
 
     /**
@@ -528,7 +524,11 @@ class AgentIncentiveService
                   //
                   // The abandoned list is derived from the model's own
                   // "finished for good" statuses so the two cannot drift.
-                  ->orWhere(function ($p) {
+                  //
+                  // GOWISER: only when job_orders actually has the column —
+                  // GOWISER has no pre-install workflow, so normally it does
+                  // not, and only Done / Completed count.
+                  ->when(\App\Support\AgentProgramme::hasPreInstallColumns(), fn ($w) => $w->orWhere(function ($p) {
                       $p->whereRaw('LOWER(TRIM(job_orders.pre_installed)) = ?', ['preinstalled'])
                         // COALESCE so a pre-installed job order with no status
                         // yet still counts; only an explicit failure excludes it.
@@ -536,7 +536,7 @@ class AgentIncentiveService
                             DB::raw("LOWER(TRIM(COALESCE(job_orders.onsite_status, '')))"),
                             self::abandonedOnsiteStatuses()
                         );
-                  });
+                  }));
             })
             ->where(function ($q) use ($nameVariants, $taggedId) {
                 // Matched as a whole value, not a fragment: an id is exact, and

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { FileText, X, Columns3, ArrowUp, ArrowDown, Menu, Filter, RefreshCw, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Download } from 'lucide-react';
+import { FileText, X, Columns3, ArrowUp, ArrowDown, Menu, Filter, RefreshCw, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Download, Layers } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import ServiceOrderDetails from '../components/ServiceOrderDetails';
 import ServiceOrderFunnelFilter, { allColumns as filterColumns } from '../filter/ServiceOrderFunnelFilter';
@@ -11,13 +11,13 @@ import pusher from '../services/pusherService';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
+import { getUserDisplayName, resolveUserDisplayName } from '../utils/userDisplay';
 import { User } from '../types/api';
-import {
-  buildTechnicianLockedServiceOrderIds,
-  isTechnicianUser,
-  sortServiceOrdersForTechnician,
-  TECHNICIAN_LOCKED_MESSAGE
-} from '../utils/technicianServiceOrderAccess';
+import { concernsMatch } from '../utils/concernAliases';
+import { useViewOptions } from '../hooks/useViewOptions';
+import type { GroupableColumn } from '../services/viewOptionsService';
+import ViewOptionsModal from '../components/tools/ViewOptionsModal';
+import GroupTree from '../components/tools/GroupTree';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -27,22 +27,75 @@ const hexToRgba = (hex: string, opacity: number) => {
 
 
 
-// Concerns are free text, so the same concern arrives in whatever casing and
-// spacing the encoder used ("For Pullout" vs "for pullout"). Grouping on the raw
-// string splits one concern into several sidebar rows, so every comparison goes
-// through this key instead.
-const concernKeyOf = (concern?: string | null) => {
-  const trimmed = (concern || '').replace(/\s+/g, ' ').trim();
-  return trimmed ? trimmed.toLowerCase() : '(no concern)';
+type DisplayMode = 'card' | 'table';
+
+// Sidebar tree taxonomy. Both the counts and the row filter derive from these, so they cannot
+// drift apart the way two hand-written copies of the same if/else chain would.
+const BILLING_TYPES = [
+  { id: 'prepaid', name: 'Prepaid' },
+  { id: 'postpaid', name: 'Postpaid' },
+  // Rendered only when it actually holds rows, so the branch totals still add up to the
+  // All Service Orders count instead of quietly losing accounts with the field unset.
+  { id: 'unspecified', name: '(Unspecified)' }
+];
+
+const STATUS_CATEGORIES = [
+  { id: 'resolved', name: 'Resolved' },
+  { id: 'failed', name: 'Failed' },
+  { id: 'inprogress', name: 'In Progress' },
+  { id: 'forvisit', name: 'For Visit' },
+  { id: 'open', name: 'Open' },
+  { id: 'cancelled', name: 'Cancelled' },
+  // Catch-all for a support status this list does not name, rendered only when it
+  // actually holds rows — the same treatment (Unspecified) gets above, and for the
+  // same reason: a status with nowhere to sit was previously dropped from the branch
+  // counts entirely, so Prepaid + Postpaid came to less than the All Service Orders
+  // total and those rows could not be reached from the sidebar at all.
+  { id: 'other', name: '(Other)' }
+];
+
+// Mirrors BillingAccount::PREPAID_ALIASES on the backend: production has held 'Pre Paid',
+// 'PrePaid' and 'Prepaid', so match with spacing and dashes stripped rather than on an
+// exact string.
+const resolveBillingType = (generationType?: string): string => {
+  const normalized = (generationType || '').toLowerCase().replace(/[\s-]/g, '');
+  if (normalized === 'prepaid') return 'prepaid';
+  if (normalized === 'postpaid') return 'postpaid';
+  return 'unspecified';
 };
 
-type DisplayMode = 'card' | 'table';
+const resolveStatusCategory = (supportStatus?: string): string => {
+  const s = (supportStatus || '').toLowerCase().trim();
+  if (s === 'resolved' || s === 'completed') return 'resolved';
+  if (s === 'failed') return 'failed';
+  if (s === 'in-progress' || s === 'in progress') return 'inprogress';
+  if (s === 'for-visit' || s === 'for visit') return 'forvisit';
+  if (s === 'pending' || s === 'open') return 'open';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  // Never '': every service order must land in some bucket, or it disappears from
+  // the counts while still being included in the total above them.
+  return 'other';
+};
+
+const resolveVisitKey = (visitStatus?: string): string => {
+  const v = (visitStatus || '').toLowerCase().trim();
+  let visitKey = v || 'empty';
+  if (visitKey === 'completed') visitKey = 'done';
+  if (visitKey === 'in progress') visitKey = 'inprogress';
+  return visitKey;
+};
 
 const allColumns = [
   { key: 'timestamp', label: 'Timestamp', width: 'min-w-40' },
   { key: 'fullName', label: 'Full Name', width: 'min-w-40' },
   { key: 'contactNumber', label: 'Contact Number', width: 'min-w-36' },
   { key: 'fullAddress', label: 'Full Address', width: 'min-w-56' },
+  // The three parts of the address as their own sortable columns. Placed next to
+  // Full Address, which still shows the whole thing; these are for grouping and
+  // sorting by area, which a single concatenated string cannot do.
+  { key: 'barangay', label: 'Barangay', width: 'min-w-36' },
+  { key: 'city', label: 'City', width: 'min-w-32' },
+  { key: 'region', label: 'Region', width: 'min-w-32' },
   { key: 'concern', label: 'Concern', width: 'min-w-36' },
   { key: 'concernRemarks', label: 'Concern Remarks', width: 'min-w-48' },
   { key: 'requestedBy', label: 'Requested By', width: 'min-w-36' },
@@ -54,59 +107,35 @@ const allColumns = [
   { key: 'startTime', label: 'Start Time', width: 'min-w-40' },
   { key: 'endTime', label: 'End Time', width: 'min-w-40' },
   { key: 'duration', label: 'Duration', width: 'min-w-28' },
-  { key: 'visitStatus', label: 'Visit Status', width: 'min-w-32' },
-  { key: 'visitStatusDate', label: 'Visit Status Date', width: 'min-w-36' }
+  { key: 'visitStatus', label: 'Visit Status', width: 'min-w-32' }
 ];
 
-// Export-only column, deliberately absent from allColumns.
-//
-// The table does not show an account number and the column picker cannot turn
-// one on, but an exported row is read away from the app — in a spreadsheet, or
-// by someone matching it against billing — where the account number is the only
-// thing that identifies the subscriber. So the export always leads with it,
-// whatever the picker is set to.
-const EXPORT_ACCOUNT_COLUMN = { key: 'accountNumber', label: 'Account No' };
+/**
+ * Columns added after `serviceOrderVisibleColumns` started being persisted.
+ *
+ * Anyone who has used the page has a saved array that predates these, so without
+ * this they would be hidden for every existing user — the feature would look
+ * missing rather than new.
+ *
+ * Deliberately an explicit list rather than "every key missing from the saved
+ * array": a column can be absent because it is new, or because the user switched
+ * it off, and those two are indistinguishable from the stored data alone.
+ * Treating them alike would silently re-enable Start Time, End Time and Duration,
+ * which are hidden by default, and undo anyone's own choices.
+ *
+ * Add to this list when introducing a column that existing users should see.
+ */
+const COLUMNS_ADDED_SINCE_LAST_RELEASE = ['barangay', 'city', 'region'];
 
-// Columns the table starts with unticked. Timing detail most desks do not want
-// in the way; the column picker turns them on.
-const DEFAULT_HIDDEN_COLUMNS = ['startTime', 'endTime', 'duration'];
+interface ServiceOrderPageProps {
+  /**
+   * Service order to open on arrival, sent when a "Service Done" notification is
+   * clicked. Empty for ordinary navigation.
+   */
+  autoOpenServiceOrderId?: string;
+}
 
-// Columns added after the column picker shipped, and the note recording that
-// each has been shown once.
-//
-// A saved visibility list holds only the columns that were visible when it was
-// written, so a column added later is indistinguishable from one the user
-// deliberately hid. Naming the new ones here reveals each exactly once — the
-// adoption note is written at the same time, so unticking it afterwards sticks.
-// An entry can be deleted a release or two later, once every browser has seen it.
-const RECENTLY_ADDED_COLUMNS = ['visitStatusDate'];
-const COLUMN_ADOPTION_KEY = 'serviceOrderAdoptedColumns';
-
-const adoptNewColumns = (saved: string[]): string[] => {
-  let adopted: string[] = [];
-  try {
-    const raw = localStorage.getItem(COLUMN_ADOPTION_KEY);
-    if (raw) adopted = JSON.parse(raw);
-  } catch (err) {
-    console.error('Failed to read adopted columns:', err);
-  }
-
-  const pending = RECENTLY_ADDED_COLUMNS.filter(
-    key => !adopted.includes(key) && !saved.includes(key)
-  );
-  if (pending.length === 0) return saved;
-
-  const next = [...saved, ...pending];
-  try {
-    localStorage.setItem('serviceOrderVisibleColumns', JSON.stringify(next));
-    localStorage.setItem(COLUMN_ADOPTION_KEY, JSON.stringify([...adopted, ...pending]));
-  } catch (err) {
-    console.error('Failed to record adopted columns:', err);
-  }
-  return next;
-};
-
-const ServiceOrderPage: React.FC = () => {
+const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrderId }) => {
   const calculateDuration = (start?: string | null, end?: string | null): string => {
     if (!start || !end) return '-';
     try {
@@ -173,6 +202,18 @@ const ServiceOrderPage: React.FC = () => {
   const [agentName, setAgentName] = useState<string>('');
   const [users, setUsers] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(true);
+  // service_orders persists the actor as an email string. Built once from the users
+  // already loaded for this page, so labelling rows by name costs no extra request.
+  const userDirectory = useMemo(() => {
+    return users.reduce<Record<string, string>>((directory, user) => {
+      const email = (user?.email_address || '').trim().toLowerCase();
+      const displayName = getUserDisplayName(user);
+      if (email && displayName && displayName.toLowerCase() !== email) {
+        directory[email] = displayName;
+      }
+      return directory;
+    }, {});
+  }, [users]);
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
@@ -180,14 +221,22 @@ const ServiceOrderPage: React.FC = () => {
     const saved = localStorage.getItem('serviceOrderVisibleColumns');
     if (saved) {
       try {
-        return adoptNewColumns(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Reveal only the columns listed as new — see the constant's note on why
+          // this cannot be "everything missing from the saved array". Columns the
+          // user switched off stay off.
+          const added = COLUMNS_ADDED_SINCE_LAST_RELEASE.filter(key => !parsed.includes(key));
+
+          return added.length > 0 ? [...parsed, ...added] : parsed;
+        }
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
     }
     return allColumns
       .map(col => col.key)
-      .filter(key => !DEFAULT_HIDDEN_COLUMNS.includes(key));
+      .filter(key => key !== 'startTime' && key !== 'endTime' && key !== 'duration');
   });
   const [technicianEmail, setTechnicianEmail] = useState<string | undefined>(undefined);
   const [sortColumn, setSortColumn] = useState<string | null>('timestamp');
@@ -201,13 +250,37 @@ const ServiceOrderPage: React.FC = () => {
     const saved = localStorage.getItem('serviceOrderColumnOrder');
     if (saved) {
       try {
-        // A saved order is a rearrangement of every column that existed when it
-        // was written, hidden ones included, so anything missing from it is
-        // genuinely new. Append it — left out, its indexOf below is -1 and it
-        // would sort ahead of Timestamp.
-        const parsed: string[] = JSON.parse(saved);
-        const missing = allColumns.map(col => col.key).filter(key => !parsed.includes(key));
-        return [...parsed, ...missing];
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // A key missing from this list sorts by indexOf() === -1, which would put
+          // every newly added column to the far LEFT of the table, ahead of
+          // Timestamp. So each one is spliced in behind the neighbour it follows in
+          // allColumns — Barangay lands after Full Address rather than at either
+          // edge — while any order the user dragged for themselves is preserved.
+          const merged = [...parsed];
+
+          allColumns.forEach((col, index) => {
+            if (merged.includes(col.key)) return;
+
+            // Walk back to the nearest preceding column already in the list.
+            // Iterating allColumns in order means Barangay is placed first, so City
+            // then finds Barangay and Region finds City, keeping the three together.
+            let insertAt = merged.length;
+
+            for (let prev = index - 1; prev >= 0; prev--) {
+              const found = merged.indexOf(allColumns[prev].key);
+
+              if (found !== -1) {
+                insertAt = found + 1;
+                break;
+              }
+            }
+
+            merged.splice(insertAt, 0, col.key);
+          });
+
+          return merged;
+        }
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -219,6 +292,11 @@ const ServiceOrderPage: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
+
+  // Download options. The button used to export immediately; it now opens a chooser
+  // so the plain row export and the concern summary can live side by side.
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -365,12 +443,6 @@ const ServiceOrderPage: React.FC = () => {
         setRoleId(userData.role_id || null);
         if (userData.role && userData.role.toLowerCase() === 'technician' && userData.email) {
           setTechnicianEmail(userData.email);
-        }
-        // Technicians land on their queue in the order they are expected to work
-        // it, which the presort applies when no column sort is set. Clicking a
-        // column header still sorts, for them as for everyone else.
-        if (isTechnicianUser(userData.role, userData.role_id)) {
-          setSortColumn(null);
         }
       } catch (error) {
         console.error('Error parsing auth data:', error);
@@ -640,6 +712,8 @@ const ServiceOrderPage: React.FC = () => {
       case 'emailAddress': return item.emailAddress;
       case 'fullAddress': return item.fullAddress ?? (item as any).full_address ?? '';
       case 'plan': return item.plan;
+      case 'username': return item.username ?? (item as any).username ?? '';
+      case 'pppoePassword': return item.pppoePassword ?? (item as any).pppoe_password ?? '';
       case 'lcp': return item.lcp;
       case 'nap': return item.nap;
       case 'port': return item.port;
@@ -652,26 +726,13 @@ const ServiceOrderPage: React.FC = () => {
       case 'newLcpnap': return item.newLcpnap;
       case 'supportStatus': return item.supportStatus ?? (item as any).support_status ?? '';
       case 'visitStatus': return item.visitStatus;
-      // Already "YYYY-MM-DD", which sorts correctly as a string.
-      case 'visitStatusDate': return item.visitStatusDate;
       case 'timestamp': return item.timestamp;
       case 'dateInstalled': return item.dateInstalled;
-      case 'modifiedBy': return item.modifiedBy ?? (item as any).updated_by_user ?? '';
-      case 'modifiedDate': return item.modifiedDate ?? (item as any).updated_at ?? '';
-      case 'assignedEmail':
-        const email = item.assignedEmail || '';
-        if (!email) return '-';
-        const user = users.find(u => (u.email_address || '').toLowerCase() === email.toLowerCase());
-        if (user) {
-          const fullName = [
-            user.first_name || '',
-            user.middle_initial ? `${user.middle_initial}.` : '',
-            user.last_name || ''
-          ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-          return fullName || email;
-        }
-        return email;
-      case 'requestedBy': return item.requestedBy;
+      case 'modifiedBy': return item.modifiedBy ?? (item as any).updated_by_user ?? (item as any).Updated_By_User ?? '';
+      case 'modifiedDate': return item.modifiedDate ?? item.rawUpdatedAt ?? (item as any).updated_at ?? (item as any).Updated_At ?? '';
+      // Sorted by what the cell shows, so these mirror renderCellValue.
+      case 'assignedEmail': return resolveUserDisplayName(item.assignedEmail, userDirectory, '-');
+      case 'requestedBy': return resolveUserDisplayName(item.requestedBy, userDirectory);
       case 'serviceCharge': return item.serviceCharge;
       case 'routerModel': return item.routerModel;
       case 'routerModemSN': return item.routerModemSN ?? (item as any).router_modem_sn ?? '';
@@ -707,7 +768,7 @@ const ServiceOrderPage: React.FC = () => {
         return val !== undefined && val !== null ? val : '';
       }
     }
-  }, []);
+  }, [userDirectory]);
 
   // 1. Initial search and funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredServiceOrders = useMemo(() => {
@@ -788,15 +849,26 @@ const ServiceOrderPage: React.FC = () => {
           }
           else if (typedFilter.type === 'date') {
             if (orderValue) {
-              const dateValue = new Date(orderValue).getTime();
+              const normalizeDate = (d: any, isEnd: boolean = false) => {
+                if (!d) return NaN;
+                let s = String(d).trim().replace(' ', 'T');
+                if (s.length === 10) {
+                  s = isEnd ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+                } else if (s.length === 16) {
+                  s = isEnd ? `${s}:59.999` : `${s}:00`;
+                }
+                return new Date(s).getTime();
+              };
+
+              const dateValue = normalizeDate(orderValue);
               if (!isNaN(dateValue)) {
                 if (typedFilter.from) {
-                  const fromDate = new Date(typedFilter.from).getTime();
-                  if (dateValue < fromDate) { matchesFunnel = false; break; }
+                  const fromDate = normalizeDate(typedFilter.from, false);
+                  if (!isNaN(fromDate) && dateValue < fromDate) { matchesFunnel = false; break; }
                 }
                 if (typedFilter.to) {
-                  const toDate = new Date(typedFilter.to).getTime();
-                  if (dateValue > toDate + 86400000) { matchesFunnel = false; break; }
+                  const toDate = normalizeDate(typedFilter.to, true);
+                  if (!isNaN(toDate) && dateValue > toDate) { matchesFunnel = false; break; }
                 }
               } else {
                 matchesFunnel = false; break;
@@ -809,12 +881,29 @@ const ServiceOrderPage: React.FC = () => {
             const normalizedValue = String(orderValue || '').toLowerCase().trim();
 
             if (key === 'barangay' || key === 'city' || key === 'region') {
-              // For location fields, also check fullAddress as fallback
               const address = String(serviceOrder.fullAddress || '').toLowerCase();
               const isMatch = typedFilter.value.some((opt: string) => {
                 const filterVal = String(opt).toLowerCase().trim();
-                return normalizedValue === filterVal || normalizedValue.includes(filterVal) || address.includes(filterVal);
+
+                // The API now returns barangay/city/region separately, so match the
+                // field itself when it has a value. The options come from the same
+                // customer columns, so they are exact — and an exact match cannot
+                // mistake a barangay for a city that shares its name, which scanning
+                // the concatenated address did.
+                if (normalizedValue) {
+                  return normalizedValue === filterVal;
+                }
+
+                // Only for records whose field is blank, where the address text is
+                // the sole evidence of where the job is.
+                return address.includes(filterVal);
               });
+              if (!isMatch) { matchesFunnel = false; break; }
+            } else if (key === 'concern') {
+              // "For Pullout" and "Pullout" are one concern and the filter offers a
+              // single option for them, so the row has to be compared through the same
+              // alias — an exact match would return only half of them.
+              const isMatch = typedFilter.value.some((opt: string) => concernsMatch(orderValue, opt));
               if (!isMatch) { matchesFunnel = false; break; }
             } else {
               const isMatch = typedFilter.value.some((opt: string) => {
@@ -833,236 +922,229 @@ const ServiceOrderPage: React.FC = () => {
     return filtered;
   }, [serviceOrders, searchQuery, activeFilters, userRole, roleId, getVal, currentUserOrgId]);
 
-  const locationItems = useMemo(() => {
-    const categories = [
-      { id: 'resolved', name: 'Resolved' },
-      { id: 'failed', name: 'Failed' },
-      { id: 'inprogress', name: 'In Progress' },
-      { id: 'forvisit', name: 'For Visit' },
-      { id: 'open', name: 'Open' }
-    ];
+  const groupableColumns: Array<GroupableColumn<ServiceOrder>> = useMemo(
+    () => [
+      {
+        key: 'billingType',
+        label: 'Billing Type',
+        value: (row) => {
+          const type = resolveBillingType(row.generationType);
+          return type === 'prepaid' ? 'Prepaid' : type === 'postpaid' ? 'Postpaid' : '(Unspecified)';
+        },
+      },
+      {
+        key: 'supportStatus',
+        label: 'Support Status',
+        value: (row) => row.supportStatus || '(Blank)',
+      },
+      {
+        key: 'visitStatus',
+        label: 'Visit Status',
+        value: (row) => row.visitStatus || '(Blank)',
+      },
+      {
+        key: 'assignedEmail',
+        label: 'Assigned Tech',
+        value: (row) => resolveUserDisplayName(row.assignedEmail, userDirectory, '(Unassigned)'),
+      },
+      {
+        key: 'concern',
+        label: 'Concern',
+        value: (row) => row.concern || '(Blank)',
+      },
+      {
+        key: 'repairCategory',
+        label: 'Repair Category',
+        value: (row) => row.repairCategory || '(Blank)',
+      },
+      {
+        key: 'barangay',
+        label: 'Barangay',
+        value: (row) => row.barangay || '(Blank)',
+      },
+      {
+        key: 'city',
+        label: 'City',
+        value: (row) => row.city || '(Blank)',
+      },
+      {
+        key: 'region',
+        label: 'Region',
+        value: (row) => row.region || '(Blank)',
+      },
+      {
+        key: 'requestedBy',
+        label: 'Requested By',
+        value: (row) => resolveUserDisplayName(row.requestedBy, userDirectory, '(Blank)'),
+      },
+      {
+        key: 'modifiedBy',
+        label: 'Modified By',
+        value: (row) => resolveUserDisplayName(row.modifiedBy, userDirectory, '(Blank)'),
+      },
+    ],
+    [userDirectory]
+  );
 
-    // status -> visit status -> barangay -> concern. Each level is a count of
-    // the level beneath it, so a branch can be read without opening it.
+  const grouping = useViewOptions('service_orders', groupableColumns, globalFilteredServiceOrders);
+  const [isViewOptionsModalOpen, setIsViewOptionsModalOpen] = useState(false);
+
+  // Invalidate selected location when group levels change
+  const groupSignature = grouping.options.groupBy.join('|');
+  useEffect(() => {
+    setSelectedLocation('all');
+  }, [groupSignature]);
+
+  const sortSignature = JSON.stringify(grouping.sortRules);
+  useEffect(() => {
+    if (!grouping.loaded || grouping.sortRules.length === 0) return;
+    const first = grouping.sortRules[0];
+    if (first) {
+      setSortColumn(first.key);
+      setSortDirection(first.direction);
+    }
+  }, [grouping.loaded, sortSignature]);
+
+  const locationItems = useMemo(() => {
     const tree: Record<string, {
       count: number,
-      visits: Record<string, {
+      statuses: Record<string, {
         count: number,
-        barangays: Record<string, {
+        visits: Record<string, {
           count: number,
-          // Keyed by concernKeyOf(); `labels` tallies the raw spellings so the
-          // row can be shown with the one that actually occurs most.
-          concerns: Record<string, { count: number, labels: Record<string, number> }>
+          barangays: Record<string, number>
         }>
       }>
     }> = {};
 
-    categories.forEach(c => {
-      tree[c.id] = { count: 0, visits: {} };
+    BILLING_TYPES.forEach(g => {
+      tree[g.id] = { count: 0, statuses: {} };
+      STATUS_CATEGORIES.forEach(c => {
+        tree[g.id].statuses[c.id] = { count: 0, visits: {} };
+      });
     });
 
     globalFilteredServiceOrders.forEach(so => {
-      const s = (so.supportStatus || '').toLowerCase().trim();
-      const v = (so.visitStatus || '').toLowerCase().trim();
+      const genNode = tree[resolveBillingType(so.generationType)];
+      const catNode = genNode.statuses[resolveStatusCategory(so.supportStatus)];
 
-      let category = '';
-      if (s === 'resolved' || s === 'completed') category = 'resolved';
-      else if (s === 'failed') category = 'failed';
-      else if (s === 'in-progress' || s === 'in progress') category = 'inprogress';
-      else if (s === 'for-visit' || s === 'for visit') category = 'forvisit';
-      else if (s === 'pending' || s === 'open') category = 'open';
-      else category = '';
+      // The billing type is counted first and unconditionally: its badge has to equal
+      // the number of rows clicking it produces, and that must hold even if a status
+      // somehow resolves to a category that is not in the list.
+      genNode.count++;
 
-      const catNode = tree[category];
-      if (catNode) {
-        catNode.count++;
+      if (!catNode) return;
+      catNode.count++;
 
-        // A resolved ticket with no visit status is a finished visit that was
-        // never stamped, so it counts as Done instead of getting its own
-        // '(Empty)' branch. Only Resolved does this — under the other statuses
-        // a blank still means the visit is unaccounted for.
-        let visitKey = v || (category === 'resolved' ? 'done' : 'empty');
-        if (visitKey === 'completed') visitKey = 'done';
-        if (visitKey === 'in progress') visitKey = 'inprogress';
-
-        if (!catNode.visits[visitKey]) {
-          catNode.visits[visitKey] = { count: 0, barangays: {} };
-        }
-        const visitNode = catNode.visits[visitKey];
-        visitNode.count++;
-
-        const address = (so.fullAddress || '').toLowerCase();
-        let matchedBrgy = 'Unknown';
-        const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
-        if (foundBrgy) {
-          matchedBrgy = foundBrgy.barangay;
-        }
-
-        if (!visitNode.barangays[matchedBrgy]) {
-          visitNode.barangays[matchedBrgy] = { count: 0, concerns: {} };
-        }
-        const brgyNode = visitNode.barangays[matchedBrgy];
-        brgyNode.count++;
-
-        // Blank concerns are grouped rather than dropped: a barangay's rows must
-        // add up to its own count, or the branch reads as if records went
-        // missing when it is opened.
-        const concernLabel = (so.concern || '').replace(/\s+/g, ' ').trim() || '(No concern)';
-        const concernKey = concernKeyOf(so.concern);
-        if (!brgyNode.concerns[concernKey]) {
-          brgyNode.concerns[concernKey] = { count: 0, labels: {} };
-        }
-        const concernNode = brgyNode.concerns[concernKey];
-        concernNode.count++;
-        concernNode.labels[concernLabel] = (concernNode.labels[concernLabel] || 0) + 1;
+      const visitKey = resolveVisitKey(so.visitStatus);
+      if (!catNode.visits[visitKey]) {
+        catNode.visits[visitKey] = { count: 0, barangays: {} };
       }
+      const visitNode = catNode.visits[visitKey];
+      visitNode.count++;
+
+      const address = (so.fullAddress || '').toLowerCase();
+      let matchedBrgy = 'Unknown';
+      const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
+      if (foundBrgy) {
+        matchedBrgy = foundBrgy.barangay;
+      }
+
+      visitNode.barangays[matchedBrgy] = (visitNode.barangays[matchedBrgy] || 0) + 1;
     });
 
     return {
-      items: categories.map(c => ({
-        id: `status:${c.id}`,
-        name: c.name,
-        count: tree[c.id].count,
-        visits: Object.entries(tree[c.id].visits).sort().map(([vKey, vData]) => {
-          let vName = vKey;
-          if (vKey === 'done') vName = 'Done';
-          else if (vKey === 'inprogress') vName = 'In Progress';
-          else if (vKey === 'reschedule') vName = 'Reschedule';
-          // A blank visit status means different things per status, so it is named
-          // for what it means rather than for being blank. Under For Visit the
-          // ticket is waiting to be scheduled — nothing has gone wrong with it, and
-          // "(Empty)" reads like missing data rather than a real queue. Elsewhere it
-          // still means the visit is genuinely unaccounted for.
-          else if (vKey === 'empty') vName = c.id === 'forvisit' ? 'Not Assigned' : '(Empty)';
-          else vName = vKey.charAt(0).toUpperCase() + vKey.slice(1);
+      items: BILLING_TYPES
+        .filter(g => g.id !== 'unspecified' || tree[g.id].count > 0)
+        .map(g => ({
+          id: `gen:${g.id}`,
+          name: g.name,
+          count: tree[g.id].count,
+          statuses: STATUS_CATEGORIES
+            .filter(c => c.id !== 'other' || tree[g.id].statuses[c.id].count > 0)
+            .map(c => ({
+            id: `gen:${g.id}:status:${c.id}`,
+            statusId: c.id,
+            name: c.name,
+            count: tree[g.id].statuses[c.id].count,
+            visits: Object.entries(tree[g.id].statuses[c.id].visits).sort().map(([vKey, vData]) => {
+              let vName = vKey;
+              if (vKey === 'done') vName = 'Done';
+              else if (vKey === 'inprogress') vName = 'In Progress';
+              else if (vKey === 'reschedule') vName = 'Reschedule';
+              else if (vKey === 'empty') vName = '(Empty)';
+              else vName = vKey.charAt(0).toUpperCase() + vKey.slice(1);
 
-          return {
-            id: `status:${c.id}:visit:${vKey}`,
-            name: vName,
-            originalKey: vKey,
-            count: vData.count,
-            barangays: Object.entries(vData.barangays).sort().map(([bName, bData]) => ({
-              id: `status:${c.id}:visit:${vKey}:brgy:${bName}`,
-              name: bName,
-              count: bData.count,
-              concerns: Object.entries(bData.concerns).sort(([a], [b]) => a.localeCompare(b)).map(([cKey, cData]) => {
-                // Show the spelling most of the rows actually use; ties keep the
-                // one seen first.
-                const displayName = Object.entries(cData.labels)
-                  .reduce((best, entry) => (entry[1] > best[1] ? entry : best))[0];
-
-                return {
-                  id: `status:${c.id}:visit:${vKey}:brgy:${bName}:concern:${cKey}`,
-                  name: displayName,
-                  count: cData.count
-                };
-              })
-            }))
-          };
-        })
-      })),
+              return {
+                id: `gen:${g.id}:status:${c.id}:visit:${vKey}`,
+                name: vName,
+                originalKey: vKey,
+                count: vData.count,
+                barangays: Object.entries(vData.barangays).sort().map(([bName, bCount]) => ({
+                  id: `gen:${g.id}:status:${c.id}:visit:${vKey}:brgy:${bName}`,
+                  name: bName,
+                  count: bCount
+                }))
+              };
+            })
+          }))
+        })),
       total: globalFilteredServiceOrders.length
     };
   }, [globalFilteredServiceOrders, barangays]);
 
-  const isTechnician = isTechnicianUser(userRole, roleId);
-
-  /**
-   * The service orders a technician may not open yet.
-   *
-   * Built from their whole accessible set — the API already scopes it to them —
-   * and NOT from the filtered or paginated view, so searching, filtering or
-   * paging can never change which record counts as their next one.
-   */
-  const technicianLockedIds = useMemo(() => {
-    if (!isTechnician) return new Set<string>();
-    return buildTechnicianLockedServiceOrderIds(serviceOrders);
-  }, [isTechnician, serviceOrders]);
-
-  const isServiceOrderLocked = (serviceOrder: ServiceOrder): boolean =>
-    technicianLockedIds.has(String(serviceOrder.id));
-
   const filteredServiceOrders = useMemo(() => {
-    let filtered = globalFilteredServiceOrders.filter(serviceOrder => {
-      if (selectedLocation === 'all') return true;
+    let filtered = grouping.isGrouped
+      ? grouping.filterByGroup(globalFilteredServiceOrders, selectedLocation)
+      : globalFilteredServiceOrders.filter(serviceOrder => {
+          if (selectedLocation === 'all') return true;
 
-      // Extract location match logic
-      if (selectedLocation.startsWith('status:')) {
-        const parts = selectedLocation.split(':');
-        const catId = parts[1];
+          // Node ids are the path down the sidebar tree:
+          // gen:<billingType>[:status:<category>[:visit:<visitKey>[:brgy:<barangay>]]]
+          if (selectedLocation.startsWith('gen:')) {
+            const parts = selectedLocation.split(':');
 
-        const s = (serviceOrder.supportStatus || '').toLowerCase().trim();
-        const v = (serviceOrder.visitStatus || '').toLowerCase().trim();
+            if (resolveBillingType(serviceOrder.generationType) !== parts[1]) return false;
 
-        let category = '';
-        if (s === 'resolved' || s === 'completed') category = 'resolved';
-        else if (s === 'failed') category = 'failed';
-        else if (s === 'in-progress' || s === 'in progress') category = 'inprogress';
-        else if (s === 'for-visit' || s === 'for visit') category = 'forvisit';
-        else if (s === 'pending' || s === 'open') category = 'open';
-        else category = '';
+            if (parts.length > 2 && parts[2] === 'status') {
+              if (resolveStatusCategory(serviceOrder.supportStatus) !== parts[3]) return false;
 
-        if (category !== catId) return false;
+              if (parts.length > 4 && parts[4] === 'visit') {
+                if (resolveVisitKey(serviceOrder.visitStatus) !== parts[5]) return false;
 
-        if (parts.length > 2 && parts[2] === 'visit') {
-          const visitKeyFilter = parts[3];
-          // Same rule the counts are built with, so a Resolved > Done branch
-          // opens exactly the rows it counted.
-          let visitKey = v || (category === 'resolved' ? 'done' : 'empty');
-          if (visitKey === 'completed') visitKey = 'done';
-          if (visitKey === 'in progress') visitKey = 'inprogress';
+                if (parts.length > 6 && parts[6] === 'brgy') {
+                  const brgyName = parts[7];
+                  const address = (serviceOrder.fullAddress || '').toLowerCase();
+                  let matchedBrgy = 'Unknown';
+                  const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
+                  if (foundBrgy) matchedBrgy = foundBrgy.barangay;
 
-          if (visitKey !== visitKeyFilter) return false;
-
-          if (parts.length > 4 && parts[4] === 'brgy') {
-            const brgyName = parts[5];
-            const address = (serviceOrder.fullAddress || '').toLowerCase();
-            let matchedBrgy = 'Unknown';
-            const foundBrgy = barangays.find(b => address.includes(b.barangay.toLowerCase()));
-            if (foundBrgy) matchedBrgy = foundBrgy.barangay;
-
-            if (matchedBrgy !== brgyName) return false;
-
-            // The concern is the deepest level. Its name can itself contain a
-            // colon, so the remainder is rejoined rather than read as parts[7] —
-            // splitting on every colon would silently drop half the name and
-            // match nothing.
-            if (parts.length > 6 && parts[6] === 'concern') {
-              const concernKeyFilter = parts.slice(7).join(':');
-
-              if (concernKeyOf(serviceOrder.concern) !== concernKeyFilter) return false;
+                  if (matchedBrgy !== brgyName) return false;
+                }
+              }
             }
+            return true;
           }
-        }
-        return true;
+          return false;
+        });
+
+    filtered.sort((a, b) => {
+      // 1. Prioritize 'timestamp' as requested, fallback to 'createdAt'
+      const dateA = a.timestamp || a.createdAt || '';
+      const dateB = b.timestamp || b.createdAt || '';
+      
+      const timeA = dateA ? new Date(dateA).getTime() : 0;
+      const timeB = dateB ? new Date(dateB).getTime() : 0;
+      
+      if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
+        return timeB - timeA;
       }
-      return false;
+      
+      // 2. Fallback to ID comparison (numeric logic to ensure latest ID is first)
+      const idA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
+      const idB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
+      return idB - idA;
     });
-
-    // Technicians read their list in the order they work it: In Progress oldest
-    // first, then other active work, with Done / Reschedule / Failed at the end.
-    // Every other role keeps the newest-first default untouched.
-    if (isTechnician) {
-      filtered = sortServiceOrdersForTechnician(filtered);
-    } else {
-      filtered.sort((a, b) => {
-        // 1. Prioritize 'timestamp' as requested, fallback to 'createdAt'
-        const dateA = a.timestamp || a.createdAt || '';
-        const dateB = b.timestamp || b.createdAt || '';
-
-        const timeA = dateA ? new Date(dateA).getTime() : 0;
-        const timeB = dateB ? new Date(dateB).getTime() : 0;
-
-        if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
-          return timeB - timeA;
-        }
-
-        // 2. Fallback to ID comparison (numeric logic to ensure latest ID is first)
-        const idA = parseInt(String(a.id).replace(/\D/g, '')) || 0;
-        const idB = parseInt(String(b.id).replace(/\D/g, '')) || 0;
-        return idB - idA;
-      });
-    }
 
     if (sortColumn) {
       filtered = [...filtered].sort((a, b) => {
@@ -1072,8 +1154,8 @@ const ServiceOrderPage: React.FC = () => {
         // Special handling for date columns to ensure accurate chronological sorting
         const dateFields = ['timestamp', 'modifiedDate', 'dateInstalled', 'startTime', 'endTime', 'modified_at', 'created_at', 'rawUpdatedAt'];
         if (dateFields.includes(sortColumn)) {
-          const timeA = aValue ? new Date(aValue).getTime() : 0;
-          const timeB = bValue ? new Date(bValue).getTime() : 0;
+          const timeA = aValue ? new Date(String(aValue).replace(' ', 'T')).getTime() : 0;
+          const timeB = bValue ? new Date(String(bValue).replace(' ', 'T')).getTime() : 0;
           
           if (!isNaN(timeA) && !isNaN(timeB)) {
             if (timeA !== timeB) {
@@ -1094,7 +1176,7 @@ const ServiceOrderPage: React.FC = () => {
     }
 
     return filtered;
-  }, [globalFilteredServiceOrders, selectedLocation, sortColumn, sortDirection, barangays, getVal, isTechnician]);
+  }, [globalFilteredServiceOrders, grouping, selectedLocation, sortColumn, sortDirection, barangays, getVal]);
 
   // Derived paginated records
   const paginatedServiceOrders = useMemo(() => {
@@ -1141,8 +1223,12 @@ const ServiceOrderPage: React.FC = () => {
         case 'completed':
           textColor = 'text-green-400';
           break;
-        case 'scheduled':
+        // Split out of the blue group: sharing a colour with "In Progress"
+        // made the two indistinguishable in the table.
         case 'reschedule':
+          textColor = 'text-purple-400';
+          break;
+        case 'scheduled':
         case 'in progress':
           textColor = 'text-blue-400';
           break;
@@ -1168,6 +1254,33 @@ const ServiceOrderPage: React.FC = () => {
   const handleRowClick = (serviceOrder: ServiceOrder) => {
     setSelectedServiceOrder(serviceOrder);
   };
+
+  /**
+   * Open the service order a notification pointed at.
+   *
+   * Goes through handleRowClick so it opens exactly as a real click does. Tracked
+   * by id so it fires once: without this, closing the panel would reopen it on the
+   * next render and the list could never be reached again.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenServiceOrderId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenServiceOrderId) return;
+
+    const target = serviceOrders.find(order => String(order.id) === String(autoOpenServiceOrderId));
+
+    // Wait for the list rather than fetching separately, so the opened record is the
+    // same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenServiceOrderId;
+    handleRowClick(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenServiceOrderId, serviceOrders]);
 
   const handleToggleColumn = (columnKey: string) => {
     setVisibleColumns(prev => {
@@ -1346,9 +1459,12 @@ const ServiceOrderPage: React.FC = () => {
   const filteredColumns = allColumns
     .filter(col => visibleColumns.includes(col.key))
     .sort((a, b) => {
+      // A key absent from columnOrder sorts last, not first. Raw indexOf returns -1,
+      // which would place an unordered column ahead of Timestamp at the left edge.
+      // The stored order is migrated on load, so this is a backstop.
       const indexA = columnOrder.indexOf(a.key);
       const indexB = columnOrder.indexOf(b.key);
-      return indexA - indexB;
+      return (indexA === -1 ? Infinity : indexA) - (indexB === -1 ? Infinity : indexB);
     });
 
   const renderCellValue = (serviceOrder: ServiceOrder, columnKey: string) => {
@@ -1359,8 +1475,6 @@ const ServiceOrderPage: React.FC = () => {
         return <StatusText status={serviceOrder.supportStatus} type="support" />;
       case 'visitStatus':
         return <StatusText status={serviceOrder.visitStatus} type="visit" />;
-      case 'visitStatusDate':
-        return serviceOrder.visitStatusDate || '-';
       case 'fullName':
         return (
           <div className="flex items-center space-x-2 overflow-hidden">
@@ -1392,22 +1506,19 @@ const ServiceOrderPage: React.FC = () => {
       case 'concernRemarks':
         return serviceOrder.concernRemarks || '-';
       case 'requestedBy':
-        return serviceOrder.requestedBy || '-';
+        return resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, '-');
       case 'assignedEmail':
-        const assignEmail = serviceOrder.assignedEmail || '';
-        if (!assignEmail) return '-';
-        const assignedUser = users.find(u => (u.email_address || '').toLowerCase() === assignEmail.toLowerCase());
-        if (assignedUser) {
-          const fullName = [
-            assignedUser.first_name || '',
-            assignedUser.middle_initial ? `${assignedUser.middle_initial}.` : '',
-            assignedUser.last_name || ''
-          ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-          return fullName || assignEmail;
-        }
-        return assignEmail;
+        return resolveUserDisplayName(serviceOrder.assignedEmail, userDirectory, '-');
       case 'repairCategory':
         return serviceOrder.repairCategory || '-';
+      // Explicit cases are required: the default arm below returns '-', so a column
+      // added without one renders an empty table of dashes rather than the data.
+      case 'barangay':
+        return serviceOrder.barangay || '-';
+      case 'city':
+        return serviceOrder.city || '-';
+      case 'region':
+        return serviceOrder.region || '-';
       case 'modifiedBy':
         return serviceOrder.modifiedBy || '-';
       case 'modifiedDate':
@@ -1423,54 +1534,41 @@ const ServiceOrderPage: React.FC = () => {
     }
   };
 
-  const handleExport = () => {
+  /**
+   * The row-per-service-order export. Unchanged — it is what the Download button
+   * has always produced, and is still the default choice in the chooser.
+   */
+  const exportDefaultCsv = () => {
     if (!filteredServiceOrders || filteredServiceOrders.length === 0) return;
 
-    const pickedColumns = allColumns
+    const exportColumns = allColumns
       .filter(col => visibleColumns.includes(col.key))
       .sort((a, b) => {
+        // Same -1 guard as filteredColumns, so the CSV column order matches the
+        // table's rather than hoisting an unordered column to the first field.
         const indexA = columnOrder.indexOf(a.key);
         const indexB = columnOrder.indexOf(b.key);
-        return indexA - indexB;
+        return (indexA === -1 ? Infinity : indexA) - (indexB === -1 ? Infinity : indexB);
       });
-
-    // Account No first, then the picked columns in the order the table shows
-    // them. Filtered rather than blindly prepended so the column cannot appear
-    // twice if it is ever added to allColumns.
-    const exportColumns = [
-      EXPORT_ACCOUNT_COLUMN,
-      ...pickedColumns.filter(col => col.key !== EXPORT_ACCOUNT_COLUMN.key),
-    ];
 
     const getExportValue = (so: ServiceOrder, columnKey: string) => {
       switch (columnKey) {
-        // The API has been seen sending either spelling, so both are read —
-        // the same fallback getVal() uses for the rest of the page.
-        case 'accountNumber': return so.accountNumber || (so as any).account_no || '-';
         case 'timestamp': return so.timestamp || '-';
         case 'supportStatus': return so.supportStatus || '-';
         case 'visitStatus': return so.visitStatus || '-';
-        case 'visitStatusDate': return so.visitStatusDate || '-';
         case 'fullName': return so.fullName || '-';
         case 'contactNumber': return so.contactNumber || '-';
         case 'fullAddress': return so.fullAddress || '-';
         case 'concern': return so.concern || '-';
         case 'concernRemarks': return so.concernRemarks || '-';
-        case 'requestedBy': return so.requestedBy || '-';
-        case 'assignedEmail':
-          const exportEmail = so.assignedEmail || '';
-          if (!exportEmail) return '-';
-          const exportUser = users.find(u => (u.email_address || '').toLowerCase() === exportEmail.toLowerCase());
-          if (exportUser) {
-            const fullName = [
-              exportUser.first_name || '',
-              exportUser.middle_initial ? `${exportUser.middle_initial}.` : '',
-              exportUser.last_name || ''
-            ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-            return fullName || exportEmail;
-          }
-          return exportEmail;
+        case 'requestedBy': return resolveUserDisplayName(so.requestedBy, userDirectory, '-');
+        case 'assignedEmail': return resolveUserDisplayName(so.assignedEmail, userDirectory, '-');
         case 'repairCategory': return so.repairCategory || '-';
+        // A separate switch from renderCellValue, with its own '-' default, so these
+        // have to be listed here too or the CSV exports a column of dashes.
+        case 'barangay': return so.barangay || '-';
+        case 'city': return so.city || '-';
+        case 'region': return so.region || '-';
         case 'modifiedBy': return so.modifiedBy || '-';
         case 'modifiedDate': return so.modifiedDate || '-';
         case 'startTime': return formatDateTime(so.start_time) || '-';
@@ -1481,6 +1579,106 @@ const ServiceOrderPage: React.FC = () => {
     };
 
     exportToCSV('service_orders_export', exportColumns, filteredServiceOrders, getExportValue);
+  };
+
+  /** Label used when a service order records no concern or no status. */
+  const UNSPECIFIED = 'Unspecified';
+
+  /**
+   * Counts of service orders per concern, broken down by support status.
+   *
+   * Built from filteredServiceOrders, the same set the default export uses, so the
+   * report always describes what is on screen — a report that ignored the active
+   * filters would quietly disagree with the table beside it.
+   *
+   * Support status rather than visit status: it is the lifecycle the question is
+   * about (Resolved / Pending / In Progress / Cancelled), whereas visit status only
+   * records how a single visit went.
+   */
+  const concernReport = useMemo(() => {
+    const rows = filteredServiceOrders || [];
+
+    const byConcern = new Map<string, Map<string, number>>();
+    const statusesSeen = new Set<string>();
+
+    for (const so of rows) {
+      const concern = (so.concern || '').trim() || UNSPECIFIED;
+      const status = (so.supportStatus || '').trim() || UNSPECIFIED;
+
+      if (!byConcern.has(concern)) byConcern.set(concern, new Map());
+      const statuses = byConcern.get(concern)!;
+      statuses.set(status, (statuses.get(status) || 0) + 1);
+      statusesSeen.add(status);
+    }
+
+    const groups = Array.from(byConcern.entries())
+      .map(([concern, statuses]) => ({
+        concern,
+        // Largest first, so the dominant status for a concern reads first; ties
+        // fall back to the status name for a stable order between exports.
+        statuses: Array.from(statuses.entries())
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .map(([status, count]) => ({ status, count })),
+        total: Array.from(statuses.values()).reduce((sum, n) => sum + n, 0),
+      }))
+      .sort((a, b) => a.concern.localeCompare(b.concern));
+
+    return {
+      groups,
+      grandTotal: groups.reduce((sum, g) => sum + g.total, 0),
+      statusCount: statusesSeen.size,
+    };
+  }, [filteredServiceOrders]);
+
+  /**
+   * The concern summary as CSV, through the same exportToCSV the row export uses so
+   * both files share one escaping and filename convention.
+   *
+   * Flat Concern/Status/Count rows with a Total line per concern rather than an
+   * indented tree: it opens correctly in a spreadsheet and can be pivoted, which an
+   * indented layout cannot.
+   */
+  const exportConcernReport = () => {
+    if (concernReport.groups.length === 0) return;
+
+    const reportRows: Array<{ concern: string; status: string; count: number | string }> = [];
+
+    concernReport.groups.forEach((group, index) => {
+      // A blank line between groups, so the concerns read as separate blocks.
+      if (index > 0) reportRows.push({ concern: '', status: '', count: '' });
+
+      // The concern is named once, on its own line, rather than repeated beside
+      // every status — the statuses below it are already understood to belong to it.
+      reportRows.push({ concern: group.concern, status: '', count: '' });
+
+      group.statuses.forEach(({ status, count }) => {
+        reportRows.push({ concern: '', status, count });
+      });
+
+      reportRows.push({ concern: '', status: 'Total', count: group.total });
+    });
+
+    reportRows.push({ concern: '', status: '', count: '' });
+    reportRows.push({ concern: 'OVERALL TOTAL', status: '', count: concernReport.grandTotal });
+
+    exportToCSV(
+      'service_orders_concern_report',
+      [
+        { key: 'concern', label: 'Concern' },
+        { key: 'status', label: 'Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      reportRows,
+      (row, key) => (row as any)[key]
+    );
+  };
+
+  /** Runs whichever mode the chooser is on, then closes it. */
+  const handleConfirmDownload = () => {
+    if (downloadMode === 'report') exportConcernReport();
+    else exportDefaultCsv();
+
+    setIsDownloadModalOpen(false);
   };
 
   return (
@@ -1536,10 +1734,25 @@ const ServiceOrderPage: React.FC = () => {
                 {locationItems.total}
               </span>
             </button>
-            {/* Status Level */}
-            {locationItems.items.map((category) => {
-              const isSelected = selectedLocation === category.id || selectedLocation.startsWith(`${category.id}:`);
-              const isExpanded = expandedLocations.has(category.id);
+            {grouping.isGrouped ? (
+              <GroupTree
+                nodes={grouping.tree}
+                selectedId={selectedLocation}
+                onSelect={(id) => {
+                  setSelectedLocation(id);
+                  if (isMobile) {
+                    setMobileViewMode('list');
+                  }
+                }}
+                expanded={expandedLocations}
+                onToggleExpand={toggleLocationExpansion}
+                isDarkMode={isDarkMode}
+                accent={colorPalette?.primary || '#7c3aed'}
+              />
+            ) : (
+              /* Billing Type Level */
+              locationItems.items.map((billingType) => {
+              const isBillingTypeExpanded = expandedLocations.has(billingType.id);
 
               const getStatusColor = (val: string) => {
                 switch (val) {
@@ -1554,181 +1767,177 @@ const ServiceOrderPage: React.FC = () => {
               };
 
               return (
-                <div key={category.id}>
+                <div key={billingType.id}>
                   <button
                     onClick={() => {
-                      setSelectedLocation(category.id);
+                      setSelectedLocation(billingType.id);
                       if (isMobile) {
                         setMobileViewMode('list');
                       }
                     }}
                     className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                    style={selectedLocation === category.id ? {
+                    style={selectedLocation === billingType.id ? {
                       backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                      color: colorPalette?.primary || '#7c3aed',
-                      fontWeight: 500
+                      color: colorPalette?.primary || '#7c3aed'
                     } : {
                       color: isDarkMode ? '#d1d5db' : '#374151'
                     }}
                   >
-                    <div className="flex items-center flex-1">
-                      <div className={`h-2.5 w-2.5 rounded-full mr-3 ${getStatusColor(category.id.split(':')[1]).replace('text-', 'bg-')}`} />
-                      <span className={`font-medium ${selectedLocation === category.id ? '' : isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{category.name}</span>
-                    </div>
+                    <span className="font-semibold flex-1 text-left">{billingType.name}</span>
                     <div className="flex items-center space-x-2">
-                      {category.count > 0 && (
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === category.id
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === billingType.id
                           ? 'text-white'
                           : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
                           }`}
-                          style={selectedLocation === category.id ? {
-                            backgroundColor: colorPalette?.primary || '#7c3aed'
-                          } : {}}>
-                          {category.count}
-                        </span>
-                      )}
+                        style={selectedLocation === billingType.id ? {
+                          backgroundColor: colorPalette?.primary || '#7c3aed'
+                        } : {}}
+                      >
+                        {billingType.count}
+                      </span>
                       <button
-                        onClick={(e) => toggleLocationExpansion(e, category.id)}
+                        onClick={(e) => toggleLocationExpansion(e, billingType.id)}
                         className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                       >
-                        {isExpanded ? (
-                          <ChevronDown className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
+                        {isBillingTypeExpanded ? (
+                          <ChevronDown className={`h-4 w-4 ${selectedLocation === billingType.id ? 'text-current' : 'text-gray-400'}`} />
                         ) : (
-                          <ChevronRight className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
+                          <ChevronRight className={`h-4 w-4 ${selectedLocation === billingType.id ? 'text-current' : 'text-gray-400'}`} />
                         )}
                       </button>
                     </div>
                   </button>
 
-                  {/* Visit Status Level */}
-                  {isExpanded && category.visits.map((visit) => {
-                    const isVisitSelected = selectedLocation === visit.id || selectedLocation.startsWith(`${visit.id}:`);
-                    const isVisitExpanded = expandedLocations.has(visit.id);
+                  {/* Status Level */}
+                  {isBillingTypeExpanded && billingType.statuses.map((category) => {
+                    const isExpanded = expandedLocations.has(category.id);
 
                     return (
-                      <div key={visit.id}>
+                      <div key={category.id}>
                         <button
                           onClick={() => {
-                            setSelectedLocation(visit.id);
+                            setSelectedLocation(category.id);
                             if (isMobile) {
                               setMobileViewMode('list');
                             }
                           }}
-                          className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                          style={selectedLocation === visit.id ? {
+                          className={`w-full flex items-center justify-between pl-8 pr-4 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                          style={selectedLocation === category.id ? {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                            color: colorPalette?.primary || '#7c3aed'
+                            color: colorPalette?.primary || '#7c3aed',
+                            fontWeight: 500
                           } : {
-                            color: isDarkMode ? '#9ca3af' : '#4b5563'
+                            color: isDarkMode ? '#d1d5db' : '#374151'
                           }}
                         >
-                          <span className="truncate flex-1 text-left">{visit.name}</span>
+                          <div className="flex items-center flex-1">
+                            <div className={`h-2.5 w-2.5 rounded-full mr-3 ${getStatusColor(category.statusId).replace('text-', 'bg-')}`} />
+                            <span className={`font-medium ${selectedLocation === category.id ? '' : isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{category.name}</span>
+                          </div>
                           <div className="flex items-center space-x-2">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${selectedLocation === visit.id
-                              ? 'text-white'
-                              : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
-                              }`}
-                              style={selectedLocation === visit.id ? {
-                                backgroundColor: colorPalette?.primary || '#7c3aed'
-                              } : {}}>
-                              {visit.count}
-                            </span>
+                            {category.count > 0 && (
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${selectedLocation === category.id
+                                ? 'text-white'
+                                : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
+                                }`}
+                                style={selectedLocation === category.id ? {
+                                  backgroundColor: colorPalette?.primary || '#7c3aed'
+                                } : {}}>
+                                {category.count}
+                              </span>
+                            )}
                             <button
-                              onClick={(e) => toggleLocationExpansion(e, visit.id)}
-                              className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                              onClick={(e) => toggleLocationExpansion(e, category.id)}
+                              className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
                             >
-                              {isVisitExpanded ? (
-                                <ChevronDown className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                              {isExpanded ? (
+                                <ChevronDown className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
                               ) : (
-                                <ChevronRight className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                <ChevronRight className={`h-4 w-4 ${selectedLocation === category.id ? 'text-current' : 'text-gray-400'}`} />
                               )}
                             </button>
                           </div>
                         </button>
 
-                        {/* Barangay Level — expandable, with its concerns beneath */}
-                        {isVisitExpanded && visit.barangays.map((brgy) => {
-                          const isBrgyExpanded = expandedLocations.has(brgy.id);
+                        {/* Visit Status Level */}
+                        {isExpanded && category.visits.map((visit) => {
+                          const isVisitExpanded = expandedLocations.has(visit.id);
 
                           return (
-                            <div key={brgy.id}>
+                            <div key={visit.id}>
                               <button
                                 onClick={() => {
-                                  setSelectedLocation(brgy.id);
+                                  setSelectedLocation(visit.id);
                                   if (isMobile) {
                                     setMobileViewMode('list');
                                   }
                                 }}
-                                className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-[10px] transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                                style={selectedLocation === brgy.id ? {
+                                className={`w-full flex items-center justify-between pl-14 pr-4 py-2 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                                style={selectedLocation === visit.id ? {
                                   backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                                  color: colorPalette?.primary || '#7c3aed',
-                                  fontWeight: 'bold'
+                                  color: colorPalette?.primary || '#7c3aed'
                                 } : {
-                                  color: isDarkMode ? '#6b7280' : '#4b5563'
+                                  color: isDarkMode ? '#9ca3af' : '#4b5563'
                                 }}
                               >
-                                <span className="truncate flex-1 text-left">{brgy.name}</span>
+                                <span className="truncate flex-1 text-left">{visit.name}</span>
                                 <div className="flex items-center space-x-2">
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${selectedLocation === brgy.id
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${selectedLocation === visit.id
                                     ? 'text-white'
-                                    : isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400'
+                                    : isDarkMode ? 'bg-gray-800 text-gray-500' : 'bg-gray-100 text-gray-400'
                                     }`}
-                                    style={selectedLocation === brgy.id ? {
+                                    style={selectedLocation === visit.id ? {
                                       backgroundColor: colorPalette?.primary || '#7c3aed'
                                     } : {}}>
-                                    {brgy.count}
+                                    {visit.count}
                                   </span>
-                                  {/* Only offered where there is something to
-                                      open, so a leaf does not carry a chevron
-                                      that does nothing. */}
-                                  {brgy.concerns.length > 0 && (
-                                    <button
-                                      onClick={(e) => toggleLocationExpansion(e, brgy.id)}
-                                      className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
-                                    >
-                                      {isBrgyExpanded ? (
-                                        <ChevronDown className={`h-3 w-3 ${selectedLocation === brgy.id ? 'text-current' : 'text-gray-500'}`} />
-                                      ) : (
-                                        <ChevronRight className={`h-3 w-3 ${selectedLocation === brgy.id ? 'text-current' : 'text-gray-500'}`} />
-                                      )}
-                                    </button>
-                                  )}
+                                  <button
+                                    onClick={(e) => toggleLocationExpansion(e, visit.id)}
+                                    className={`p-0.5 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                                  >
+                                    {isVisitExpanded ? (
+                                      <ChevronDown className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                    ) : (
+                                      <ChevronRight className={`h-3.5 w-3.5 ${selectedLocation === visit.id ? 'text-current' : 'text-gray-500'}`} />
+                                    )}
+                                  </button>
                                 </div>
                               </button>
 
-                              {/* Concern Level */}
-                              {isBrgyExpanded && brgy.concerns.map((concern) => (
-                                <button
-                                  key={concern.id}
-                                  onClick={() => {
-                                    setSelectedLocation(concern.id);
-                                    if (isMobile) {
-                                      setMobileViewMode('list');
-                                    }
-                                  }}
-                                  className={`w-full flex items-center justify-between pl-24 pr-4 py-1.5 text-[10px] transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
-                                  style={selectedLocation === concern.id ? {
-                                    backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
-                                    color: colorPalette?.primary || '#7c3aed',
-                                    fontWeight: 'bold'
-                                  } : {
-                                    color: isDarkMode ? '#6b7280' : '#4b5563'
-                                  }}
-                                  title={concern.name}
-                                >
-                                  <span className="truncate flex-1 text-left">{concern.name}</span>
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${selectedLocation === concern.id
-                                    ? 'text-white'
-                                    : isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400'
-                                    }`}
-                                    style={selectedLocation === concern.id ? {
-                                      backgroundColor: colorPalette?.primary || '#7c3aed'
-                                    } : {}}>
-                                    {concern.count}
-                                  </span>
-                                </button>
-                              ))}
+                              {/* Barangay Level */}
+                              {isVisitExpanded && visit.barangays.map((brgy) => {
+                                return (
+                                  <button
+                                    key={brgy.id}
+                                    onClick={() => {
+                                      setSelectedLocation(brgy.id);
+                                      if (isMobile) {
+                                        setMobileViewMode('list');
+                                      }
+                                    }}
+                                    className={`w-full flex items-center justify-between pl-20 pr-4 py-1.5 text-[10px] transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                                    style={selectedLocation === brgy.id ? {
+                                      backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
+                                      color: colorPalette?.primary || '#7c3aed',
+                                      fontWeight: 'bold'
+                                    } : {
+                                      color: isDarkMode ? '#6b7280' : '#4b5563'
+                                    }}
+                                  >
+                                    <span className="truncate flex-1 text-left">{brgy.name}</span>
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${selectedLocation === brgy.id
+                                      ? 'text-white'
+                                      : isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400'
+                                      }`}
+                                      style={selectedLocation === brgy.id ? {
+                                        backgroundColor: colorPalette?.primary || '#7c3aed'
+                                      } : {}}>
+                                      {brgy.count}
+                                    </span>
+                                  </button>
+                                );
+                              })}
                             </div>
                           );
                         })}
@@ -1737,12 +1946,35 @@ const ServiceOrderPage: React.FC = () => {
                   })}
                 </div>
               );
-            })}
+            })
+          )}
           </div>
 
-          {/* View Records Button for mobile */}
-          {isMobile && (
-            <div className={`p-4 border-t flex-shrink-0 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+          {/* View Options & Mobile controls */}
+          <div className={`p-3 border-t flex-shrink-0 space-y-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+            <button
+              onClick={() => setIsViewOptionsModalOpen(true)}
+              title="Group by one or more columns, set the sort order, and colour each value"
+              className={`w-full flex items-center justify-center gap-2 py-2 px-3 rounded border text-xs font-medium transition-colors ${
+                isDarkMode
+                  ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              View Options
+              {grouping.levels.length > 0 && (
+                <span
+                  className="text-[10px] font-bold px-1.5 rounded text-white"
+                  style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                >
+                  {grouping.levels.length}
+                </span>
+              )}
+            </button>
+
+            {/* View Records Button for mobile */}
+            {isMobile && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1753,8 +1985,8 @@ const ServiceOrderPage: React.FC = () => {
               >
                 View Records
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Resize Handle for desktop */}
           {!isMobile && (
@@ -1982,9 +2214,15 @@ const ServiceOrderPage: React.FC = () => {
                   )}
                 </div>
                 <button
-                  onClick={handleExport}
+                  onClick={() => {
+                    // Always reopens on the default choice: the chooser should not
+                    // remember that the last export was a report and silently give a
+                    // different file to the next person who clicks Download.
+                    setDownloadMode('default');
+                    setIsDownloadModalOpen(true);
+                  }}
                   disabled={isLoading || filteredServiceOrders.length === 0}
-                  title="Export to CSV"
+                  title="Download"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
                   style={{
                     backgroundColor: '#ffffff',
@@ -2136,22 +2374,13 @@ const ServiceOrderPage: React.FC = () => {
               ) : displayMode === 'card' ? (
                 paginatedServiceOrders.length > 0 ? (
                   <div className="space-y-0">
-                    {paginatedServiceOrders.map((serviceOrder) => {
-                      const locked = isServiceOrderLocked(serviceOrder);
-                      return (
+                    {paginatedServiceOrders.map((serviceOrder) => (
                       <div
                         key={serviceOrder.id}
-                        onClick={() => {
-                          if (locked) return;
-                          handleRowClick(serviceOrder);
-                        }}
-                        title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                        aria-disabled={locked}
-                        className={`px-4 py-3 transition-colors border-b ${locked
-                          ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`
-                          : `cursor-pointer ${isDarkMode
-                            ? `hover:bg-gray-800 border-gray-800 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-800' : ''}`
-                            : `hover:bg-gray-100 border-gray-200 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-100' : ''}`}`
+                        onClick={() => handleRowClick(serviceOrder)}
+                        className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
+                          ? `hover:bg-gray-800 border-gray-800 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-800' : ''}`
+                          : `hover:bg-gray-100 border-gray-200 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-100' : ''}`
                           }`}
                       >
                         <div className="flex items-start justify-between">
@@ -2159,11 +2388,6 @@ const ServiceOrderPage: React.FC = () => {
                             <div className={`font-medium text-sm mb-1 flex items-center space-x-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                               }`}>
                               <span>{serviceOrder.fullName}</span>
-                              {locked && (
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                                  Locked
-                                </span>
-                              )}
                               {viewers[String(serviceOrder.id)] && viewers[String(serviceOrder.id)].length > 0 && (
                                 <div className="flex flex-wrap gap-1 ml-1 flex-shrink-0">
                                   {viewers[String(serviceOrder.id)].map((username: string) => (
@@ -2191,8 +2415,7 @@ const ServiceOrderPage: React.FC = () => {
                           </div>
                         </div>
                       </div>
-                      );
-                    })}
+                    ))}
                   </div>
                 ) : (
                   <div className={`text-center py-12 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -2253,23 +2476,14 @@ const ServiceOrderPage: React.FC = () => {
                       </thead>
                       <tbody>
                         {paginatedServiceOrders.length > 0 ? (
-                          paginatedServiceOrders.map((serviceOrder) => {
-                            const locked = isServiceOrderLocked(serviceOrder);
-                            return (
+                          paginatedServiceOrders.map((serviceOrder) => (
                             <tr
                               key={serviceOrder.id}
-                              className={`border-b transition-colors ${locked
-                                ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`
-                                : `cursor-pointer ${isDarkMode
-                                  ? `border-gray-800 hover:bg-gray-900 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-800' : ''}`
-                                  : `border-gray-200 hover:bg-gray-100 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-100' : ''}`}`
+                              className={`border-b cursor-pointer transition-colors ${isDarkMode
+                                ? `border-gray-800 hover:bg-gray-900 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-800' : ''}`
+                                : `border-gray-200 hover:bg-gray-100 ${selectedServiceOrder?.id === serviceOrder.id ? 'bg-gray-100' : ''}`
                                 }`}
-                              title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                              aria-disabled={locked}
-                              onClick={() => {
-                                if (locked) return;
-                                handleRowClick(serviceOrder);
-                              }}
+                              onClick={() => handleRowClick(serviceOrder)}
                             >
                               {filteredColumns.map((column, index) => (
                                 <td
@@ -2283,19 +2497,13 @@ const ServiceOrderPage: React.FC = () => {
                                     maxWidth: columnWidths[column.key] ? `${columnWidths[column.key]}px` : undefined
                                   }}
                                 >
-                                  <div className="truncate flex items-center justify-between">
-                                    <span className="truncate">{renderCellValue(serviceOrder, column.key)}</span>
-                                    {column.key === 'fullName' && locked && (
-                                      <span className={`ml-2 flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                                        Locked
-                                      </span>
-                                    )}
+                                  <div className="truncate">
+                                    {renderCellValue(serviceOrder, column.key)}
                                   </div>
                                 </td>
                               ))}
                             </tr>
-                            );
-                          })
+                          ))
                         ) : (
                           <tr>
                             <td colSpan={filteredColumns.length} className={`px-4 py-12 text-center border-b ${isDarkMode ? 'text-gray-400 border-gray-800' : 'text-gray-600 border-gray-200'
@@ -2398,7 +2606,6 @@ const ServiceOrderPage: React.FC = () => {
         <div className="fixed inset-0 z-50 md:relative md:inset-auto md:z-auto md:flex-shrink-0 md:overflow-hidden">
           <ServiceOrderDetails
             serviceOrder={selectedServiceOrder}
-            isTechnicianLocked={isServiceOrderLocked(selectedServiceOrder)}
             onClose={() => setSelectedServiceOrder(null)}
             onRefresh={fetchUpdates}
             isMobile={isMobile}
@@ -2415,6 +2622,122 @@ const ServiceOrderPage: React.FC = () => {
           setIsFunnelFilterOpen(false);
         }}
         currentFilters={activeFilters}
+      />
+
+      {/* ── Download options ─────────────────────────────────────────────── */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
+            // The backdrop closes the chooser; a click inside it must not.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Download
+              </h2>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-3">
+              {[
+                {
+                  value: 'default' as const,
+                  title: 'Default Download',
+                  description: `All ${filteredServiceOrders.length.toLocaleString()} service order${filteredServiceOrders.length === 1 ? '' : 's'} currently shown, one row each.`,
+                },
+                {
+                  value: 'report' as const,
+                  title: 'Data Report',
+                  description: concernReport.groups.length > 0
+                    ? `Counts grouped by concern and status — ${concernReport.groups.length} concern${concernReport.groups.length === 1 ? '' : 's'}, ${concernReport.grandTotal.toLocaleString()} record${concernReport.grandTotal === 1 ? '' : 's'} in total.`
+                    : 'No service orders to summarise.',
+                },
+              ].map(option => {
+                const isSelected = downloadMode === option.value;
+                // The report needs at least one grouped row; the default export needs
+                // at least one service order. Either way, offering a choice that would
+                // produce an empty file is worse than showing it as unavailable.
+                const isDisabled = option.value === 'report' && concernReport.groups.length === 0;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 p-4 rounded-lg border transition-all ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'bg-gray-900/40' : 'bg-white'}`}
+                    style={{
+                      borderColor: isSelected
+                        ? (colorPalette?.primary || '#7c3aed')
+                        : (isDarkMode ? '#374151' : '#e5e7eb'),
+                      backgroundColor: isSelected
+                        ? hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.15 : 0.06)
+                        : undefined,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadMode"
+                      value={option.value}
+                      checked={isSelected}
+                      disabled={isDisabled}
+                      onChange={() => setDownloadMode(option.value)}
+                      className="mt-1 h-4 w-4 flex-shrink-0"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {option.title}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {option.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className={`flex justify-end gap-3 px-6 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isDarkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDownload}
+                disabled={downloadMode === 'report' && concernReport.groups.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Options Modal */}
+      <ViewOptionsModal
+        isOpen={isViewOptionsModalOpen}
+        onClose={() => setIsViewOptionsModalOpen(false)}
+        isDarkMode={isDarkMode}
+        colorPalette={colorPalette}
+        title="Service Orders"
+        columns={groupableColumns}
+        options={grouping.options}
+        distinctValues={grouping.distinctValues}
+        colorFor={grouping.colorFor}
+        onSave={grouping.save}
+        onReset={grouping.reset}
       />
 
       <SessionExpiredModal 

@@ -6,20 +6,129 @@ import { userSettingsService } from '../services/userSettingsService';
 import NotificationToast from '../components/NotificationToast';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface HeaderProps {
   onToggleSidebar?: () => void;
   onSearch?: (query: string) => void;
-  onNavigate?: (section: string) => void;
+  onNavigate?: (section: string, extra?: string) => void;
   onLogout?: () => void;
   activeSection?: string;
 }
 
+/**
+ * How each notification kind presents itself.
+ *
+ * Lookup tables rather than nested ternaries: the feed has grown to five kinds and
+ * adding a sixth should be one row here, not another branch in three places.
+ * `application` is the fallback because it is the oldest kind and the only one that
+ * an older payload can arrive without a `type` at all.
+ */
+const NOTIFICATION_BADGES: Record<string, { label: string; className: string }> = {
+  job_order_done: {
+    label: 'Job Done',
+    className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+  },
+  service_order_done: {
+    label: 'Service Done',
+    className: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  // Rose, not the sky of a plain completed visit: this one moved money onto a
+  // customer's balance and is worth picking out of a run of finished visits.
+  service_order_charge_claimed: {
+    label: 'Charge Claimed',
+    className: 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400',
+  },
+  // Amber: the one kind that asks the reader to decide something rather than
+  // reporting something that already happened.
+  transaction_revert: {
+    label: 'Revert',
+    className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+  },
+  application: {
+    label: 'Application',
+    className: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400',
+  },
+};
+
+/**
+ * The "Needs attention" rows in the bell dropdown.
+ *
+ * Distinct from the notification feed below them: the feed is a stream of things that HAPPENED
+ * and can be cleared, whereas these are counts of work still OUTSTANDING and clear themselves
+ * only when the work is done. Same five counts the sidebar badges use.
+ *
+ * `section` matches the ids Sidebar/App route on, so a row navigates exactly where the
+ * corresponding menu item would.
+ */
+const ATTENTION_ROWS: { key: keyof NavBadgeCounts; label: string; section: string }[] = [
+  { key: 'application', label: 'Applications', section: 'application-management' },
+  { key: 'job_order', label: 'Job Orders', section: 'job-order' },
+  { key: 'service_order', label: 'Service Orders', section: 'service-order' },
+  { key: 'work_order', label: 'Work Orders', section: 'work-order' },
+  { key: 'transaction', label: 'Transactions', section: 'transaction-list' },
+];
+
+/**
+ * Identity of a feed row, for dedupe and for React keys.
+ *
+ * Kind AND id, because ids are only unique within a kind — one service order
+ * legitimately produces both a `service_order_done` and a
+ * `service_order_charge_claimed` row carrying its own id, and an id-only key
+ * would silently discard the second one as a duplicate of the first.
+ */
+const notificationKeyFor = (notification: Pick<AppNotification, 'id' | 'type'>) =>
+  `${notification.type || 'application'}-${notification.id}`;
+
+/** Toast severity per kind. 'info' is the fallback for anything unmapped. */
+const TOAST_TONES: Record<string, 'info' | 'success' | 'warning' | 'error'> = {
+  job_order_done: 'success',
+  // Warning, not success: a claimed charge is money added to a customer's balance
+  // and may want a second look, so it should not read as a job well done.
+  service_order_charge_claimed: 'warning',
+};
+
+const toastToneFor = (type?: string) => TOAST_TONES[type || ''] ?? 'info';
+
+const badgeLabelFor = (type?: string) => NOTIFICATION_BADGES[type || 'application']?.label ?? 'Notification';
+const badgeStyleFor = (type?: string) =>
+  (NOTIFICATION_BADGES[type || 'application'] ?? NOTIFICATION_BADGES.application).className;
+
+/** The one-line description under the customer name. */
+const summaryFor = (notification: AppNotification): string => {
+  switch (notification.type) {
+    case 'job_order_done':
+      return 'Completed onsite work';
+    case 'service_order_done':
+      // The concern, so what the visit was about is visible without opening it.
+      return notification.plan_name ? `Visit done · ${notification.plan_name}` : 'Completed service visit';
+    case 'service_order_charge_claimed':
+      // Amount and claimant: the two things checked before deciding whether the
+      // charge needs a second look. plan_name carries the formatted amount.
+      return notification.technician
+        ? `Service charge ${notification.plan_name} · ${notification.technician}`
+        : `Service charge ${notification.plan_name}`;
+    case 'transaction_revert':
+      // The amount, so the size of what is being undone is visible without opening it.
+      return `Revert requested · ${notification.plan_name}`;
+    default:
+      return `Plan: ${notification.plan_name}`;
+  }
+};
+
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, onLogout, activeSection }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [showNotifications, setShowNotifications] = useState(false);
+  // Dashboard refuses a section the role cannot open, so the bell only offers
+  // shortcuts into sections this user can open: those it holds, and for a
+  // seeded role the bell shortcuts it has always had (WEB_REACHABLE).
+  const { canOpen } = usePermissions();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Outstanding-work counts shown above the feed. Kept separate from `unreadCount` because
+  // "Clear All" dismisses notifications and must never appear to dismiss real pending work.
+  const [navBadges, setNavBadges] = useState<NavBadgeCounts>(EMPTY_NAV_BADGE_COUNTS);
   const [loading, setLoading] = useState(false);
   const [isTogglingDarkMode, setIsTogglingDarkMode] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -27,7 +136,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
   const notificationRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
   const previousCountRef = useRef(0);
-  const previousNotificationIdsRef = useRef<Set<number>>(new Set());
+  const previousNotificationIdsRef = useRef<Set<string>>(new Set());
   const [toastNotification, setToastNotification] = useState<AppNotification | null>(null);
 
   const convertGoogleDriveUrl = (url: string): string => {
@@ -189,15 +298,15 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }
 
     // Check if we already have this notification to avoid duplicates
-    if (previousNotificationIdsRef.current.has(notification.id)) {
+    if (previousNotificationIdsRef.current.has(notificationKeyFor(notification))) {
       return;
     }
 
     setNotifications(prev => {
       // Avoid duplicates again just in case of race conditions
-      if (prev.some(n => n.id === notification.id)) return prev;
+      if (prev.some(n => notificationKeyFor(n) === notificationKeyFor(notification))) return prev;
       const updated = [notification, ...prev].slice(0, 15);
-      previousNotificationIdsRef.current = new Set(updated.map(n => n.id));
+      previousNotificationIdsRef.current = new Set(updated.map(notificationKeyFor));
       return updated;
     });
 
@@ -234,17 +343,45 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
       });
     };
 
+    /**
+     * A technician claimed a service charge.
+     *
+     * The socket payload is already the same shape the consolidated feed returns,
+     * so `title`/`message` are taken as sent rather than rebuilt here — the desktop
+     * notification then reads identically whether it arrived over the socket or was
+     * found by the polling fallback.
+     */
+    const handleServiceChargeUpdate = (data: any) => {
+      handleNewNotification({
+        id: data.id,
+        type: 'service_order_charge_claimed',
+        customer_name: data.customer_name,
+        plan_name: data.plan_name,
+        technician: data.technician ?? null,
+        timestamp: data.timestamp || Date.now(),
+        formatted_date: data.formatted_date || 'Just now',
+        title: data.title || 'Service Charge Claimed',
+        message: data.message || `${data.customer_name} - ${data.plan_name}`
+      });
+    };
+
     const appChannel = pusher.subscribe('applications');
     const jobChannel = pusher.subscribe('job-orders');
+    // 'service-charges', not the shared 'service-orders': other pages unsubscribe
+    // that one on unmount, which would silently drop this binding.
+    const serviceChannel = pusher.subscribe('service-charges');
 
     appChannel.bind('new-application', handleSocketUpdate);
     jobChannel.bind('job-order-done', handleJobDoneUpdate);
+    serviceChannel.bind('service-charge-claimed', handleServiceChargeUpdate);
 
     return () => {
       appChannel.unbind('new-application', handleSocketUpdate);
       jobChannel.unbind('job-order-done', handleJobDoneUpdate);
+      serviceChannel.unbind('service-charge-claimed', handleServiceChargeUpdate);
       pusher.unsubscribe('applications');
       pusher.unsubscribe('job-orders');
+      pusher.unsubscribe('service-charges');
     };
   }, []);
 
@@ -269,7 +406,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           previousCountRef.current = filteredData.length;
           setUnreadCount(filteredData.length);
           setNotifications(filteredData);
-          previousNotificationIdsRef.current = new Set(filteredData.map(n => n.id));
+          previousNotificationIdsRef.current = new Set(filteredData.map(notificationKeyFor));
         }
       } catch (error) {
         console.error('[Fetch] Failed to fetch initial notifications:', error);
@@ -296,7 +433,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
             return !isCleared;
           });
 
-          const newNotifications = filteredData.filter(n => !previousNotificationIdsRef.current.has(n.id));
+          const newNotifications = filteredData.filter(n => !previousNotificationIdsRef.current.has(notificationKeyFor(n)));
 
           if (newNotifications.length > 0) {
             newNotifications.forEach(n => handleNewNotification(n));
@@ -304,7 +441,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
             // If no new ones, just sync the counts and list in case something was removed (though rare)
             setUnreadCount(filteredData.length);
             setNotifications(filteredData);
-            previousNotificationIdsRef.current = new Set(filteredData.map(n => n.id));
+            previousNotificationIdsRef.current = new Set(filteredData.map(notificationKeyFor));
           }
         }
       } catch (error) {
@@ -313,6 +450,31 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }, 10000); // 10 seconds polling fallback
 
     return () => {
+      clearInterval(interval);
+    };
+  }, []);
+
+  /**
+   * Outstanding-work counts for the bell.
+   *
+   * Polled on a slower cadence than the notification feed above (which is a 10s fallback for a
+   * live stream): these counts change when someone finishes a job, not second by second, and the
+   * sidebar is already subscribed to the per-entity broadcasts for immediate updates.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = () => {
+      getNavBadgeCounts().then(counts => {
+        if (!cancelled && mountedRef.current) setNavBadges(counts);
+      });
+    };
+
+    load();
+    const interval = setInterval(load, 2 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
       clearInterval(interval);
     };
   }, []);
@@ -404,6 +566,41 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     }
   };
 
+  /**
+   * Open the record a notification is about.
+   *
+   * The consolidated feed carries the row id in `id`, keyed by `type` — an
+   * application id or a job order id — so each kind routes to its own section and
+   * hands the id along as the section payload. Same mechanism Customer already
+   * uses to auto-open an account from elsewhere in the app.
+   *
+   * The panel closes first: the details panel it opens would otherwise appear
+   * behind this dropdown.
+   */
+  const handleNotificationClick = (notification: AppNotification) => {
+    setShowNotifications(false);
+
+    if (!onNavigate || !notification.id) return;
+
+    let section: string;
+    if (notification.type === 'job_order_done') {
+      section = 'job-order';
+    } else if (notification.type === 'service_order_done' || notification.type === 'service_order_charge_claimed') {
+      // Both point at the same record — the charge is a field on the service order.
+      section = 'service-order';
+    } else if (notification.type === 'transaction_revert') {
+      section = 'transactions-revert';
+    } else {
+      section = 'application-management';
+    }
+
+    // Opening a record in a section this role cannot open would only land on
+    // the access-denied screen.
+    if (!canOpen(section)) return;
+
+    onNavigate(section, String(notification.id));
+  };
+
   const handleClearAll = () => {
 
     // Always update the time to "now"
@@ -444,11 +641,11 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           <div className="flex items-center">
             {/* Logo Section */}
             {logoUrl ? (
-              <img src={logoUrl} alt="XPAC Fiber" className="h-10 object-contain" />
+              <img src={logoUrl} alt="GOWISER" className="h-10 object-contain" />
             ) : (
               <div className="flex items-center">
-                <span className="text-slate-900 font-bold text-lg tracking-tight hidden sm:inline uppercase">XPAC <span className="font-black">Fiber</span></span>
-                <span className="text-slate-900 font-bold text-lg tracking-tight sm:hidden uppercase">XPAC Fiber</span>
+                <span className="text-slate-900 font-bold text-lg tracking-tight hidden sm:inline uppercase"><span className="font-black">GOWISER</span></span>
+                <span className="text-slate-900 font-bold text-lg tracking-tight sm:hidden uppercase">GOWISER</span>
               </div>
             )}
           </div>
@@ -579,6 +776,14 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
     );
   }
 
+  // Outstanding work the bell can take this user to. Every seeded staff role can
+  // open all five queues (WEB_REACHABLE), so this is navBadges.total for them; a
+  // custom role counts only the queues it can open, the rows it is shown.
+  const attentionTotal = ATTENTION_ROWS.reduce(
+    (sum, row) => sum + (canOpen(row.section) ? navBadges[row.key] : 0),
+    0
+  );
+
   // Admin/Staff Header (Original)
   return (
     <header className={`${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-300'
@@ -638,8 +843,14 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
               } transition-colors`}
           >
             <Bell className="h-5 w-5" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+            {/* Numeric, not a bare dot: the count is the point — staff need to know whether one
+                thing is waiting or thirty without opening the panel. Totals the outstanding work
+                AND the unread feed, since both are things the bell is telling them about.
+                Capped at 99+ so a large backlog cannot stretch the header. */}
+            {(attentionTotal + unreadCount) > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+                {(attentionTotal + unreadCount) > 99 ? '99+' : (attentionTotal + unreadCount)}
+              </span>
             )}
           </button>
 
@@ -662,6 +873,38 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   </button>
                 )}
               </div>
+              {/* Needs attention — outstanding work, above the feed and deliberately outside the
+                  "Clear All" scope: these clear when the work is done, not when dismissed.
+                  Hidden entirely when everything is at zero so a quiet queue costs no space. */}
+              {ATTENTION_ROWS.some(row => navBadges[row.key] > 0 && canOpen(row.section)) && (
+                <div className={`px-4 py-3 border-b ${isDarkMode ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Needs Attention
+                  </div>
+                  <div className="space-y-1">
+                    {ATTENTION_ROWS.filter(row => navBadges[row.key] > 0 && canOpen(row.section)).map(row => (
+                      <button
+                        key={row.key}
+                        onClick={() => {
+                          setShowNotifications(false);
+                          onNavigate?.(row.section);
+                        }}
+                        className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'
+                          }`}
+                      >
+                        <span>{row.label}</span>
+                        <span
+                          className="min-w-[20px] px-1.5 py-0.5 rounded-full text-xs font-bold text-white text-center"
+                          style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                        >
+                          {navBadges[row.key] > 99 ? '99+' : navBadges[row.key]}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="max-h-96 overflow-y-auto">
                 {loading ? (
                   <div className={`p-4 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -676,20 +919,21 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                 ) : (
                   notifications.map((notification) => (
                     <div
-                      key={`${notification.type}-${notification.id}`}
+                      key={notificationKeyFor(notification)}
+                      onClick={() => handleNotificationClick(notification)}
                       className={`p-4 border-b ${isDarkMode ? 'border-gray-700 hover:bg-gray-750' : 'border-gray-200 hover:bg-gray-50'
                         } transition-colors cursor-pointer`}
                     >
                       <div className="flex justify-between items-start mb-1">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${notification.type === 'job_order_done'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                          : 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400'
-                          }`}
-                          style={notification.type === 'job_order_done' ? {} : {
+                        <span
+                          className={`text-xs font-bold px-2 py-0.5 rounded-full ${badgeStyleFor(notification.type)}`}
+                          // Only Application follows the palette; the rest carry a fixed
+                          // colour so a status reads the same whatever the theme is set to.
+                          style={notification.type && notification.type !== 'application' ? {} : {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(124, 58, 237, 0.2)',
                             color: colorPalette?.primary || '#7c3aed'
                           }}>
-                          {notification.type === 'job_order_done' ? 'Job Done' : 'Application'}
+                          {badgeLabelFor(notification.type)}
                         </span>
                         <span className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                           {notification.formatted_date}
@@ -701,7 +945,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                       </div>
                       <div className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                         }`}>
-                        {notification.type === 'job_order_done' ? 'Completed onsite work' : `Plan: ${notification.plan_name}`}
+                        {summaryFor(notification)}
                       </div>
                     </div>
                   ))
@@ -716,7 +960,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
           isVisible={true}
           title={toastNotification.title || (toastNotification.type === 'job_order_done' ? 'Job Order Completed' : 'New Application Received')}
           message={toastNotification.message || `${toastNotification.customer_name} - ${toastNotification.plan_name}`}
-          type={toastNotification.type === 'job_order_done' ? 'success' : 'info'}
+          type={toastToneFor(toastNotification.type)}
           onClose={() => setToastNotification(null)}
           onClick={() => {
             setToastNotification(null);

@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, Pressable, Modal, ScrollView, StyleSheet } from 'react-native';
-import { Search, ChevronDown, X } from 'lucide-react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, ChevronDown } from 'lucide-react';
 
 export interface GroupedOption {
   label: string;
@@ -24,11 +23,6 @@ interface SearchableFieldProps {
   emptyMessage?: string;
 }
 
-/**
- * RN port of the web searchable dropdown. The web build rendered an absolutely
- * positioned list under the input; on touch that is unusable inside a scroll view, so
- * the list opens in a modal sheet instead. Props and selection semantics are unchanged.
- */
 const SearchableField: React.FC<SearchableFieldProps> = ({
   label,
   placeholder = 'Search...',
@@ -47,8 +41,18 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const activeColor = colorPalette?.primary || '#f97316';
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setSearchTerm('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const getFilteredOptions = () => {
     if (groupedOptions) {
@@ -65,188 +69,135 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
         };
       }).filter(group => group.options.length > 0 || group.isLabelMatch);
     }
-
+    
     return options.filter(option =>
       (option[optionLabelKey] || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
   };
 
   const filteredData = getFilteredOptions();
-  const hasResults = groupedOptions
+  const hasResults = groupedOptions 
     ? (filteredData as any[]).some(g => g.options.length > 0 || g.isLabelMatch)
     : (filteredData as any[]).length > 0;
 
-  const close = () => {
-    setIsOpen(false);
-    setSearchTerm('');
-  };
-
-  const pick = (optionValue: string, option?: any) => {
-    onSelect(optionValue, option);
-    close();
-  };
-
-  const optionRow = (option: any, key: string, indented: boolean) => {
-    const selected = value === option[optionLabelKey];
-    return (
-      <Pressable
-        key={key}
-        onPress={() => pick(option[optionLabelKey], option)}
-        style={({ pressed }) => [
-          sf.optionRow,
-          indented && sf.optionRowIndented,
-          { backgroundColor: pressed ? (isDarkMode ? '#374151' : '#f3f4f6') : 'transparent' }
-        ]}
-      >
-        <Text style={[sf.optionText, {
-          color: selected ? activeColor : (isDarkMode ? '#e5e7eb' : '#374151'),
-          fontWeight: selected ? '600' : '400'
-        }]}>
-          {option[optionLabelKey]}
-        </Text>
-        {selected && <View style={[sf.selectedDot, { backgroundColor: activeColor }]} />}
-      </Pressable>
-    );
-  };
-
   return (
-    <View style={sf.container}>
-      <Text style={[sf.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-        {label}{required && <Text style={sf.required}>*</Text>}
-      </Text>
-
-      <Pressable
-        onPress={() => setIsOpen(true)}
-        style={[sf.trigger, {
-          backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-          borderColor: error ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db')
-        }]}
-      >
-        {icon || <Search size={16} color={isDarkMode ? '#9ca3af' : '#6b7280'} />}
-        <Text
-          style={[sf.triggerText, { color: value ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#6b7280' : '#9ca3af') }]}
-          numberOfLines={1}
+    <div className="relative" ref={dropdownRef}>
+      <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+        {label}{required && <span className="text-red-500">*</span>}
+      </label>
+      <div className={`flex items-center px-3 py-2 border rounded transition-colors ${
+        isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+      } ${error ? 'border-red-500' : 'focus-within:border-orange-500'}`}>
+        {icon || <Search size={16} className={`mr-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} />}
+        <input
+          type="text"
+          placeholder={placeholder}
+          value={isOpen ? searchTerm : (value || '')}
+          onChange={(e) => {
+            setSearchTerm(e.target.value);
+            if (!isOpen) setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (isOpen) {
+              setIsOpen(false);
+              setSearchTerm('');
+            } else {
+              setIsOpen(true);
+            }
+          }}
+          className={`ml-2 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
         >
-          {value || placeholder}
-        </Text>
-        <ChevronDown size={18} color={isDarkMode ? '#9ca3af' : '#6b7280'} />
-      </Pressable>
+          <ChevronDown size={18} className={isDarkMode ? 'text-gray-400' : 'text-gray-500'} />
+        </button>
+      </div>
 
-      {error ? <Text style={sf.errorText}>{error}</Text> : null}
-
-      <Modal visible={isOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
-        <View style={sf.overlay}>
-          <View style={[sf.sheet, { backgroundColor: isDarkMode ? '#1f2937' : '#ffffff' }]}>
-            <View style={[sf.sheetHeader, { borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
-              <Text style={[sf.sheetTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]}>{label}</Text>
-              <Pressable onPress={close} hitSlop={8}>
-                <X size={22} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
-              </Pressable>
-            </View>
-
-            <View style={[sf.searchBox, {
-              backgroundColor: isDarkMode ? '#111827' : '#f9fafb',
-              borderColor: isDarkMode ? '#374151' : '#e5e7eb'
-            }]}>
-              <Search size={16} color={isDarkMode ? '#9ca3af' : '#6b7280'} />
-              <TextInput
-                value={searchTerm}
-                onChangeText={setSearchTerm}
-                placeholder={placeholder}
-                placeholderTextColor={isDarkMode ? '#6b7280' : '#9ca3af'}
-                style={[sf.searchInput, { color: isDarkMode ? '#ffffff' : '#111827' }]}
-                autoFocus
-              />
-            </View>
-
-            <ScrollView style={sf.list} keyboardShouldPersistTaps="handled">
-              {hasResults ? (
-                groupedOptions ? (
-                  (filteredData as GroupedOption[]).map((group, gIdx) => (
-                    <View key={gIdx}>
-                      <Pressable
-                        disabled={!isHeaderSelectable}
-                        onPress={() => { if (isHeaderSelectable) pick(group.label); }}
-                        style={[sf.groupHeader, { backgroundColor: isDarkMode ? '#111827' : '#f9fafb' }]}
+      {isOpen && (
+        <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-md shadow-2xl border overflow-hidden flex flex-col ${
+          isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
+        }`} style={{ minWidth: '100vw', maxWidth: '300px', width: '100%' }}>
+          <div className="max-h-60 overflow-y-auto custom-scrollbar">
+            {hasResults ? (
+              groupedOptions ? (
+                (filteredData as GroupedOption[]).map((group, gIdx) => (
+                  <div key={gIdx}>
+                    <div 
+                      className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider ${
+                        isDarkMode ? 'bg-gray-900/50 text-gray-500' : 'bg-gray-50 text-gray-400'
+                      } ${isHeaderSelectable ? `cursor-pointer hover:bg-orange-500/10 hover:text-orange-500 transition-colors ${
+                        value === group.label ? (isDarkMode ? 'text-orange-400' : 'text-orange-600') : ''
+                      }` : ''}`}
+                      onClick={() => {
+                        if (isHeaderSelectable) {
+                          onSelect(group.label);
+                          setIsOpen(false);
+                          setSearchTerm('');
+                        }
+                      }}
+                    >
+                      {group.label}
+                    </div>
+                    {group.options.map((option, oIdx) => (
+                      <div
+                        key={`${gIdx}-${oIdx}`}
+                        className={`px-6 py-2 text-sm cursor-pointer transition-colors ${
+                          isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'
+                        } ${value === option[optionLabelKey] ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
+                        onClick={() => {
+                          onSelect(option[optionLabelKey], option);
+                          setIsOpen(false);
+                          setSearchTerm('');
+                        }}
                       >
-                        <Text style={[sf.groupHeaderText, {
-                          color: isHeaderSelectable && value === group.label ? activeColor : (isDarkMode ? '#6b7280' : '#9ca3af')
-                        }]}>
-                          {group.label}
-                        </Text>
-                      </Pressable>
-                      {group.options.map((option, oIdx) => optionRow(option, `${gIdx}-${oIdx}`, true))}
-                    </View>
-                  ))
-                ) : (
-                  (filteredData as any[]).map((option, idx) => optionRow(option, String(option.id || idx), false))
-                )
+                        <div className="flex items-center justify-between">
+                          <span>{option[optionLabelKey]}</span>
+                          {value === option[optionLabelKey] && (
+                            <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))
               ) : (
-                <Text style={[sf.emptyText, { color: isDarkMode ? '#6b7280' : '#9ca3af' }]}>
-                  {emptyMessage && (!groupedOptions?.length && !options?.length)
-                    ? emptyMessage
-                    : (searchTerm ? `No results found for "${searchTerm}"` : (emptyMessage || 'No data available'))}
-                </Text>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-    </View>
+                (filteredData as any[]).map((option, idx) => (
+                  <div
+                    key={option.id || idx}
+                    className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${
+                      isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'
+                    } ${value === option[optionLabelKey] ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
+                    onClick={() => {
+                      onSelect(option[optionLabelKey], option);
+                      setIsOpen(false);
+                      setSearchTerm('');
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>{option[optionLabelKey]}</span>
+                      {value === option[optionLabelKey] && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )
+            ) : (
+              <div className={`px-4 py-8 text-center text-sm italic ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                {emptyMessage && (!groupedOptions?.length && !options?.length) 
+                  ? emptyMessage 
+                  : (searchTerm ? `No results found for "${searchTerm}"` : (emptyMessage || 'No data available'))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
+    </div>
   );
 };
-
-const sf = StyleSheet.create({
-  container: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
-  required: { color: '#ef4444' },
-  trigger: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-  },
-  triggerText: { flex: 1, fontSize: 14 },
-  errorText: { color: '#ef4444', fontSize: 11, marginTop: 4 },
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 },
-  sheet: { borderRadius: 12, maxHeight: '75%', overflow: 'hidden' },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-  },
-  sheetTitle: { fontSize: 15, fontWeight: '700' },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    margin: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  searchInput: { flex: 1, fontSize: 14, padding: 0 },
-  list: { maxHeight: 360 },
-  groupHeader: { paddingHorizontal: 16, paddingVertical: 6 },
-  groupHeaderText: { fontSize: 10, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
-  optionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  optionRowIndented: { paddingLeft: 28 },
-  optionText: { fontSize: 14, flex: 1 },
-  selectedDot: { width: 6, height: 6, borderRadius: 3 },
-  emptyText: { fontSize: 13, fontStyle: 'italic', textAlign: 'center', paddingVertical: 32 },
-});
 
 export default SearchableField;

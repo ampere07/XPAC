@@ -108,6 +108,16 @@ class AgentModuleSimulationSeeder extends Seeder
 
     public function run(): void
     {
+        // GOWISER: this seeder TRUNCATES users, applications and job_orders. It
+        // refuses to run anywhere but a local/testing environment, and even there
+        // only when AGENT_SIMULATION_SEED=yes is set for the run, so it can never
+        // be triggered by a routine `db:seed` against a real database.
+        if (!app()->environment(['local', 'testing']) || env('AGENT_SIMULATION_SEED') !== 'yes') {
+            $this->command->error('AgentModuleSimulationSeeder is destructive (it truncates users, applications and job_orders).');
+            $this->command->error('Refusing to run: requires APP_ENV=local|testing and AGENT_SIMULATION_SEED=yes.');
+            return;
+        }
+
         // Deterministic: the same command produces the same database.
         mt_srand(20260904);
 
@@ -187,7 +197,7 @@ class AgentModuleSimulationSeeder extends Seeder
                 'first_name'    => $first,
                 'last_name'     => $last,
                 'username'      => $username,
-                'email_address' => $username . '@atssfiber.ph',
+                'email_address' => $username . '@example.invalid',
                 'password_hash' => bcrypt('password1234'),
                 'contact_number'=> '09' . str_pad((string) mt_rand(0, 999999999), 9, '0', STR_PAD_LEFT),
                 'role_id'       => 4,
@@ -340,7 +350,7 @@ class AgentModuleSimulationSeeder extends Seeder
     private function advanceJobOrders(Carbon $day): void
     {
         foreach ($this->plan as $jobOrderId => $step) {
-            if ($step['pre'] !== null && $step['date']->copy()->subDay()->isSameDay($day)) {
+            if ($step['pre'] !== null && \App\Support\AgentProgramme::hasPreInstallColumns() && $step['date']->copy()->subDay()->isSameDay($day)) {
                 DB::table('job_orders')->where('id', $jobOrderId)->update([
                     'pre_installed'          => $step['pre'],
                     'pre_installed_datetime' => $day->copy()->setTime(14, 0),

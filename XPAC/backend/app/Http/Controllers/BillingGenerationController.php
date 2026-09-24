@@ -755,12 +755,8 @@ class BillingGenerationController extends Controller
 
             // If a custom service charge is provided, insert an Unused record so
             // createEnhancedStatement will automatically pick it up and mark it Used.
-            // The id is kept so the record can be closed off explicitly below: when this
-            // month's bill already exists, generation returns it without consuming the
-            // record, and an Unused row left behind would be charged again next cycle.
-            $serviceChargeLogId = null;
             if ($serviceCharge > 0) {
-                $serviceChargeLogId = \Illuminate\Support\Facades\DB::table('service_charge_logs')->insertGetId([
+                \Illuminate\Support\Facades\DB::table('service_charge_logs')->insert([
                     'account_no'          => $accountNo,
                     'service_charge'      => $serviceCharge,
                     'status'              => 'Unused',
@@ -782,23 +778,9 @@ class BillingGenerationController extends Controller
             $statement = null;
             $invoice   = null;
 
-            // 1. Generate SOA. If this month's statement already exists it comes back
-            // unchanged — one statement per account per month — and the custom charge is
-            // added to it below instead of a second statement being raised.
+            // 1. Generate SOA
             try {
                 $statement = $this->enhancedBillingService->createEnhancedStatement($account, $generationDate, $userId);
-
-                // A statement generated just now already includes the charge, because it
-                // consumed the record inserted above. A pre-existing one does not.
-                if ($serviceCharge > 0 && !$statement->wasRecentlyCreated) {
-                    $statement->update([
-                        'service_charge'   => round(floatval($statement->service_charge ?? 0) + $serviceCharge, 2),
-                        'amount_due'       => round(floatval($statement->amount_due) + $serviceCharge, 2),
-                        'total_amount_due' => round(floatval($statement->total_amount_due) + $serviceCharge, 2),
-                    ]);
-                    $statement->refresh();
-                }
-
                 $results['soa'] = [
                     'id'              => $statement->id,
                     'total_amount_due' => $statement->total_amount_due,
@@ -817,18 +799,13 @@ class BillingGenerationController extends Controller
             // 2. Generate Invoice (refresh account to get updated balance)
             try {
                 $account->refresh();
-                // Returns this month's invoice if one already exists, so the account is
-                // never billed twice for the same cycle.
                 $invoice = $this->enhancedBillingService->createEnhancedInvoice($account, $generationDate, $userId);
 
-                // An invoice raised just now has already picked the charge up itself: the
-                // statement no longer consumes service charges, so createEnhancedInvoice
-                // finds the record Unused, bills it, and it is in both the invoice total and
-                // the account balance. Patching here as well would charge it twice.
-                //
-                // A pre-existing invoice was raised before this charge was recorded, so it
-                // still needs the charge applied by hand.
-                if ($serviceCharge > 0 && !$invoice->wasRecentlyCreated) {
+                // The service_charge_log was already consumed (marked Used) during SOA
+                // generation above. createEnhancedInvoice therefore sees no Unused records
+                // and returns service_fees = 0. We must explicitly apply the custom service
+                // charge to the invoice and to account_balance here.
+                if ($serviceCharge > 0) {
                     $newServiceCharge = round(floatval($invoice->service_charge ?? 0) + $serviceCharge, 2);
                     $newTotal         = round(floatval($invoice->total_amount)       + $serviceCharge, 2);
 
@@ -869,21 +846,6 @@ class BillingGenerationController extends Controller
                     'error'      => $e->getMessage(),
                 ]);
                 $results['invoice'] = ['error' => $e->getMessage()];
-            }
-
-            // The charge has now been applied to this month's bill either by generation
-            // consuming the record or by the patches above. Close it off so it cannot be
-            // picked up and charged a second time by next month's run. No-op when
-            // generation already marked it Used.
-            if ($serviceChargeLogId) {
-                \Illuminate\Support\Facades\DB::table('service_charge_logs')
-                    ->where('id', $serviceChargeLogId)
-                    ->where('status', 'Unused')
-                    ->update([
-                        'status'     => 'Used',
-                        'date_used'  => now(),
-                        'updated_at' => now(),
-                    ]);
             }
 
             // 3. Send notifications (email + SMS) once for both SOA & Invoice

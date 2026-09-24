@@ -22,7 +22,7 @@ import {
   Download,
   X,
 } from 'lucide-react-native';
-import { StandardPage } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import PaymentPortalDetails from '../components/PaymentPortalDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { usePaymentPortalStore } from '../store/paymentPortalStore';
@@ -36,6 +36,7 @@ import { BillingDetailRecord } from '../types/billing';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import PaymentPortalFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/PaymentPortalFunnelFilter';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -68,9 +69,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
   middleInitial: customerData.middleInitial,
   address: customerData.address,
   status: customerData.billingAccount?.billingStatusName ||
-    (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    (accountStatusFrom(customerData)),
   balance: customerData.billingAccount?.accountBalance || 0,
-  onlineStatus: customerData.onlineSessionStatus || 'Empty',
+  onlineStatus: sessionStatusFrom(customerData),
   cityId: null,
   regionId: null,
   timestamp: customerData.updatedAt || '',
@@ -103,7 +104,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
   region: customerData.region || '',
   usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
   referredBy: customerData.referredBy || '',
-  referredByAgentId: customerData.referredByAgentId ?? null,
   referralContactNo: '',
   groupName: customerData.groupName || '',
   mikrotikId: '',
@@ -245,8 +245,6 @@ const PaymentPortal: React.FC = () => {
   const [expandedLocations, setExpandedLocations] = useState<Set<string>>(new Set());
 
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(25);
   const [activeFilters, setActiveFilters] = useState<FilterValues>({});
   const [locationSidebarVisible, setLocationSidebarVisible] = useState(false);
 
@@ -779,81 +777,184 @@ const PaymentPortal: React.FC = () => {
 
   // ─── Render ───────────────────────────────────────────────────────────────────
 
-  const describeActiveFilter = (filter: any): string => {
-    if (filter.type === 'text' || filter.type === 'boolean') return String(filter.value);
-    if (filter.type === 'checklist') return Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value || '');
-    if (filter.type === 'number' || filter.type === 'date') {
-      if (filter.from && filter.to) return `${filter.from} - ${filter.to}`;
-      if (filter.from) return `> ${filter.from}`;
-      if (filter.to) return `< ${filter.to}`;
-    }
-    return '';
-  };
-
   return (
-    <StandardPage<any>
-      data={filteredRecords}
-      keyExtractor={(item) => String(item.id)}
-      renderItem={(item) => (
-        <RecordCard
-          record={item}
-          onPress={() => setSelectedRecord(item)}
-          isSelected={selectedRecord?.id === item.id}
-          primaryColor={primaryColor}
+    <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      {/* Header */}
+      <View style={{
+        backgroundColor: COLORS.card,
+        paddingTop: isTablet ? 16 : 60,
+        paddingBottom: 8,
+        paddingHorizontal: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+      }}>
+        <Text style={{ fontSize: 20, fontWeight: '700', color: COLORS.text, marginBottom: 10 }}>
+          Payment Portal
+        </Text>
+
+        {/* Search row */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <GlobalSearch
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            isDarkMode={isDarkMode}
+            colorPalette={colorPalette}
+            placeholder="Search payment portal records..."
+          />
+
+          {/* Location filter button */}
+          <TouchableOpacity
+            onPress={() => setLocationSidebarVisible(true)}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6,
+              borderWidth: 1, borderColor: selectedLocation !== 'all' ? primaryColor : COLORS.border,
+              backgroundColor: selectedLocation !== 'all' ? `${primaryColor}14` : COLORS.card,
+            }}
+          >
+            <Globe size={18} color={selectedLocation !== 'all' ? primaryColor : COLORS.muted} />
+          </TouchableOpacity>
+
+          {/* Funnel filter */}
+          <TouchableOpacity
+            onPress={() => setIsFunnelFilterOpen(true)}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6,
+              borderWidth: 1, borderColor: Object.keys(activeFilters).length > 0 ? '#ef4444' : COLORS.border,
+              backgroundColor: COLORS.card,
+            }}
+          >
+            <Filter size={18} color={Object.keys(activeFilters).length > 0 ? '#ef4444' : COLORS.muted} />
+          </TouchableOpacity>
+
+          {/* Export */}
+          <TouchableOpacity
+            onPress={handleExport}
+            disabled={loading || filteredRecords.length === 0}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6,
+              borderWidth: 1, borderColor: primaryColor,
+              backgroundColor: COLORS.card, opacity: (loading || filteredRecords.length === 0) ? 0.4 : 1,
+            }}
+          >
+            <Download size={18} color={primaryColor} />
+          </TouchableOpacity>
+
+          {/* Manual refresh */}
+          <TouchableOpacity
+            onPress={handleManualRefresh}
+            disabled={loading || isRefreshingManual}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6,
+              borderWidth: 1, borderColor: primaryColor,
+              backgroundColor: COLORS.card, opacity: (loading || isRefreshingManual) ? 0.4 : 1,
+            }}
+          >
+            <RefreshCw size={18} color={primaryColor} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Active filters row */}
+        {Object.keys(activeFilters).length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+            {Object.entries(activeFilters).map(([key, filter]: [string, any]) => {
+              const col = filterColumns.find(c => (c as any).key === key);
+              const label = col?.label || key;
+              let display = '';
+              if (filter.type === 'text' || filter.type === 'boolean') display = String(filter.value);
+              else if (filter.type === 'checklist') display = Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value || '');
+              else if (filter.type === 'number' || filter.type === 'date') {
+                if (filter.from && filter.to) display = `${filter.from} - ${filter.to}`;
+                else if (filter.from) display = `> ${filter.from}`;
+                else if (filter.to) display = `< ${filter.to}`;
+              }
+              return (
+                <View
+                  key={key}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    backgroundColor: `${primaryColor}14`,
+                    borderWidth: 1, borderColor: `${primaryColor}33`,
+                    borderRadius: 999, paddingLeft: 10, paddingRight: 4,
+                    paddingVertical: 3, marginRight: 6,
+                  }}
+                >
+                  <Text style={{ fontSize: 12, color: primaryColor, maxWidth: 120 }} numberOfLines={1}>
+                    {label}: {display}
+                  </Text>
+                  <TouchableOpacity onPress={() => removeFilter(key)} style={{ marginLeft: 4, padding: 2 }}>
+                    <X size={12} color={primaryColor} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+            <TouchableOpacity
+              onPress={async () => {
+                setActiveFilters({});
+                try { await AsyncStorage.removeItem('paymentPortalFunnelFilters'); } catch {}
+              }}
+              style={{ paddingHorizontal: 8, paddingVertical: 4, justifyContent: 'center' }}
+            >
+              <Text style={{ fontSize: 12, color: primaryColor, fontWeight: '700' }}>Clear all</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )}
+
+        {/* Count */}
+        <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 4 }}>
+          {filteredRecords.length} of {Math.max(totalCount, records.length)} records
+        </Text>
+      </View>
+
+      {/* List */}
+      {loading && records.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ marginTop: 12, color: COLORS.muted }}>Loading payment portal records...</Text>
+        </View>
+      ) : error ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <Text style={{ color: '#ef4444', textAlign: 'center', marginBottom: 12 }}>{error}</Text>
+          <TouchableOpacity
+            onPress={() => fetchPaymentPortalRecords(true)}
+            style={{ backgroundColor: primaryColor, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8 }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredRecords}
+          keyExtractor={item => String(item.id)}
+          renderItem={({ item }) => (
+            <RecordCard
+              record={item}
+              onPress={() => setSelectedRecord(item)}
+              isSelected={selectedRecord?.id === item.id}
+              primaryColor={primaryColor}
+            />
+          )}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={[primaryColor]}
+              tintColor={primaryColor}
+            />
+          }
+          ListEmptyComponent={
+            <View style={{ alignItems: 'center', padding: 40 }}>
+              <Text style={{ color: COLORS.muted, textAlign: 'center' }}>
+                {records.length > 0
+                  ? 'No records matching your filters.'
+                  : 'No payment portal records found.'}
+              </Text>
+            </View>
+          }
+          contentContainerStyle={{ paddingVertical: 8, paddingBottom: 24 }}
+          showsVerticalScrollIndicator={false}
         />
       )}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search payment portal records..."
-      onOpenFunnel={() => setIsFunnelFilterOpen(true)}
-      activeFilterCount={Object.keys(activeFilters).length}
-      chips={Object.entries(activeFilters).map(([key, filter]: [string, any]) => ({
-        key,
-        label: (filterColumns.find((c: any) => c.key === key) as any)?.label || key,
-        value: describeActiveFilter(filter),
-      }))}
-      onRemoveChip={removeFilter}
-      onClearChips={async () => {
-        setActiveFilters({});
-        try { await AsyncStorage.removeItem('paymentPortalFunnelFilters'); } catch {}
-      }}
-      onExport={handleExport}
-      exportDisabled={loading || filteredRecords.length === 0}
-      onRefresh={handleManualRefresh}
-      refreshDisabled={loading || isRefreshingManual}
-      isRefreshing={loading || isRefreshingManual}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={loading && records.length === 0}
-      loadingText="Loading payment portal records..."
-      error={error}
-      onRetry={() => fetchPaymentPortalRecords(true)}
-      emptyText={records.length > 0 ? 'No records matching your filters.' : 'No payment portal records found.'}
-      progressText={`${filteredRecords.length} of ${Math.max(totalCount, records.length)} records`}
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      toolbarActions={
-        <TouchableOpacity
-          onPress={() => setLocationSidebarVisible(true)}
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 8,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: selectedLocation !== 'all' ? primaryColor : COLORS.border,
-            backgroundColor: selectedLocation !== 'all' ? `${primaryColor}14` : COLORS.card,
-          }}
-        >
-          <Globe size={18} color={selectedLocation !== 'all' ? primaryColor : COLORS.muted} />
-        </TouchableOpacity>
-      }
-    >
+
       {/* Detail Modal */}
       {selectedRecord && (
         <PaymentPortalDetails
@@ -904,7 +1005,7 @@ const PaymentPortal: React.FC = () => {
         }}
         currentFilters={activeFilters}
       />
-    </StandardPage>
+    </View>
   );
 };
 

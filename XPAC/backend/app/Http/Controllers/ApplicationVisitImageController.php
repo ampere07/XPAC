@@ -28,9 +28,9 @@ class ApplicationVisitImageController extends Controller
                 'first_name' => 'required|string',
                 'middle_initial' => 'nullable|string|max:1',
                 'last_name' => 'required|string',
-                'image1' => 'nullable|image|max:10240',
-                'image2' => 'nullable|image|max:10240',
-                'image3' => 'nullable|image|max:10240'
+                'image1' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image2' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image3' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240'
             ]);
 
             $firstName = $request->input('first_name');

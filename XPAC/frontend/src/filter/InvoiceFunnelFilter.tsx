@@ -55,6 +55,22 @@ export const allColumns: Column[] = [
     { key: 'barangay', label: 'Barangay', dataType: 'checklist' },
     { key: 'city', label: 'City', dataType: 'checklist' },
     { key: 'region', label: 'Region', dataType: 'checklist' },
+    // Every remaining column the Invoice table can show. Each key matches the key the table
+    // renders the cell from, and the page resolves a filter value with `item[key]`, so the two
+    // stay in step by construction. Money is 'decimal' (a from/to range) and timestamps are
+    // 'date'/'datetime'; none needs an options endpoint, so no new lookup is introduced.
+    { key: 'dateInstalled', label: 'Date Installed', dataType: 'date' },
+    { key: 'invoiceBalance', label: 'Invoice Balance', dataType: 'decimal' },
+    { key: 'totalAmount', label: 'Total Amount', dataType: 'decimal' },
+    { key: 'receivedPayment', label: 'Received Payment', dataType: 'decimal' },
+    { key: 'serviceCharge', label: 'Service Charge', dataType: 'decimal' },
+    { key: 'rebate', label: 'Rebate', dataType: 'decimal' },
+    { key: 'discounts', label: 'Discounts', dataType: 'decimal' },
+    { key: 'staggered', label: 'Staggered', dataType: 'decimal' },
+    { key: 'paymentMethod', label: 'Payment Method', dataType: 'varchar' },
+    { key: 'createdAt', label: 'Created At', dataType: 'datetime' },
+    { key: 'createdBy', label: 'Created By', dataType: 'varchar' },
+    { key: 'updatedAt', label: 'Updated At', dataType: 'datetime' },
 ];
 
 const InvoiceFunnelFilter: React.FC<InvoiceFunnelFilterProps> = ({

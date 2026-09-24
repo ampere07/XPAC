@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, Alert, Dimensions, DeviceEventEmitter, RefreshControl, StyleSheet, Modal } from 'react-native';
-import { Search, ListFilter, Menu, X, ArrowLeft, RefreshCw, LogOut, Filter, Check, Download } from 'lucide-react-native';
+import { Search, ListFilter, Menu, X, ArrowLeft, RefreshCw, LogOut, Filter, Check } from 'lucide-react-native';
 import { FlashList } from '@shopify/flash-list';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import JobOrderDetails from '../components/JobOrderDetails';
@@ -11,14 +11,7 @@ import { JobOrder } from '../types/jobOrder';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { techInOutService } from '../services/techInOutService';
 import TimeInOutModal from '../modals/TimeInOutModal';
-import { agentJobOrderBand, createAgentReferralMatcher } from '../utils/agentReferral';
-import { exportToCSV } from '../utils/exportUtils';
-import { JOB_ORDER_EXPORT_COLUMNS, jobOrderExportValue } from '../utils/exportColumns';
-import {
-  buildTechnicianLockedJobOrderIds,
-  isTechnicianUser,
-  technicianQueueTime
-} from '../utils/technicianJobOrderAccess';
+import { agentJobOrderBand, createAgentReferralMatcher, storedReferralOf } from '../utils/agentReferral';
 
 
 const StatusText = React.memo(({ status, type }: { status?: string | null, type: 'onsite' | 'billing' }) => {
@@ -271,14 +264,12 @@ const itemExtractorMap: Record<string, (item: JobOrder) => any> = {
 const JobOrderCard = React.memo(({
   jobOrder,
   isSelected,
-  isLocked,
   onPress,
   userRole,
   userRoleId
 }: {
   jobOrder: JobOrder;
   isSelected: boolean;
-  isLocked: boolean;
   onPress: (jo: JobOrder) => void;
   userRole: string;
   userRoleId: number | null;
@@ -289,20 +280,16 @@ const JobOrderCard = React.memo(({
 
   return (
     <Pressable
-      // A locked card opens like any other: the technician may read the job order
-      // in full. The lock only governs starting the job, which the details
-      // screen gates on the administrator's Enable.
       onPress={() => onPress(jobOrder)}
       style={[jo.cardRow, {
-        backgroundColor: isLocked ? '#f9fafb' : (isSelected ? '#f3f4f6' : 'transparent'),
-        borderColor: '#e5e7eb',
-        opacity: isLocked ? 0.45 : 1
+        backgroundColor: isSelected ? '#f3f4f6' : 'transparent',
+        borderColor: '#e5e7eb'
       }]}
     >
       <View style={jo.cardInner}>
         <View style={jo.cardLeft}>
           <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
-            <Text style={[jo.cardName, { color: isLocked ? '#6b7280' : '#111827', marginBottom: 0 }]}>
+            <Text style={[jo.cardName, { color: '#111827', marginBottom: 0 }]}>
               {getClientFullName(jobOrder)}
             </Text>
             {isWorkStarted(jobOrder) && (
@@ -312,18 +299,11 @@ const JobOrderCard = React.memo(({
                 </Text>
               </View>
             )}
-            {isLocked && (
-              <View style={{ backgroundColor: '#e5e7eb', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                <Text style={{ color: '#4b5563', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' }}>
-                  Locked
-                </Text>
-              </View>
-            )}
           </View>
-          <Text style={[jo.cardSub, { color: isLocked ? '#9ca3af' : '#4b5563' }]} numberOfLines={2}>
+          <Text style={[jo.cardSub, { color: '#4b5563' }]} numberOfLines={2}>
             {formatDate(jobOrder.Timestamp || jobOrder.timestamp)} | {getClientFullAddress(jobOrder)}
           </Text>
-          <Text style={[jo.cardSub, { color: isLocked ? '#9ca3af' : '#6b7280', marginTop: 4 }]}>
+          <Text style={[jo.cardSub, { color: '#6b7280', marginTop: 4 }]}>
             Fee: {formatPrice(jobOrder.Installation_Fee || jobOrder.installation_fee)}
           </Text>
         </View>
@@ -423,11 +403,15 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
   useEffect(() => {
     let cancelled = false;
     const initLoad = async () => {
-      const [authResult, paletteResult, billingResult] = await Promise.allSettled([
-        AsyncStorage.getItem('authData'),
+      // The palette and billing statuses are network calls; they are started
+      // now but NOT waited on before the identity is known, so the list (which
+      // is gated on identityReady below) is not held empty for every role until
+      // both requests settle.
+      const othersPromise = Promise.allSettled([
         settingsColorPaletteService.getActive(),
         getBillingStatuses(),
       ]);
+      const [authResult] = await Promise.allSettled([AsyncStorage.getItem('authData')]);
 
       if (cancelled) return;
 
@@ -465,6 +449,9 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       // determined is treated as having no role, which shows nothing rather than
       // leaving the list stuck behind the gate for ever.
       setIdentityReady(true);
+
+      const [paletteResult, billingResult] = await othersPromise;
+      if (cancelled) return;
 
       if (paletteResult.status === 'fulfilled') {
         setColorPalette(paletteResult.value);
@@ -519,79 +506,25 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
     // never sees records it is not entitled to, even for a single frame.
     if (!identityReady) return [];
 
-    // Everything that depends on the signed-in user or on the filter settings —
-    // and so is the same for every row — is worked out here, once, instead of
-    // per job order. The role words were being lowercased, the agent's own name
-    // re-normalized, today's date rebuilt and every funnel filter's needle
-    // re-lowercased for each record in the list.
     const lowerSearch = debouncedSearch.toLowerCase();
-    const hasSearch = debouncedSearch !== '';
 
-    const role = userRole.toLowerCase();
-    const isSuperUser =
-      userRoleId === 1 || userRoleId === 7 || userRoleId === 8 ||
-      role === 'superadmin' || role === 'administrator' || role === 'headtech';
-    const isAgentRole = role === 'agent' || userRoleId === 4;
-    const isTechnicianRole = role === 'technician' || userRoleId === 2;
-
-    // An agent with neither name nor email must see nothing, never everyone's
-    // job orders.
+    // An agent with neither name nor email nor id must see nothing, never
+    // everyone's job orders.
     const agentKnowsWhoTheyAre = Boolean(userFullName) || Boolean(userEmail) || userId !== null;
     const ownsReferral = createAgentReferralMatcher(userFullName, userEmail, userId);
 
-    const now = new Date();
-    const todayYear = now.getFullYear();
-    const todayMonth = now.getMonth();
-    const todayDate = now.getDate();
-
-    // The funnel filters, prepared once: extractor resolved, text lowercased,
-    // bounds parsed. A filter that excludes nothing is dropped here rather than
-    // being re-examined and skipped for every row.
-    const funnelChecks: ((jo: JobOrder) => boolean)[] = [];
-    for (const key in filterValues) {
-      const filter = filterValues[key];
-      const extractor = itemExtractorMap[key];
-      if (!extractor) continue;
-
-      if (filter.type === 'text') {
-        if (!filter.value) continue;
-        const needle = filter.value.toLowerCase();
-        funnelChecks.push(jo => String(extractor(jo) || '').toLowerCase().includes(needle));
-      } else if (filter.type === 'number') {
-        const from = filter.from !== undefined ? Number(filter.from) : null;
-        const to = filter.to !== undefined ? Number(filter.to) : null;
-        if (from === null && to === null) continue;
-        funnelChecks.push(jo => {
-          const num = parseFloat(extractor(jo));
-          if (from !== null && num < from) return false;
-          if (to !== null && num > to) return false;
-          return true;
-        });
-      } else if (filter.type === 'date') {
-        const from = filter.from ? new Date(String(filter.from)).getTime() : null;
-        const to = filter.to ? new Date(String(filter.to)).getTime() : null;
-        if (from === null && to === null) continue;
-        funnelChecks.push(jo => {
-          const stamp = new Date(extractor(jo)).getTime();
-          if (from !== null && stamp < from) return false;
-          if (to !== null && stamp > to) return false;
-          return true;
-        });
-      }
-    }
-
     return jobOrders.filter(jobOrder => {
-      // Only built when there is something to match it against: with the box
-      // empty this used to assemble and lowercase every customer's full name on
-      // every render, to compare it with nothing.
-      if (hasSearch) {
-        const matchesSearch =
-          getClientFullName(jobOrder).toLowerCase().includes(lowerSearch) ||
-          ((jobOrder.Address || jobOrder.address) || '').toLowerCase().includes(lowerSearch) ||
-          ((jobOrder.Assigned_Email || jobOrder.assigned_email) || '').toLowerCase().includes(lowerSearch);
+      const fullName = getClientFullName(jobOrder).toLowerCase();
+      const matchesSearch = debouncedSearch === '' ||
+        fullName.includes(lowerSearch) ||
+        ((jobOrder.Address || jobOrder.address) || '').toLowerCase().includes(lowerSearch) ||
+        ((jobOrder.Assigned_Email || jobOrder.assigned_email) || '').toLowerCase().includes(lowerSearch);
 
-        if (!matchesSearch) return false;
-      }
+      if (!matchesSearch) return false;
+
+      const isSuperUser = 
+        userRoleId === 1 || userRoleId === 7 || userRoleId === 8 ||
+        userRole.toLowerCase() === 'superadmin' || userRole.toLowerCase() === 'administrator' || userRole.toLowerCase() === 'headtech';
 
       // Role-based filtering: Agents (role_id 4) only see their own referrals.
       //
@@ -599,25 +532,31 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       // there is no date cut-off, and finished ones are kept rather than
       // dropped: they read at the bottom of the list (see sortedJobOrders) so
       // the work still in flight leads.
-      if (!isSuperUser && isAgentRole) {
+      if (!isSuperUser && (userRole.toLowerCase() === 'agent' || userRoleId === 4)) {
         if (!agentKnowsWhoTheyAre) return false;
-        if (!ownsReferral(jobOrder.Referred_By || jobOrder.referred_by || '')) return false;
+        // Referred_By is the display name; the stored value (an agent id for
+        // picker-made referrals) is what decides ownership.
+        if (!ownsReferral(storedReferralOf(jobOrder))) return false;
       }
 
       // Hide job orders with onsite status "done", "completed", or "failed" after 1 day
       // Only applicable for technicians
-      if (!isSuperUser && !hasSearch && isTechnicianRole) {
-        const onsiteStatus = (jobOrder.Onsite_Status || jobOrder.onsite_status || '').toLowerCase().trim();
-        if (onsiteStatus === 'done' || onsiteStatus === 'completed' || onsiteStatus === 'failed') {
-          // Use updated_at or EndTimeStamp to determine when it was completed
-          const completionTime = jobOrder.Updated_At || jobOrder.updated_at || jobOrder.EndTimeStamp || jobOrder.end_timestamp;
-          if (completionTime) {
-            const completionDate = new Date(completionTime);
-            const isToday = completionDate.getFullYear() === todayYear &&
-              completionDate.getMonth() === todayMonth &&
-              completionDate.getDate() === todayDate;
+      if (!isSuperUser && debouncedSearch === '') {
+        const isTechnician = userRole.toLowerCase() === 'technician' || userRoleId === 2;
+        if (isTechnician) {
+          const onsiteStatus = (jobOrder.Onsite_Status || jobOrder.onsite_status || '').toLowerCase().trim();
+          if (onsiteStatus === 'done' || onsiteStatus === 'completed' || onsiteStatus === 'failed') {
+            // Use updated_at or EndTimeStamp to determine when it was completed
+            const completionTime = jobOrder.Updated_At || jobOrder.updated_at || jobOrder.EndTimeStamp || jobOrder.end_timestamp;
+            if (completionTime) {
+              const completionDate = new Date(completionTime);
+              const today = new Date();
+              const isToday = completionDate.getFullYear() === today.getFullYear() &&
+                completionDate.getMonth() === today.getMonth() &&
+                completionDate.getDate() === today.getDate();
 
-            if (!isToday) return false;
+              if (!isToday) return false;
+            }
           }
         }
       }
@@ -631,6 +570,10 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
           if (s !== 'inprogress' && s !== 'in progress' && s !== 'in-progress') return false;
         } else if (statusFilter === 'done') {
           if (s !== 'done' && s !== 'completed') return false;
+        } else if (statusFilter === 'reschedule') {
+          // The column is free text and all three spellings are in the data;
+          // matching only 'reschedule' would hide the rest of the same status.
+          if (s !== 'reschedule' && s !== 'rescheduled' && s !== 're-schedule') return false;
         } else if (statusFilter === 'cancelled') {
           if (s !== 'cancelled') return false;
         } else if (statusFilter === 'failed') {
@@ -638,101 +581,44 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
         }
       }
 
-      for (const check of funnelChecks) {
-        if (!check(jobOrder)) return false;
+      // Apply funnel filters
+      for (const key in filterValues) {
+        const filter = filterValues[key];
+        const extractor = itemExtractorMap[key];
+        if (!extractor) continue;
+
+        const itemValue = extractor(jobOrder);
+
+        if (filter.type === 'text' && filter.value) {
+          if (!String(itemValue || '').toLowerCase().includes(filter.value.toLowerCase())) {
+            return false;
+          }
+        } else if (filter.type === 'number') {
+          const numValue = parseFloat(itemValue);
+          if (filter.from !== undefined && numValue < Number(filter.from)) return false;
+          if (filter.to !== undefined && numValue > Number(filter.to)) return false;
+        } else if (filter.type === 'date') {
+          const dateValue = new Date(itemValue).getTime();
+          if (filter.from && dateValue < new Date(String(filter.from)).getTime()) return false;
+          if (filter.to && dateValue > new Date(String(filter.to)).getTime()) return false;
+        }
       }
 
       return true;
     });
-  }, [jobOrders, debouncedSearch, statusFilter, identityReady, userRole, userRoleId, userFullName, userEmail, authUserData, filterValues, getClientFullName, getClientFullAddress]);
+  }, [jobOrders, debouncedSearch, statusFilter, identityReady, userRole, userRoleId, userFullName, userEmail, userId, authUserData, filterValues, getClientFullName, getClientFullAddress]);
 
-  const isTechnician = useMemo(() => isTechnicianUser(userRole, userRoleId), [userRole, userRoleId]);
   const isAgentViewer = useMemo(
     () => userRole.toLowerCase() === 'agent' || userRoleId === 4,
     [userRole, userRoleId]
   );
 
-
-  /**
-   * The job orders a technician may not open yet.
-   *
-   * Built from the technician's whole assigned set — the API already scopes
-   * `jobOrders` to them — and NOT from the filtered/paginated view, so searching
-   * or filtering can never change which job order counts as the oldest.
-   */
-  const technicianLockedIds = useMemo(() => {
-    if (!identityReady || !isTechnician) return new Set<string>();
-    return buildTechnicianLockedJobOrderIds(jobOrders);
-  }, [identityReady, isTechnician, jobOrders]);
-
-  // Held steady across renders. Written inline, the list was handed a new
-  // renderer every time anything on the screen changed, which costs the memo
-  // around JobOrderCard the comparison it exists to make.
-  const renderJobOrderCard = useCallback(({ item: jobOrder }: { item: JobOrder }) => (
-    <JobOrderCard
-      jobOrder={jobOrder}
-      isSelected={selectedJobOrder?.id === jobOrder.id}
-      isLocked={technicianLockedIds.has(String(jobOrder.id))}
-      onPress={!isTablet ? handleMobileRowClick : handleRowClick}
-      userRole={userRole}
-      userRoleId={userRoleId}
-    />
-  ), [selectedJobOrder?.id, technicianLockedIds, isTablet, handleMobileRowClick, handleRowClick, userRole, userRoleId]);
-
   const sortedJobOrders = useMemo(() => {
-    // A technician reads their list oldest first, running through to the
-    // newest, with only the finished work pushed to the very bottom.
-    //
-    // Two bands, and two only:
-    //   0  still to do — In Progress, Reschedule and everything else. These sit
-    //      together on purpose: a reschedule is work the technician still owes,
-    //      so it belongs among the live jobs rather than filed away with the
-    //      finished ones.
-    //   1  done and failed, at the very bottom.
-    //
-    // Inside each band the order is plain date, oldest first, so the row at the
-    // top is the oldest job the technician still has to do. The date is the job
-    // order's own timestamp falling back to when the row was created, and two
-    // raised at the same moment fall back to id ascending so the order is
-    // stable rather than left to the sort's discretion.
-    //
-    // This is the READING order only. Which job order a technician may open is
-    // decided separately by technicianLockedIds below, and that rule is
-    // mirrored server-side in JobOrderController::isJobOrderLockedForTechnician
-    // — so it deliberately stays as it is.
-    if (isTechnician) {
-      // 'completed' is how some records spell done, and cancelled travels with
-      // failed the way the rest of the app already groups the two.
-      const FINISHED_ONSITE_STATUSES = ['done', 'completed', 'failed', 'cancelled'];
-
-      const isFinished = (jo: any): boolean =>
-        FINISHED_ONSITE_STATUSES.includes(
-          String(jo?.Onsite_Status || jo?.onsite_status || '').toLowerCase().trim()
-        );
-
-      return [...filteredJobOrders].sort((a, b) => {
-        const finishedA = isFinished(a) ? 1 : 0;
-        const finishedB = isFinished(b) ? 1 : 0;
-        if (finishedA !== finishedB) return finishedA - finishedB;
-
-        const timeA = technicianQueueTime(a);
-        const timeB = technicianQueueTime(b);
-        if (timeA !== timeB) return timeA - timeB;
-
-        const idA = parseInt(String(a.id), 10) || 0;
-        const idB = parseInt(String(b.id), 10) || 0;
-        return idA - idB;
-      });
-    }
-
     // An agent reads their referrals by status band — In Progress first, then
     // Reschedule, then Failed, with Done last — and newest first inside each
     // band, so the visits still happening lead and the finished installations
-    // sit at the bottom.
-    //
-    // The started-first rule below is deliberately not applied: it pins
-    // whatever a technician currently has open to the top, which reorders an
-    // agent's list for a reason that has nothing to do with them.
+    // sit at the bottom. The started-first rule below is deliberately not
+    // applied: it reorders an agent's list for a reason unrelated to them.
     if (isAgentViewer) {
       return [...filteredJobOrders].sort((a, b) => {
         const bandA = agentJobOrderBand(a);
@@ -743,7 +629,6 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       });
     }
 
-    // Every other role keeps the existing started-first, newest-first ordering.
     return [...filteredJobOrders].sort((a, b) => {
       const activeA = isWorkStarted(a) ? 1 : 0;
       const activeB = isWorkStarted(b) ? 1 : 0;
@@ -756,15 +641,7 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
       const idB = parseInt(String(b.id)) || 0;
       return idB - idA;
     });
-  }, [filteredJobOrders, isTechnician, isAgentViewer]);
-
-  /** The rows as filtered and sorted on screen, in the web export's columns. */
-  const handleExport = useCallback(() => {
-    if (!sortedJobOrders || sortedJobOrders.length === 0) return;
-    exportToCSV('job_orders_export', JOB_ORDER_EXPORT_COLUMNS, sortedJobOrders, jobOrderExportValue);
-  }, [sortedJobOrders]);
-
-
+  }, [filteredJobOrders, isAgentViewer]);
 
   const shouldPaginate = true; // Consistently paginate for all roles to prevent UI jumping
 
@@ -865,20 +742,6 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
                 </View>
               </View>
               <View style={jo.actionsRow}>
-                {/* Exports what the list is currently showing — the filters and
-                    the search box have already been applied to sortedJobOrders. */}
-                <Pressable
-                  onPress={handleExport}
-                  disabled={sortedJobOrders.length === 0}
-                  style={[jo.actionBtn, {
-                    backgroundColor: '#f3f4f6',
-                    borderWidth: 1,
-                    borderColor: '#d1d5db',
-                    opacity: sortedJobOrders.length === 0 ? 0.4 : 1,
-                  }]}
-                >
-                  <Download size={20} color="#4b5563" />
-                </Pressable>
                 <Pressable
                   onPress={() => setShowStatusModal(true)}
                   style={[jo.actionBtn, { 
@@ -962,7 +825,15 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
                     </View>
                   }
                   contentContainerStyle={{ paddingBottom: !isTablet ? 100 : 0 }}
-                  renderItem={renderJobOrderCard}
+                  renderItem={({ item: jobOrder }) => (
+                    <JobOrderCard
+                      jobOrder={jobOrder}
+                      isSelected={selectedJobOrder?.id === jobOrder.id}
+                      onPress={!isTablet ? handleMobileRowClick : handleRowClick}
+                      userRole={userRole}
+                      userRoleId={userRoleId}
+                    />
+                  )}
                 />
               </View>
             )}
@@ -1118,6 +989,7 @@ const JobOrderPage: React.FC<{ onLogout?: () => void }> = ({ onLogout }) => {
               { label: 'Pending', value: 'pending' },
               { label: 'In Progress', value: 'inprogress' },
               { label: 'Done', value: 'done' },
+              { label: 'Rescheduled', value: 'reschedule' },
               { label: 'Cancelled', value: 'cancelled' },
               { label: 'Failed', value: 'failed' }
             ].map((item) => (

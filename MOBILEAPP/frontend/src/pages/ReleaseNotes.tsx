@@ -14,7 +14,7 @@ interface ReleaseNote {
     version: string;
     date: string;
     title: string;
-    updates: { text: string; visibility: 'all' | 'customer' | 'technician' | 'agent' | 'admin' }[];
+    updates: { text: string; visibility: 'all' | 'customer' | 'technician' | 'agent' }[];
 }
 
 interface ReleaseNotesProps {
@@ -27,79 +27,6 @@ const ReleaseNotes: React.FC<ReleaseNotesProps> = ({ onBack }) => {
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
     const allNotes: ReleaseNote[] = [
-        {
-            version: '2.5.68',
-            date: 'September 18, 2026',
-            title: 'One Layout for Every List & a Stricter Pullout Rule',
-            updates: [
-                { text: 'Every List Is a Card List: Discounts, Rebates, DC Notice, SO Charge, Overdue, Invoice, Statements, Payment Portal, Revert Requests, Transactions, Bonus History, Team Agents, Agent Management, Agent Payout and Invoices now share one layout. Nothing scrolls sideways any more — what used to sit in columns off the right edge of the screen is on the card itself.', visibility: 'admin' },
-                { text: 'The Same Controls in the Same Place: Search, the filter drawer, column filters, export and refresh sit in one row, in the same order, on every one of those pages. What you learn on one page you already know on the next.', visibility: 'admin' },
-                { text: 'Paging Where There Was None: Overdue, SO Charge, Payment Portal, Discounts, Bonus History and Agent Payout used to draw every record in one endless scroll. They now page, with a Show 10 / 25 / 50 / 100 picker beside the record count.', visibility: 'admin' },
-                { text: 'Dashboard and Monitoring on the Bar: Both are on the floating navigation bar now, where the web sidebar has always had them, instead of being reachable only through the menu.', visibility: 'admin' },
-                { text: 'The Logs Group Matches the Web: All nine log pages are on the bar, in the same order as the web sidebar, each with the same restriction on who may open it.', visibility: 'admin' },
-                { text: 'No More Pages You Cannot Open: Administrators were being offered System Logs and Smart OLT Logs, and every request those pages made came back refused. They are now listed only for the accounts that can actually read them.', visibility: 'admin' },
-                { text: 'Customer Bills and Support Off Your Bar: Those two are the customer portal, not administration. They no longer appear on an administrator or superadmin navigation bar.', visibility: 'admin' },
-                { text: 'The Expenses Widget Loads: The Expenses breakdown on the Monitoring dashboard failed every time it was asked for. It returns figures again.', visibility: 'admin' },
-                { text: 'Pulled-Out Accounts Offer Only Reactivation: When an account is at Pullout billing status, the Service Order form narrows Concern and Repair Category to reactivation alone. A relocation or a router swap can no longer be raised against a service that is not connected.', visibility: 'admin' },
-                { text: 'A Returning Customer Can Sign In Again: Approving a Job Order for an account that had been pulled out now re-opens that customer portal login. Before this, the approval reported the account ready while the customer was still refused at sign-in.', visibility: 'admin' },
-                { text: 'Related Records Read as Cards: The related lists inside a customer record, and the customers listed under an LCP/NAP, were tables that ran off the side of the screen — the customer name was the column being cut. They are cards now, with nothing hidden.', visibility: 'admin' },
-                { text: 'Pullout Now Needs the Repair Category: To disconnect a customer on a pullout visit, choose Pullout as the Repair Category and set the visit to Done. Marking a visit Done on a ticket that only mentions pullout in the concern no longer disconnects anyone — the category is what decides it, so the disconnection is something you record rather than something inferred.', visibility: 'technician' },
-                { text: 'Any Spelling Works: Pullout, Pull Out, For Pullout — the category is read the same way however it is written or spaced.', visibility: 'technician' },
-                { text: 'Reactivation Only on a Pulled-Out Line: If the account you are visiting has already been pulled out, Concern and Repair Category offer reactivation and nothing else, so there is no way to record a relocation or a router replacement against a line that is not connected.', visibility: 'technician' },
-                { text: 'Two-Line Menu Labels: Every option on the floating navigation bar now reads on two lines, one word per line. Longer names like Agent Management and Revert Requests are no longer cut short, and every icon in a row sits at the same height.', visibility: 'all' }
-            ]
-        },
-        {
-            version: '2.5.66',
-            date: 'September 4, 2026',
-            title: 'Completed Referrals in View & One History List',
-            updates: [
-                { text: 'Completed Referrals Back on Your List: Your Job Order page no longer drops a referral the moment it is installed. Done referrals stay on the page and sit at the very bottom, so you can look back over what you closed without leaving the list you work from.', visibility: 'agent' },
-                { text: 'Read in the Order You Work It: Your referrals are now grouped the way you follow them up — In Progress first, then Reschedule, then Failed, with Done last — and newest first inside each group. The visits still happening lead the page.', visibility: 'agent' },
-                { text: 'One History List: Pay Out/In no longer splits your history across Commission, Incentives and Bonus tabs. Every payout, incentive and bonus movement is in one list, newest first, each row tagged with what kind of record it is and whether it is still pending or has been approved.', visibility: 'agent' },
-                { text: 'Payouts That Were Missing: A payout recorded against all of your balances at once belonged to none of the three old tabs, so your history read "No matching records found" while the record was sitting there. Every record now shows, whatever kind it is.', visibility: 'agent' },
-                { text: 'Only Ever Your Own: Your history is matched to your account, so nothing belonging to another agent can appear on your screen — not even for the moment while the page is loading.', visibility: 'agent' },
-                { text: 'Faster Across the Board: Your dashboard, Job Order list, Agent History and Achievements all do far less work to show the same figures. The matching that finds your referrals is now worked out once per screen instead of once per referral, and your incentive batches no longer search your whole history for every entry in them — a long referral history is where you will notice it most.', visibility: 'agent' }
-            ]
-        },
-        {
-            version: '2.5.61',
-            date: 'August 25, 2026',
-            title: 'Agent Dashboard Rebuilt & Full Referral History',
-            updates: [
-                { text: 'One Card, Three Tabs: Your dashboard card now has Wallet, Referrals and Applications tabs across the top instead of the flip button. Tap a tab to move between them — whichever one you are on shows a single headline figure rather than a grid of four.', visibility: 'agent' },
-                { text: 'Tap to See the Breakdown: The arrow beside your balance opens the detail behind it. Wallet breaks down into Incentives, Commission, Bonus and Achievement; Referrals into In Progress, Done, Failed and Reschedule. Tap again to close it and the card shrinks back.', visibility: 'agent' },
-                { text: 'Hide Your Figures: The eye beside the label masks every amount on the card, so you can open your dashboard in public without your earnings on show.', visibility: 'agent' },
-                { text: 'Applications You Have Sent: A new Applications tab counts the application forms submitted from your account, with the form itself a tap away on the same card. The separate Total Balance panel below your achievements is gone — that figure is now the Wallet tab.', visibility: 'agent' },
-                { text: 'Earnings and Achievements Load Again: Fixed the error that left your commission history, cashout history and achievement progress blank. Your Pay Out/In page is reachable again too.', visibility: 'agent' },
-                { text: 'Your Full Referral History: The Job Order page no longer hides referrals for being old — every referral still in progress is listed however long ago it was raised, newest first. Completed ones are no longer mixed in with them: they live on your Agent History page, which is what that page is for.', visibility: 'agent' },
-                { text: 'Faster Dashboard and History: Your dashboard and history screens no longer redraw the whole page every second behind the reset countdown, so both scroll and respond noticeably faster.', visibility: 'agent' }
-            ]
-        },
-        {
-            version: '2.5.56',
-            date: 'August 15, 2026',
-            title: 'Photo Backup & Job Order List Order',
-            updates: [
-                { text: 'Photos Saved to Your Phone: Every picture you take for a Job Order or Service Order is now copied to your phone gallery before it is uploaded. If the upload fails, you lose signal, or the app closes mid-submission, the photos are still on your phone.', visibility: 'technician' },
-                { text: 'Named Photos: Saved pictures are filed as the field name followed by the customer, for example "setup_image, Juan Dela Cruz" — so you can find the right photo for the right visit without opening each one.', visibility: 'technician' },
-                { text: 'Job Order List Order: Your Job Order list now runs oldest first through to newest. In Progress and Rescheduled jobs sit together among the work you still have to do, and only Done and Failed jobs are moved to the bottom.', visibility: 'technician' },
-                { text: 'Completed Job Orders Save Again: Fixed an error that stopped a Job Order from saving when you submitted the completion form.', visibility: 'technician' },
-                { text: 'One Remarks Box: The Job Order completion form now has a single Remarks field instead of two. Everything you write about the visit goes in the one place.', visibility: 'technician' }
-            ]
-        },
-        {
-            version: '2.5.55',
-            date: 'August 14, 2026',
-            title: 'Guided Work Queue — One Job at a Time',
-            updates: [
-                { text: 'Guided Work Queue: Job Orders, Service Orders, and Work Orders now appear in the order you are meant to work them. Anything already In Progress comes first, oldest first, followed by the rest of your active work, with Done, Failed, Rescheduled, and On Hold items moved to the bottom of the list.', visibility: 'technician' },
-                { text: 'One Job at a Time: Only the job at the top of your list can be opened. The rest of your active work is greyed out and marked "Locked" until it is your turn, so there is never any doubt about what to do next. Tapping a locked job tells you why it is locked.', visibility: 'technician' },
-                { text: 'Automatic Progression: As soon as you finish the job at the top — whether it ends as Done, Failed, or Rescheduled — the next one unlocks on its own. Nothing to request and nobody to wait for.', visibility: 'technician' },
-                { text: 'Admin Override: When something needs doing out of turn, an administrator can release a specific job to you. It opens alongside the one you already have, so you can work more than one at a time whenever the office says so.', visibility: 'technician' },
-                { text: 'Started Work Stays Open: A job you have already started always stays open to you, even if the order of your list changes around it. You can still stop the timer and finish the work in front of you.', visibility: 'technician' }
-            ]
-        },
         {
             version: '2.5.49',
             date: 'July 3, 2026',
@@ -385,11 +312,6 @@ const ReleaseNotes: React.FC<ReleaseNotesProps> = ({ onBack }) => {
                         if (role === 'customer') return u.visibility === 'customer';
                         if (role === 'technician' || role === 'tech') return u.visibility === 'technician';
                         if (role === 'agent') return u.visibility === 'agent';
-                        // Administrators and superadmins had no branch at all, so the
-                        // filter fell through to `false` and their Release Notes page
-                        // showed only the entries marked 'all'. Role strings match the
-                        // rest of the app: the server lower-cases role_name.
-                        if (role === 'administrator' || role === 'superadmin') return u.visibility === 'admin';
                         return false;
                     });
                     return { ...note, updates: visibleUpdates };
@@ -421,7 +343,7 @@ const ReleaseNotes: React.FC<ReleaseNotesProps> = ({ onBack }) => {
             <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
                 <View style={styles.introBox}>
                     <Text style={[styles.introText, { color: '#475569' }]}>
-                        Keep track of the latest features, improvements, and bug fixes in the XPAC Portal.
+                        Keep track of the latest features, improvements, and bug fixes in the GOWISER Portal.
                     </Text>
                 </View>
 

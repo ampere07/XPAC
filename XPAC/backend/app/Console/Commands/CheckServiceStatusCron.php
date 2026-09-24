@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Models\RadiusConfig;
 use App\Models\SmartOlt;
 use App\Models\SystemConfig;
-use App\Services\RouterosApiService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -42,17 +41,26 @@ class CheckServiceStatusCron extends Command
                 throw new \Exception('RADIUS configuration not found in radius_config table');
             }
 
-            // Connect + log in over the native RouterOS API (8728/8729). This is the whole
-            // health question and costs one handshake — no User Manager payload is pulled.
-            $api = app(RouterosApiService::class);
+            $url = sprintf(
+                '%s://%s:%s/rest/user-manage/user',
+                $radiusConfig->ssl_type,
+                $radiusConfig->ip,
+                $radiusConfig->port
+            );
 
-            if ($api->ping($radiusConfig)) {
+            // Fetch with a short limit to avoid loading large payloads, with a small timeout
+            $response = Http::withBasicAuth($radiusConfig->username, $radiusConfig->password)
+                ->withOptions([
+                    'verify' => false,
+                    'timeout' => 5,
+                ])
+                ->get($url . '?.limit=1');
+
+            if ($response->successful()) {
                 $radiusOnline = true;
             } else {
-                $radiusError = 'RADIUS API unreachable: ' . substr($api->getLastError(), 0, 200);
+                $radiusError = 'RADIUS API returned status ' . $response->status() . ': ' . substr($response->body(), 0, 150);
             }
-
-            $api->disconnect();
         } catch (\Exception $e) {
             $radiusError = $e->getMessage();
         }

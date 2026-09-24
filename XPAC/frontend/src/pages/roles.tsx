@@ -99,7 +99,9 @@ const Roles: React.FC = () => {
                     alert(res.message || 'Failed to delete role');
                 }
             } catch (err: any) {
-                alert(err.message || 'An error occurred');
+                // The server's reason (a system role, users still assigned)
+                // rather than axios's "Request failed with status code 422".
+                alert(err?.response?.data?.message || err.message || 'An error occurred');
             }
         }
     };

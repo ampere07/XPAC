@@ -6,7 +6,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Exception;
 use App\Services\RadiusQueueService;
-use App\Support\CronLog;
 
 class PaymentWorkerService
 {
@@ -16,21 +15,10 @@ class PaymentWorkerService
     private $radiusReconnectionService;
     private $manualRadiusService;
 
-    /**
-     * Accounts settled by the current worker pass, bucketed by outcome.
-     *
-     * Built in the constructor rather than in processPayments(), because
-     * processPayment() is also reached from postPayment() — the operator-facing
-     * single-payment path — and a typed property left unset there would fatal on the
-     * first record(). That path simply never emits: only a batch pass writes a summary.
-     */
-    private CronLog $runLog;
-
     public function __construct()
     {
         $this->radiusReconnectionService = new RadiusReconnectionService();
         $this->manualRadiusService = new ManualRadiusOperationsService();
-        $this->runLog = new CronLog();
     }
 
     /**
@@ -48,40 +36,33 @@ class PaymentWorkerService
             return false;
         }
 
-        $this->runLog->reset();
-
         try {
             $this->workerLog('Checking for payments to process...');
 
             $payments = DB::table('pending_payments')
                 ->where('status', 'QUEUED')
-                ->orWhere(function($query) {
+                ->orWhere(function ($query) {
                     $query->where('status', 'PENDING')
-                          ->whereNotNull('callback_payload')
-                          ->where(function($q) {
-                              $q->where('callback_payload', 'LIKE', '%PAID%')
+                        ->whereNotNull('callback_payload')
+                        ->where(function ($q) {
+                            $q->where('callback_payload', 'LIKE', '%PAID%')
                                 ->orWhere('callback_payload', 'LIKE', '%PAYMENT_SUCCESS%');
-                          });
+                        });
                 })
                 // FAILED rows (e.g. customer-cancelled) are only reprocessed once a
                 // payment callback arrives. FAILED rows with no payload are ignored.
                 // Restricted to paid-looking payloads so genuinely-failed webhook
                 // payloads (status FAILED/PAYMENT_FAILED) don't get reprocessed every run.
-                ->orWhere(function($query) {
+                ->orWhere(function ($query) {
                     $query->where('status', 'FAILED')
-                          ->whereNotNull('callback_payload')
-                          ->where('callback_payload', '!=', '')
-                          ->where(function($q) {
-                              $q->where('callback_payload', 'LIKE', '%PAID%')
+                        ->whereNotNull('callback_payload')
+                        ->where('callback_payload', '!=', '')
+                        ->where(function ($q) {
+                            $q->where('callback_payload', 'LIKE', '%PAID%')
                                 ->orWhere('callback_payload', 'LIKE', '%PAYMENT_SUCCESS%');
-                          });
+                        });
                 })
-                // No row cap: every payment already confirmed paid by the gateway is
-                // settled on the pass that first sees it. A cap meant a backlog larger
-                // than the batch left real, paid customers waiting extra cron cycles
-                // with their connection still cut. Ordered oldest-first so the longest
-                // waiter is always served first if a pass does run long.
-                ->orderBy('id', 'asc')
+                ->limit(20)
                 ->get();
 
             if ($payments->isEmpty()) {
@@ -101,12 +82,6 @@ class PaymentWorkerService
             $this->workerLog('===========================================');
             $this->workerLog('Payment Worker Completed: ' . now()->format('Y-m-d H:i:s'));
             $this->workerLog('===========================================');
-
-            foreach ($this->runLog->summaryLines() as $line) {
-                $this->workerLog($line);
-            }
-            $this->runLog->reset();
-
             return true;
 
         } catch (Exception $e) {
@@ -123,127 +98,65 @@ class PaymentWorkerService
     }
 
     /**
-     * Post one payment on demand, by id.
-     *
-     * The operator-facing counterpart to processPayments(): the Xendit reconciliation
-     * screen uses it to settle a single confirmed-but-unposted transaction without
-     * waiting for the next worker pass. It is a thin entry point on purpose — the
-     * posting itself is still processPayment(), so ledger distribution, invoice
-     * settlement, the receipt SMS and email and the RADIUS reconnect all keep running
-     * through exactly one implementation, and double-posting keeps being prevented in
-     * exactly one place (the lockForUpdate() claim inside processPayment()).
-     *
-     * Safe to call twice: the second call finds the row already PROCESSING or PAID
-     * and returns skipped without touching a balance.
-     *
-     * @return array{success: bool, skipped: bool, message: string, status: string|null}
-     */
-    public function postPayment(int $pendingPaymentId): array
-    {
-        $payment = DB::table('pending_payments')->where('id', $pendingPaymentId)->first();
-
-        if (!$payment) {
-            return ['success' => false, 'skipped' => false, 'message' => "Payment #{$pendingPaymentId} does not exist.", 'status' => null];
-        }
-
-        if (in_array($payment->status, ['PROCESSING', 'PAID'], true)) {
-            return [
-                'success' => true,
-                'skipped' => true,
-                'message' => "Payment {$payment->reference_no} has already been posted (status {$payment->status}).",
-                'status'  => $payment->status,
-            ];
-        }
-
-        $this->workerLog("Manual post requested for Ref {$payment->reference_no} (id {$pendingPaymentId})");
-
-        try {
-            $this->processPayment($payment);
-        } catch (Exception $e) {
-            Log::error('Manual payment post failed', [
-                'pending_payment_id' => $pendingPaymentId,
-                'reference_no'       => $payment->reference_no,
-                'error'              => $e->getMessage(),
-            ]);
-
-            return ['success' => false, 'skipped' => false, 'message' => 'Posting failed: ' . $e->getMessage(), 'status' => null];
-        }
-
-        // processPayment() reports its outcome through the row, not a return value.
-        $after  = DB::table('pending_payments')->where('id', $pendingPaymentId)->first();
-        $status = $after->status ?? null;
-
-        if ($status === 'PAID') {
-            return ['success' => true, 'skipped' => false, 'message' => "Payment {$payment->reference_no} posted.", 'status' => $status];
-        }
-
-        return [
-            'success' => false,
-            'skipped' => false,
-            'message' => "Payment {$payment->reference_no} was not posted (status {$status}). Check the payment worker log for the reason.",
-            'status'  => $status,
-        ];
-    }
-
-    /**
      * Process individual payment
      */
     private function processPayment($payment)
     {
         DB::beginTransaction();
-        
+
         try {
             $id = $payment->id;
             $ref = $payment->reference_no;
             $accountNo = $payment->account_no;
-            $amount = floatval($payment->amount);
-
-            // Claim the record atomically, before anything else touches it.
-            //
-            // The rows this worker picks up are selected outside the transaction,
-            // and the Xendit Reconciliation tool's force-post can hand the same row
-            // to postPayment() at the same moment a worker pass has it in its result
-            // set. Re-reading the status under lockForUpdate() and proceeding only if
-            // it is still claimable is what stops both of them distributing the same
-            // payment to the same invoices twice.
-            //
-            // A plain UPDATE here would not do it: both callers would "succeed" and
-            // both would go on to credit the account.
-            $claimed = DB::table('pending_payments')
-                ->where('id', $id)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$claimed || in_array($claimed->status, ['PROCESSING', 'PAID'], true)) {
-                $this->runLog->skipped($accountNo ?: $ref);
-                $this->workerLog("Skipped: Ref $ref already claimed or posted (status: " . ($claimed->status ?? 'missing') . ")");
-                DB::commit();
-                return;
-            }
-
-            // Audit the payload as it stands under the lock, not the copy read when
-            // the batch was selected. A webhook may have written a confirmed-paid
-            // payload onto this row in between, and judging it on the stale copy
-            // would mark a genuinely settled payment FAILED.
-            $rawPayload = $claimed->callback_payload;
+            $rawPayload = $payment->callback_payload;
 
             // Validate payment status from callback
             if ($rawPayload) {
                 $json = json_decode($rawPayload, true);
                 $gwStatus = strtoupper($json['status'] ?? '');
-                
+
                 $isLegitPaid = in_array($gwStatus, ['PAID', 'COMPLETED', 'SETTLED', 'PAYMENT_SUCCESS']);
 
                 if (!$isLegitPaid) {
                     $this->workerLog("AUDIT FAIL: Ref $ref has payload but status is $gwStatus. Marking FAILED.");
-                    
+
                     DB::table('pending_payments')
                         ->where('id', $id)
                         ->update(['status' => 'FAILED', 'updated_at' => now()]);
-                    
+
                     DB::commit();
                     return;
                 }
+            }
+
+            // pending_payments.amount is the GROSS the gateway collected — the bill plus the
+            // convenience fee added at checkout. The fee is the ISP's charge for taking the payment
+            // online, not money owed on the invoices, so it comes back off before anything touches
+            // billing: a ₱922.50 charge at 2.5% settles ₱900.00 of invoices.
+            //
+            // convenience_fee NULL (or column absent) means the row predates the fee change and its
+            // amount is already net — subtract nothing, or the customer loses money.
+            $grossAmount = floatval($payment->amount);
+            $convenienceFee = isset($payment->convenience_fee) ? floatval($payment->convenience_fee) : 0.0;
+
+            // A stored fee that is negative, or that would swallow the whole payment, is corrupt.
+            // Apply the full amount rather than short-changing the customer's invoices.
+            if ($convenienceFee < 0 || $convenienceFee >= $grossAmount) {
+                if ($convenienceFee != 0.0) {
+                    $this->workerLog("WARNING: Ref $ref has an unusable convenience fee of ₱"
+                        . number_format($convenienceFee, 2) . " against ₱" . number_format($grossAmount, 2)
+                        . " — applying the full amount to billing instead.");
+                }
+                $convenienceFee = 0.0;
+            }
+
+            // $amount is what settles the customer's invoices from here on.
+            $amount = round($grossAmount - $convenienceFee, 2);
+
+            if ($convenienceFee > 0) {
+                $this->workerLog("Ref $ref: charged ₱" . number_format($grossAmount, 2)
+                    . " less convenience fee ₱" . number_format($convenienceFee, 2)
+                    . " = ₱" . number_format($amount, 2) . " to billing");
             }
 
             // Lock record for processing
@@ -263,6 +176,7 @@ class PaymentWorkerService
                     'billing_accounts.id as account_id',
                     'billing_accounts.account_no',
                     'billing_accounts.account_balance',
+                    'billing_accounts.generation_type',
                     DB::raw("CONCAT(customers.first_name, ' ', IFNULL(customers.middle_initial, ''), ' ', customers.last_name) as full_name"),
                     'customers.contact_number_primary',
                     'customers.email_address',
@@ -279,12 +193,31 @@ class PaymentWorkerService
                 return;
             }
 
+            // Prepaid onboarding: a customer who has not paid their first bill yet may still change
+            // plan at checkout, which re-prices that unpaid bill. It MUST happen before the payment
+            // is distributed below — otherwise the money lands against an invoice still priced for
+            // the old plan, and the invoice either never closes or closes for the wrong amount.
+            //
+            // It also has to happen before the prepaid renewal further down: that sets
+            // prepaid_expires_at, which is one of the conditions closing the re-price window.
+            //
+            // Every other account is untouched. An ordinary renewal or a mid-period switch is
+            // handled after settlement by PrepaidPlanChangeService, which queues or applies the
+            // plan without rewriting any bill.
+            if (!empty($payment->selected_plan_id)) {
+                $repricedBalance = $this->repriceOnboardingBill($accountNo, (int) $payment->selected_plan_id, $ref);
+
+                if ($repricedBalance !== null) {
+                    // updateBilling() subtracts the payment from the balance read above, so the
+                    // stale pre-reprice figure has to be refreshed or the new balance is wrong.
+                    $account->account_balance = $repricedBalance;
+                }
+            }
+
             // Update billing - distribute payment to invoices
             $result = $this->updateBilling($account, $amount, $ref);
 
             if ($result['success']) {
-                $this->runLog->processed($accountNo ?: $ref);
-
                 // Mark payment as PAID
                 DB::table('pending_payments')
                     ->where('id', $id)
@@ -305,6 +238,9 @@ class PaymentWorkerService
                 DB::table('payment_portal_logs')->insert([
                     'reference_no' => $ref,
                     'account_id' => $account->account_id,
+                    // Net of the convenience fee, so this log reconciles against the invoices it
+                    // settled. The gross charged stays on pending_payments.amount and in
+                    // callback_payload below for audit.
                     'total_amount' => $amount,
                     'account_balance_before' => $account->account_balance,
                     'date_time' => now(),
@@ -320,7 +256,9 @@ class PaymentWorkerService
                     'updated_at' => now()
                 ]);
 
-                $this->workerLog("Success: Logged Ref $ref - Amount: ₱" . number_format($amount, 2) . " - {$result['distribution_summary']}");
+                $this->workerLog("Success: Logged Ref $ref - Amount: ₱" . number_format($amount, 2)
+                    . ($convenienceFee > 0 ? " (charged ₱" . number_format($grossAmount, 2) . ")" : '')
+                    . " - {$result['distribution_summary']}");
 
                 // Read settlement conditions before committing (still within transaction for consistency)
                 $latestBillingAccount = DB::table('billing_accounts')
@@ -328,7 +266,7 @@ class PaymentWorkerService
                     ->select('account_balance', 'billing_status_id')
                     ->first();
 
-                $currentBalance  = floatval($latestBillingAccount->account_balance ?? 0);
+                $currentBalance = floatval($latestBillingAccount->account_balance ?? 0);
                 $currentStatusId = intval($latestBillingAccount->billing_status_id ?? 1);
 
                 // Whenever the payment brings the balance to 0 (or credit) we run the full
@@ -338,7 +276,7 @@ class PaymentWorkerService
                 // pullout / for-pullout service orders. Gating this on billing_status_id != 1
                 // meant a customer who paid before the disconnect cron ran (still status 1)
                 // never got their queued disconnect cancelled or pullout SOs failed.
-                $balanceSettled  = ($currentBalance <= 0);
+                $balanceSettled = ($currentBalance <= 0);
 
                 // Commit billing FIRST — payment is real regardless of what RADIUS does
                 DB::commit();
@@ -358,35 +296,108 @@ class PaymentWorkerService
                         ->update(['reconnect_status' => $reconnectStatus]);
 
                     $this->workerLog("Reconnect attempt for $ref: $reconnectStatus");
+
+                    // Prepaid: a settling payment extends (if still active) or restarts (if
+                    // expired) the prepaid service period, and acts on any plan the customer
+                    // picked at checkout — queued for when their current period lapses, or
+                    // applied immediately if they ticked "Activate Now" (or the period had
+                    // already expired). No-op for postpaid accounts.
+                    //
+                    // settlePayment() owns the ordering between the two: activate_now decides
+                    // whether the period is RESET or EXTENDED, so the renewal cannot be decided
+                    // independently of the plan change. Mirrors TransactionController.
+                    $settled = app(\App\Services\PrepaidPlanChangeService::class)->settlePayment(
+                        $accountNo,
+                        $payment->selected_plan_id ?? null,
+                        (bool) ($payment->activate_now ?? false)
+                    );
+
+                    $prepaidRenewal = $settled['renewal'];
+                    $planChange = $settled['plan_change'];
+
+                    if (!empty($prepaidRenewal['prepaid'])) {
+                        $this->workerLog("Prepaid period {$prepaidRenewal['mode']} for $ref — new expiry: {$prepaidRenewal['new_expiry']}"
+                            . (!empty($prepaidRenewal['forfeited_days']) ? " ({$prepaidRenewal['forfeited_days']} day(s) forfeited)" : ''));
+                    }
+
+                    if (($planChange['action'] ?? 'none') !== 'none') {
+                        $this->workerLog("Prepaid plan {$planChange['action']} for $ref — plan: {$planChange['plan']}"
+                            . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
+                    }
                 }
-                
+
             } else {
                 // Billing update failed
                 DB::table('pending_payments')
                     ->where('id', $id)
                     ->update(['status' => 'API_RETRY', 'updated_at' => now()]);
-                
-                $this->runLog->failed($accountNo ?: $ref);
+
                 $this->workerLog("Billing update failed for Ref $ref: " . $result['message']);
                 DB::rollBack();
             }
 
         } catch (Exception $e) {
             DB::rollBack();
-            // $payment rather than the locals: an exception thrown while reading them
-            // would leave those unset.
-            $this->runLog->failed($payment->account_no ?: $payment->reference_no);
             $this->workerLog("Failed to process payment {$payment->reference_no}: {$e->getMessage()}");
-            
+
             DB::table('pending_payments')
                 ->where('id', $payment->id)
                 ->update(['status' => 'API_RETRY', 'updated_at' => now()]);
         }
     }
 
+    /**
+     * Re-price an unpaid prepaid onboarding bill for the plan chosen at checkout.
+     *
+     * @return float|null the account's balance after re-pricing, or null when nothing was
+     *                    re-priced — either the account is outside the never-paid onboarding
+     *                    window (the common case) or the attempt failed.
+     *
+     * Never throws. A re-price problem must not fail a payment that has already been collected:
+     * the fallback is the bill staying at its original amount, which the payment then settles
+     * exactly as it did before this existed.
+     */
+    private function repriceOnboardingBill(string $accountNo, int $planId, string $ref): ?float
+    {
+        try {
+            $account = \App\Models\BillingAccount::where('account_no', $accountNo)->first();
+            $plan = \App\Models\AppPlan::find($planId);
+
+            if (!$account || !$plan) {
+                return null;
+            }
+
+            $result = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class)
+                ->repricePrepaidInitialBillForPlan($account, $plan, 0, true);
+
+            if (empty($result['revised'])) {
+                return null;
+            }
+
+            $this->workerLog("Ref $ref: onboarding bill re-priced for {$plan->plan_name} — ₱"
+                . number_format($result['previous_total'], 2) . " -> ₱"
+                . number_format($result['new_total'], 2));
+
+            return (float) $result['new_balance'];
+
+        } catch (\Throwable $e) {
+            $this->workerLog("WARNING: Ref $ref onboarding re-price failed, settling the original"
+                . " bill instead: {$e->getMessage()}");
+
+            Log::error('Onboarding bill re-price failed', [
+                'account_no' => $accountNo,
+                'plan_id' => $planId,
+                'reference_no' => $ref,
+                'error' => $e->getMessage()
+            ]);
+
+            return null;
+        }
+    }
+
     private function replaceGlobalVariables(string $message): string
     {
-        $portalUrl = 'sync.atssfiber.ph';
+        $portalUrl = 'sync.gowiser.ph';
         $brandName = DB::table('form_ui')->value('brand_name') ?? 'Your ISP';
 
         $message = str_replace('{{portal_url}}', $portalUrl, $message);
@@ -414,10 +425,19 @@ class PaymentWorkerService
                 ->orderBy('id', 'asc')
                 ->get();
 
+            // Prepaid accounts never carry a credit (negative) balance: a settling payment
+            // renews the prepaid period (see PrepaidRenewalService) instead of banking credit,
+            // so any overpayment is floored to 0. Postpaid / blank generation_type keep the real
+            // (possibly negative) balance, which is the existing advance-payment behaviour.
+            $isPrepaid = \App\Models\BillingAccount::isPrepaidType($account->generation_type ?? null);
+
             if ($unpaidInvoices->isEmpty()) {
                 // No unpaid invoices - apply as credit/advance payment
                 $newBalance = floatval($account->account_balance) - $paymentAmount;
-                
+                if ($isPrepaid && $newBalance < 0) {
+                    $newBalance = 0;
+                }
+
                 DB::table('billing_accounts')
                     ->where('account_no', $accountNo)
                     ->update([
@@ -442,7 +462,7 @@ class PaymentWorkerService
 
                 $invoiceId = $invoice->id;
                 $invoiceBalance = floatval($invoice->total_amount) - floatval($invoice->received_payment);
-                
+
                 if ($invoiceBalance <= 0) {
                     continue; // Skip already paid invoices
                 }
@@ -480,9 +500,12 @@ class PaymentWorkerService
                 $this->workerLog("Distributed ₱" . number_format($amountToApply, 2) . " to Invoice #{$invoiceId} - Status: {$newStatus}");
             }
 
-            // Update account balance
+            // Update account balance (prepaid floored to 0 — see $isPrepaid note above)
             $newAccountBalance = floatval($account->account_balance) - $paymentAmount;
-            
+            if ($isPrepaid && $newAccountBalance < 0) {
+                $newAccountBalance = 0;
+            }
+
             DB::table('billing_accounts')
                 ->where('account_no', $accountNo)
                 ->update([
@@ -491,7 +514,7 @@ class PaymentWorkerService
                 ]);
 
             $distributionSummary = implode(', ', $distributionLog);
-            
+
             if ($remainingAmount > 0.01) {
                 $distributionSummary .= " | Credit: ₱" . number_format($remainingAmount, 2);
             }
@@ -525,10 +548,8 @@ class PaymentWorkerService
      * Attempt to reconnect user account
      * Matches logic in TransactionController::approve
      *
-     * @param  string|null $paymentReference  the portal reference_no of the payment
-     *                                        that settled the balance. Only used to
-     *                                        name that payment on any pullout this
-     *                                        closes; nothing here branches on it.
+     * @param  object       $account
+     * @param  string|null  $paymentReference
      */
     private function attemptReconnect($account, ?string $paymentReference = null)
     {
@@ -538,8 +559,15 @@ class PaymentWorkerService
             $accountNo = $billingAccount->account_no;
 
             $this->workerLog("[RECONNECT CHECK] Starting for account: {$accountNo}");
-            
+
             // Step 1: Check if balance qualifies (0 or negative)
+            //
+            // INVARIANT: this whole reconnect/status-sync path READS the balance and never writes
+            // it. A negative balance is a real advance-payment credit the customer is owed — do
+            // not "settle" or normalise it to 0 on reconnect. Zeroing it here would silently spend
+            // the credit and the customer would be billed twice for the same period. Balance is
+            // written in exactly two places: updateBilling() above (payment applied) and billing
+            // generation (charges accrued).
             $balance = floatval($billingAccount->account_balance ?? 0);
             if ($balance > 0) {
                 $this->workerLog("[RECONNECT SKIP] Balance is positive: ₱{$balance}");
@@ -548,12 +576,6 @@ class PaymentWorkerService
 
             // The balance is settled, so the account's pullouts are void — closed
             // here, before any of the RADIUS checks below can return early.
-            //
-            // This used to sit at the very end of this method, past
-            // `already_online`, `no_username` and `no_plan`, so a customer who
-            // paid before being cut off never had their pullout closed at all.
-            // Recovering equipment is not conditional on RADIUS needing a
-            // reconnect, so it no longer waits on one.
             app(PulloutServiceOrderCloser::class)
                 ->closeIfSettled($accountNo, $balance, 'payment worker', $paymentReference);
 
@@ -622,11 +644,11 @@ class PaymentWorkerService
 
             // Step 6: Call ManualRadiusOperationsService reconnectUser
             $this->workerLog("[RECONNECT EXECUTE] Calling ManualRadiusOperationsService for {$username}");
-            
+
             $radiusSuccess = false;
             $lastRadiusError = '';
             $result = [];
-            
+
             for ($attempt = 1; $attempt <= 3; $attempt++) {
                 try {
                     $result = $this->manualRadiusService->reconnectUser($params);
@@ -641,7 +663,8 @@ class PaymentWorkerService
                     $lastRadiusError = $radEx->getMessage();
                     $this->workerLog("[RECONNECT EXECUTE] Attempt {$attempt}/3 exception: {$lastRadiusError}");
                 }
-                if ($attempt < 3) sleep(2);
+                if ($attempt < 3)
+                    sleep(2);
             }
 
             if (!$radiusSuccess) {
@@ -761,10 +784,9 @@ class PaymentWorkerService
                     $this->workerLog("[RECONNECT EMAIL EXCEPTION] " . $e->getMessage());
                 }
 
-
                 return $radiusSuccess ? 'success' : 'queued';
             }
-            
+
         } catch (Exception $e) {
             $this->workerLog("[RECONNECT EXCEPTION] Failed for {$account->account_no}: {$e->getMessage()}");
             $this->workerLog("[RECONNECT EXCEPTION] Trace: {$e->getTraceAsString()}");
@@ -812,10 +834,10 @@ class PaymentWorkerService
                 ->where('status', 'pending')
                 ->whereIn('operation', $disconnectOperations)
                 ->update([
-                    'status'       => 'cancelled',
-                    'last_error'   => 'Cancelled - payment received (Payment Worker), account balance settled to 0',
+                    'status' => 'cancelled',
+                    'last_error' => 'Cancelled - payment received (Payment Worker), account balance settled to 0',
                     'completed_at' => now(),
-                    'updated_at'   => now(),
+                    'updated_at' => now(),
                 ]);
 
             if ($cancelled > 0) {
@@ -840,7 +862,7 @@ class PaymentWorkerService
             if ($account && !empty($account->contact_number_primary)) {
                 $paymentLogDate = date('Y-m-d');
                 $finalAmount = $totalPaidAmount;
-                
+
                 if ($referenceNo) {
                     $logEntry = DB::table('payment_portal_logs')->where('reference_no', $referenceNo)->first();
                     if ($logEntry) {
@@ -853,17 +875,17 @@ class PaymentWorkerService
                     ->where('template_type', 'Paid')
                     ->where('is_active', 1)
                     ->first();
-                    
+
                 if ($paidTemplate) {
                     $smsService = new \App\Services\ItexmoSmsService();
-                    
+
                     // Consolidate invoice IDs or use N/A if none
-                    $invoiceIds = !empty($invoicesPaid) 
+                    $invoiceIds = !empty($invoicesPaid)
                         ? collect($invoicesPaid)->pluck('invoice_id')->unique()->implode(', ')
                         : 'N/A';
-                    
+
                     $message = $paidTemplate->message_content;
-                    
+
                     // Replace variables
                     $customerName = preg_replace('/\s+/', ' ', trim($account->full_name));
                     $planNameFormatted = str_replace('₱', 'P', $account->desired_plan ?? 'N/A');
@@ -873,22 +895,22 @@ class PaymentWorkerService
                     $message = str_replace('{{plan_name}}', $planNameFormatted, $message);
                     $message = str_replace('{{plan_nam}}', $planNameFormatted, $message);
                     $message = str_replace('{{invoice_id}}', $invoiceIds, $message);
-                    
+
                     // Support multiple variations of placeholders
                     $formattedAmount = number_format($finalAmount, 2);
-                    
+
                     $message = str_replace('{{amount_paid}}', $formattedAmount, $message);
                     $message = str_replace('{{amount}}', $formattedAmount, $message);
                     $message = str_replace('{{date}}', $paymentLogDate, $message);
                     $message = str_replace('{{payment_date}}', $paymentLogDate, $message);
-                    
+
                     $message = $this->replaceGlobalVariables($message);
-                    
+
                     $result = $smsService->send([
                         'contact_no' => $account->contact_number_primary,
                         'message' => $message
                     ]);
-                    
+
                     if ($result['success']) {
                         $this->workerLog("Approval SMS sent to {$account->contact_number_primary}");
                     } else {
@@ -909,10 +931,10 @@ class PaymentWorkerService
         try {
             if ($account && !empty($account->email_address)) {
                 $emailService = app(\App\Services\EmailQueueService::class);
-                
+
                 $paymentLogDate = date('Y-m-d');
                 $finalAmount = $totalPaidAmount;
-                
+
                 if ($referenceNo) {
                     $logEntry = DB::table('payment_portal_logs')->where('reference_no', $referenceNo)->first();
                     if ($logEntry) {
@@ -920,14 +942,14 @@ class PaymentWorkerService
                         $paymentLogDate = date('Y-m-d', strtotime($logEntry->date_time));
                     }
                 }
-                
+
                 // Consolidate invoice IDs or use N/A
-                $invoiceIds = !empty($invoicesPaid) 
+                $invoiceIds = !empty($invoicesPaid)
                     ? collect($invoicesPaid)->pluck('invoice_id')->unique()->implode(', ')
                     : 'N/A';
-                    
+
                 $brandName = DB::table('form_ui')->value('brand_name') ?? 'Your ISP';
-                
+
                 $customerName = preg_replace('/\s+/', ' ', trim($account->full_name));
                 $planNameFormatted = str_replace('₱', 'P', $account->desired_plan ?? 'N/A');
 
@@ -950,7 +972,7 @@ class PaymentWorkerService
                 ];
 
                 $emailService->queueFromTemplate('PAID', $emailData);
-                
+
                 $this->workerLog("Approval Email queued via template PAID to {$account->email_address}");
             }
         } catch (Exception $e) {
@@ -1015,7 +1037,7 @@ class PaymentWorkerService
                 DB::table('worker_locks')
                     ->where('lock_name', $this->lockName)
                     ->delete();
-                
+
                 $this->workerLog('Lock released successfully');
                 $this->hasLock = false;
             } catch (Exception $e) {
@@ -1029,26 +1051,15 @@ class PaymentWorkerService
      */
     private function workerLog($message)
     {
-        // Errors and run summaries only - see App\Support\CronLog. This is a raw file
-        // write, so LOG_LEVEL never reached it and the narration accumulated no matter
-        // how the channels were configured.
-        if (!CronLog::shouldWrite((string) $message)) {
-            return;
-        }
-
         $timestamp = now()->format('Y-m-d H:i:s');
         $logMessage = "[{$timestamp}] [Payment Worker] {$message}";
-        
+
         // Log to custom paymentworker.log file
         $logPath = storage_path('logs/paymentworker.log');
         file_put_contents($logPath, $logMessage . PHP_EOL, FILE_APPEND);
 
-        // Only faults are mirrored, and as ->error(). Every line used to be duplicated
-        // into laravel.log at info level, which doubled the volume and misreported the
-        // severity of all of it.
-        if (CronLog::isError($message)) {
-            Log::channel('single')->error('[Payment Worker] ' . $message);
-        }
+        // Also log to Laravel default log
+        Log::channel('single')->info('[Payment Worker] ' . $message);
     }
 
     /**

@@ -3,7 +3,7 @@
  * Manual Billing Generation Test
  * 
  * Upload this file to: backend/public/manual-billing-test.php
- * Access: https://backend.atssfiber.ph/manual-billing-test.php?key=YOUR_SECRET_KEY&action=preview
+ * Access: https://backend.gowiser.ph/manual-billing-test.php?key=YOUR_SECRET_KEY&action=preview
  * 
  * Actions:
  * - ?action=preview - Preview what will be generated (safe, no changes)
@@ -242,7 +242,7 @@ $userId = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 1;
 
                     echo "<div class='info'>";
                     echo "<a href='?key=" . SECRET_KEY . "&action=preview' class='btn btn-back'>Back to Preview</a>";
-                    echo "<a href='../billing-check.php?key=atss2025billing' class='btn btn-preview' target='_blank'>📊 View Full Status</a>";
+                    echo "<a href='../billing-check.php?key=gowiser2025billing' class='btn btn-preview' target='_blank'>📊 View Full Status</a>";
                     echo "</div>";
 
                 } catch (\Exception $e) {

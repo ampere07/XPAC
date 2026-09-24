@@ -425,7 +425,7 @@ const SOAFunnelFilter: React.FC<SOAFunnelFilterProps> = ({
   // ── Column list ──
   const renderColumnList = () => (
     <ScrollView style={{ flex: 1 }}>
-      {allColumns.map(column => {
+      {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map(column => {
         const isActive = !!filterValues[column.key];
         return (
           <TouchableOpacity

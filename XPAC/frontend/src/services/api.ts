@@ -1,4 +1,4 @@
-import apiClient, { setAuthToken } from '../config/api';
+import apiClient from '../config/api';
 import { 
   LoginResponse, 
   ForgotPasswordResponse, 
@@ -6,39 +6,22 @@ import {
   ApplicationsResponse
 } from '../types/api';
 
-export const login = async (email: string, password: string): Promise<LoginResponse> => {
+/**
+ * Technicians are allowed one live session. If the account is already signed in on another
+ * device the request rejects with a 409 carrying require_confirmation, and the caller has to
+ * re-submit with forceLogin true to end that other session first. Other roles never see it.
+ */
+export const login = async (
+  email: string,
+  password: string,
+  forceLogin: boolean = false
+): Promise<LoginResponse> => {
   const response = await apiClient.post<LoginResponse>('/login', {
     email,
-    password
+    password,
+    force_login: forceLogin
   });
-
-  // Keep the token the server issued alongside the session. It is what carries
-  // the login through in a browser that will not return the session cookie —
-  // an in-app browser such as Messenger's. Where the cookie works this is never
-  // read, because the server checks the session first.
-  const token = (response.data as any)?.data?.token;
-  if (typeof token === 'string' && token !== '') {
-    setAuthToken(token);
-  }
-
   return response.data;
-};
-
-/**
- * Sign out on the server, then locally.
- *
- * The server call revokes this device's token and clears the session. It is
- * allowed to fail — an expired session answers 401 — but the local credential
- * is cleared either way, so signing out never leaves a usable token behind.
- */
-export const logout = async (): Promise<void> => {
-  try {
-    await apiClient.post('/logout');
-  } catch {
-    // Already signed out server-side; nothing more to revoke.
-  } finally {
-    setAuthToken(null);
-  }
 };
 
 export const forgotPassword = async (email: string): Promise<ForgotPasswordResponse> => {

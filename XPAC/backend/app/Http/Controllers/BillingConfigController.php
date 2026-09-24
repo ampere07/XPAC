@@ -60,6 +60,11 @@ class BillingConfigController extends Controller
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
                 'pullout_day' => 'nullable|integer|min:0',
+                // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
+                'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
+                // Days ahead of prepaid_expires_at to warn a prepaid customer. 0 disables the
+                // warning entirely; capped at 31 like the other day intervals.
+                'prepaid_pre_expiry_days' => 'nullable|integer|min:0|max:31',
                 'user_email' => 'nullable|email|max:255'
             ]);
 
@@ -86,6 +91,10 @@ class BillingConfigController extends Controller
                 'disconnection_notice' => $request->input('disconnection_notice', 0),
                 'disconnection_fee' => $request->input('disconnection_fee', 0.00),
                 'pullout_day' => $request->input('pullout_day', 0),
+                'convenience_fee_percentage' => $request->input('convenience_fee_percentage', 0.00),
+                // Defaults to the column default rather than 0 — 0 means "never warn", which is
+                // not what an install that simply omitted the field is asking for.
+                'prepaid_pre_expiry_days' => $request->input('prepaid_pre_expiry_days', 3),
                 'updated_by' => $userEmail,
                 'created_by' => $userEmail
             ]);
@@ -130,6 +139,11 @@ class BillingConfigController extends Controller
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
                 'pullout_day' => 'nullable|integer|min:0',
+                // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
+                'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
+                // Days ahead of prepaid_expires_at to warn a prepaid customer. 0 disables the
+                // warning entirely; capped at 31 like the other day intervals.
+                'prepaid_pre_expiry_days' => 'nullable|integer|min:0|max:31',
                 'user_email' => 'nullable|email|max:255'
             ]);
 
@@ -156,6 +170,8 @@ class BillingConfigController extends Controller
                 'disconnection_notice' => $request->input('disconnection_notice', $config->disconnection_notice),
                 'disconnection_fee' => $request->input('disconnection_fee', $config->disconnection_fee),
                 'pullout_day' => $request->input('pullout_day', $config->pullout_day),
+                'convenience_fee_percentage' => $request->input('convenience_fee_percentage', $config->convenience_fee_percentage),
+                'prepaid_pre_expiry_days' => $request->input('prepaid_pre_expiry_days', $config->prepaid_pre_expiry_days),
                 'updated_by' => $userEmail
             ]);
 

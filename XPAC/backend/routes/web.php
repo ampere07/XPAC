@@ -14,7 +14,9 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/', function () {
-    return view('welcome');
+    return response()->json([
+        'status' => 'online',
+        'service' => 'GOWISER API Backend',
+        'timestamp' => now()->toIso8601String()
+    ]);
 });
-
-Route::get('/sanctum/csrf-cookie', [\Laravel\Sanctum\Http\Controllers\CsrfCookieController::class, 'show'])->name('sanctum.csrf-cookie');

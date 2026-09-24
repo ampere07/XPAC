@@ -34,8 +34,7 @@ return new class extends Migration
             $table->longText('params');
             $table->string('status', 20)->default('pending');
             $table->unsignedInteger('attempts')->default(0);
-            // Retry allowance and pacing are configured in config/radius.php.
-            $table->unsignedInteger('max_attempts')->default((int) config('radius.queue.max_attempts', 10));
+            $table->unsignedInteger('max_attempts')->default(5);
             $table->text('last_error')->nullable();
             $table->dateTime('next_retry_at')->nullable();
             $table->string('created_by', 255)->nullable();

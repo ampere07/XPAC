@@ -17,7 +17,7 @@ return [
 
     'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
         '%s%s',
-        'backend1.atssfiber.ph,apply.atssfiber.ph',
+        'backend1.gowiser.ph,apply.gowiser.ph',
         Sanctum::currentApplicationUrlWithPort()
     ))),
 

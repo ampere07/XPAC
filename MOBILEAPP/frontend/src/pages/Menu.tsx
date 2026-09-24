@@ -55,49 +55,26 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { formUIService } from '../services/formUIService';
 import { useCustomerDataContext } from '../contexts/CustomerDataContext';
-import { usePermissions } from '../hooks/usePermissions';
-import { permissionForSection } from '../config/permissions';
 import NotificationModal from '../modals/NotificationModal';
 import AboutAppModal from '../modals/AboutAppModal';
 import TimeInOutModal from '../modals/TimeInOutModal';
+import { usePermissions } from '../hooks/usePermissions';
+import {
+    ADMIN_SURFACE_GROUPS,
+    isLockedRole,
+    lockedRoleHasAdminMenu,
+    permissionForSection,
+} from '../config/permissions';
 import packageJson from '../../package.json';
 const version = packageJson.version;
-
-interface MenuProps {
-    onLogout?: () => void;
-    onSectionChange?: (section: string) => void;
-}
-
-/**
- * The groups that make an account an administrator rather than a field user.
- *
- * Holding something in one of these is what opens the administrative menu at
- * all. Operations, Agent and Inventory are deliberately absent: a technician
- * holds Job Order and Work Order, an agent holds Bonus History, inventory staff
- * hold Inventory, and none of them has ever had this menu — they reach those
- * screens through their own navigation. Billing, Configurations, Users, Logs and
- * System are the surfaces no field role holds any part of, so requiring one of
- * them is what separates the two populations without naming a single role id.
- *
- * A Head Technician holds the plant records under Configurations (LCP, NAP and
- * Location), so this does give them an administrative menu containing those —
- * which is what the web sidebar already shows them.
- */
-const ADMIN_SURFACE_GROUPS = ['Billing', 'Configurations', 'Users', 'Logs', 'System', 'Tools'];
 
 /**
  * The administrative sections, in the order the menu lists them.
  *
- * Static, and lifted out of the component so the list is not rebuilt on every
- * render and so what a role may see is decided in one place below rather than
- * interleaved with the markup.
- *
- * Ids are mobile section ids, which is what onSectionChange expects. Several
+ * Ids are mobile section ids, which is what onSectionChange expects; several
  * differ from the permission key that guards them (`organizations` against
- * `organization`, `lcp-list` against `lcp`); permissionForSection() is what
- * translates between the two, so the ids here stay as Dashboard routes them.
- *
- * @see ADMIN_SURFACE_GROUPS for which of these make a user an administrator.
+ * `organization`, `lcp-list` against `lcp`), and permissionForSection()
+ * translates between the two.
  */
 const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label: string; icon: any }> }> = [
         {
@@ -108,7 +85,6 @@ const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label
                 { id: 'applicationVisit', label: 'App Visits', icon: MapPinCheck },
                 { id: 'job-order', label: 'Job Order', icon: Wrench },
                 { id: 'service-order', label: 'Service Order', icon: Wrench },
-                { id: 'radius-queue', label: 'RADIUS Queue', icon: Server },
                 { id: 'work-order', label: 'Work Order', icon: Wrench },
                 { id: 'lcp-nap-location', label: 'LCP/NAP Location', icon: MapPin },
                 { id: 'sms-blast', label: 'SMS Blast', icon: Zap },
@@ -153,16 +129,6 @@ const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label
             ]
         },
         {
-            // See the Sidebar's copy of this group: only ported tools are listed.
-            title: 'Tools',
-            items: [
-                { id: 'smartolt-tool', label: 'SmartOLT Tool', icon: Network },
-                { id: 'mikrotik-radius-tool', label: 'Mikrotik Radius Tool', icon: Router },
-                { id: 'xendit-reconcile-tool', label: 'Xendit Reconciliation', icon: CreditCard },
-                { id: 'billing-reconcile-tool', label: 'Billing Reconcile', icon: Receipt },
-            ]
-        },
-        {
             title: 'Configurations',
             items: [
                 { id: 'promo-list', label: 'Promo', icon: Ticket },
@@ -171,7 +137,6 @@ const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label
                 { id: 'lcp-list', label: 'LCP', icon: Network },
                 { id: 'nap-list', label: 'NAP', icon: Network },
                 { id: 'usage-type-list', label: 'Usage Type', icon: Gauge },
-                { id: 'vlan-config', label: 'VLAN', icon: Network },
                 { id: 'payment-method-list', label: 'Payment Method', icon: CreditCard },
                 { id: 'work-category-list', label: 'Work Category', icon: Tags },
                 { id: 'status-remarks-list', label: 'Status Remarks', icon: MessageSquare },
@@ -209,7 +174,6 @@ const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label
                 { id: 'activity-logs', label: 'System Logs', icon: ScrollText },
                 { id: 'sms-blast-logs', label: 'SMS Blast Logs', icon: ScrollText },
                 { id: 'expenses-log', label: 'Expenses', icon: Wallet },
-                { id: 'modem-router-logs', label: 'Modem/Router Logs', icon: Router },
             ]
         },
         {
@@ -221,6 +185,11 @@ const ADMIN_MENU_GROUPS: Array<{ title: string; items: Array<{ id: string; label
             ]
         },
 ];
+
+interface MenuProps {
+    onLogout?: () => void;
+    onSectionChange?: (section: string) => void;
+}
 
 const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
     const { width, height } = useWindowDimensions();
@@ -281,44 +250,29 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
     const normalizedRole = (typeof userData?.role === 'string' ? userData.role : userData?.role?.name)?.toLowerCase() || '';
     const isTechnician = normalizedRole === 'technician' || userData?.role_id === 2;
 
-    // Handed this screen's own copy of the account so the two agree about who is
-    // signed in. Passed rather than left to load from storage on its own, the
-    // way Dashboard does it, so the menu and the section it opens are decided
-    // from one reading.
-    const { can } = usePermissions(userData);
+    // Handed this screen's own copy of the account so the menu and the section
+    // it opens are decided from one reading.
+    const { can, roleId: resolvedRoleId } = usePermissions(userData);
 
     /**
-     * The administrative menu, or nothing at all.
+     * The administrative block, or nothing at all.
      *
-     * Two decisions, and they are deliberately separate.
-     *
-     * First, whether this account gets an administrative menu. That used to be
-     * `normalizedRole === 'administrator' || role_id === '1'`, which asked the
-     * wrong question in two ways: a SuperAdmin is role_id 7, so the one role
-     * holding every key in the system was shown no admin menu at all, and a
-     * hybrid custom role built on Administrator carries an id of 9 or above, so
-     * those were hidden too however they were configured. It is now settled by
-     * what the account can actually reach — see ADMIN_SURFACE_GROUPS.
-     *
-     * Second, which entries it gets, filtered through the permission table the
-     * way the web Sidebar already filters its own (`can(permissionForSection)`),
-     * so a role is offered what it holds rather than all of it or none.
-     *
-     * The first test is what keeps the second from changing anybody else's app.
-     * A technician holds Job Order and Work Order, which appear in the Operations
-     * group here, so filtering alone would have handed every field role an admin
-     * menu duplicating navigation they already have. Requiring an administrative
-     * key first leaves Technician, Agent, OSP, Inventory Staff and Customer
-     * exactly as they were: no admin menu.
+     * Whether an account gets the block at all: a seeded role keeps the rule the
+     * app has always used, the Administrator alone (lockedRoleHasAdminMenu). A
+     * custom role gets it when it holds something in an administrative group
+     * (ADMIN_SURFACE_GROUPS), so a field-style custom role is not handed a menu
+     * duplicating its own navigation. Which entries: those whose key is held.
      */
     const adminGroups = (() => {
         const visible = ADMIN_MENU_GROUPS
             .map(group => ({ ...group, items: group.items.filter(item => can(permissionForSection(item.id))) }))
             .filter(group => group.items.length > 0);
 
-        const isAdministrative = visible.some(group => ADMIN_SURFACE_GROUPS.includes(group.title));
+        if (isLockedRole(resolvedRoleId)) {
+            return lockedRoleHasAdminMenu(resolvedRoleId) ? visible : [];
+        }
 
-        return isAdministrative ? visible : [];
+        return visible.some(group => ADMIN_SURFACE_GROUPS.includes(group.title)) ? visible : [];
     })();
 
     const menuGroups = [
@@ -363,10 +317,10 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
                     ) : (
                         <View style={s.logoFallbackRow}>
                             <View style={[s.logoCircle, { backgroundColor: '#ffffff' }]}>
-                                <Text style={[s.logoLetter, { color: colorPalette?.primary || '#ef4444' }]}>X</Text>
+                                <Text style={[s.logoLetter, { color: colorPalette?.primary || '#ef4444' }]}>A</Text>
                             </View>
                             <Text style={s.logoText}>
-                                XPAC <Text style={s.logoTextBold}>PORTAL</Text>
+                                GOWISER <Text style={s.logoTextBold}>PORTAL</Text>
                             </Text>
                         </View>
                     )}

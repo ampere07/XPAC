@@ -1,10 +1,27 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, Modal, Dimensions } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Modal,
+  Dimensions,
+} from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Plus, User as UserIcon } from 'lucide-react-native';
+import {
+  Plus,
+  RefreshCw,
+  ChevronsLeft,
+  ChevronsRight,
+  ChevronLeft,
+  ChevronRight,
+  User as UserIcon,
+} from 'lucide-react-native';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import { User } from '../types/api';
-import { StandardPage, RecordCard } from '../components/common';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import UserDetails from '../components/UserDetails';
 import UserModal from '../modals/UserModal';
@@ -143,6 +160,15 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
   }, [users, searchQuery, userTypeFilter, agentOnly, authData]);
 
   const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredUsers.slice(start, start + itemsPerPage);
+  }, [filteredUsers, currentPage, itemsPerPage]);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) setCurrentPage(newPage);
+  };
+
   const handleSaveUser = (savedUser: User) => {
     const exists = users.find((u) => u.id === savedUser.id);
     if (exists) {
@@ -153,98 +179,225 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
     setSelectedUser(savedUser);
   };
 
-  // The role picker is the one filter this page has; it sits in the standard
-  // left drawer rather than as a third row of chrome above the list.
-  const roleDrawer = !agentOnly ? (
-    <View style={{ paddingTop: 60, paddingHorizontal: 16 }}>
-      <Text style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: '#9ca3af', marginBottom: 8 }}>
-        User Type
-      </Text>
-      <View style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, overflow: 'hidden', backgroundColor: '#f9fafb' }}>
-        <Picker
-          selectedValue={userTypeFilter}
-          onValueChange={(v) => { setUserTypeFilter(v as any); setCurrentPage(1); }}
-          style={{ height: 42 }}
+  const renderUser = ({ item: user }: { item: User }) => {
+    const isSelected = selectedUser?.id === user.id;
+    return (
+      <TouchableOpacity
+        onPress={() => setSelectedUser(user)}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingVertical: 12,
+          paddingHorizontal: 16,
+          backgroundColor: isSelected ? '#f3f4f6' : '#ffffff',
+          borderBottomWidth: 1,
+          borderBottomColor: '#f3f4f6',
+          borderLeftWidth: 4,
+          borderLeftColor: isSelected ? primaryColor : 'transparent',
+        }}
+      >
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: '#f3f4f6',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 12,
+          }}
         >
-          <Picker.Item label="All Users" value="All" />
-          <Picker.Item label="Operations" value="Operations" />
-          <Picker.Item label="Customer" value="Customer" />
-        </Picker>
-      </View>
-    </View>
-  ) : undefined;
-
-  return (
-    <StandardPage<User>
-      data={filteredUsers}
-      keyExtractor={(item) => String(item.id)}
-      renderItem={(user) => (
-        <RecordCard
-          title={getFullName(user)}
-          normalizeTitle={false}
-          subtitle={`${user.username} • ${user.email_address}`}
-          showStatus={false}
-          selected={selectedUser?.id === user.id}
-          onPress={() => setSelectedUser(user)}
-          leading={
+          <UserIcon size={18} color="#6b7280" />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+            <Text
+              style={{ fontSize: 14, fontWeight: '600', color: '#111827', flex: 1 }}
+              numberOfLines={1}
+            >
+              {getFullName(user)}
+            </Text>
             <View
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: 20,
                 backgroundColor: '#f3f4f6',
-                alignItems: 'center',
-                justifyContent: 'center',
+                borderRadius: 4,
+                paddingHorizontal: 6,
+                paddingVertical: 2,
+                marginLeft: 8,
               }}
             >
-              <UserIcon size={18} color="#6b7280" />
-            </View>
-          }
-          right={
-            <View style={{ backgroundColor: '#f3f4f6', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
               <Text style={{ fontSize: 10, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 1 }}>
                 {user.role?.role_name || 'GUEST'}
               </Text>
             </View>
-          }
+          </View>
+          <Text style={{ fontSize: 12, color: '#9ca3af' }} numberOfLines={1}>
+            {user.username} • {user.email_address}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const PaginationControls = () => {
+    if (totalPages <= 1) return null;
+    const start = Math.min((currentPage - 1) * itemsPerPage + 1, filteredUsers.length);
+    const end = Math.min(currentPage * itemsPerPage, filteredUsers.length);
+    return (
+      <View
+        style={{
+          borderTopWidth: 1,
+          borderTopColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          padding: 12,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 12, color: '#6b7280' }}>Show</Text>
+            <View style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 6, overflow: 'hidden', minWidth: 70 }}>
+              <Picker
+                selectedValue={String(itemsPerPage)}
+                onValueChange={(v) => { setItemsPerPage(Number(v)); setCurrentPage(1); }}
+                style={{ height: 36, fontSize: 12 }}
+              >
+                {[10, 25, 50, 100].map((v) => (
+                  <Picker.Item key={v} label={String(v)} value={String(v)} />
+                ))}
+              </Picker>
+            </View>
+            <Text style={{ fontSize: 12, color: '#6b7280' }}>
+              {start}-{end} of {filteredUsers.length}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <TouchableOpacity onPress={() => handlePageChange(1)} disabled={currentPage === 1} style={{ padding: 4, opacity: currentPage === 1 ? 0.3 : 1 }}>
+              <ChevronsLeft size={16} color="#374151" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} style={{ padding: 4, opacity: currentPage === 1 ? 0.3 : 1 }}>
+              <ChevronLeft size={16} color="#374151" />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 12, color: '#374151', paddingHorizontal: 8 }}>
+              Page {currentPage} of {totalPages}
+            </Text>
+            <TouchableOpacity onPress={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} style={{ padding: 4, opacity: currentPage === totalPages ? 0.3 : 1 }}>
+              <ChevronRight size={16} color="#374151" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handlePageChange(totalPages)} disabled={currentPage === totalPages} style={{ padding: 4, opacity: currentPage === totalPages ? 0.3 : 1 }}>
+              <ChevronsRight size={16} color="#374151" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  const ListContent = () => {
+    if (isLoading && users.length === 0) {
+      return (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 64 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ marginTop: 12, fontSize: 14, color: '#6b7280' }}>Loading users...</Text>
+        </View>
+      );
+    }
+    if (error) {
+      return (
+        <View style={{ padding: 40, alignItems: 'center' }}>
+          <Text style={{ fontSize: 14, color: '#ef4444' }}>{error}</Text>
+        </View>
+      );
+    }
+    if (filteredUsers.length === 0) {
+      return (
+        <View style={{ padding: 48, alignItems: 'center', opacity: 0.4 }}>
+          <UserIcon size={48} color="#6b7280" />
+          <Text style={{ marginTop: 12, fontSize: 14, color: '#6b7280' }}>No users found</Text>
+        </View>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          backgroundColor: '#ffffff',
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          paddingTop: isTablet ? 16 : 60,
+          paddingHorizontal: 16,
+          paddingBottom: 12,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <View>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>
+              {agentOnly ? 'Agent Management' : 'User Management'}
+            </Text>
+            <Text style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+              {agentOnly ? 'Manage agent users' : 'Manage system users and permissions'}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => refreshUsers()}
+              style={{ padding: 8, borderRadius: 8, backgroundColor: '#f3f4f6' }}
+            >
+              <RefreshCw size={18} color="#6b7280" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { setSelectedUser(null); setShowModal(true); }}
+              style={{ padding: 8, borderRadius: 8, backgroundColor: primaryColor }}
+            >
+              <Plus size={20} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <GlobalSearch
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          isDarkMode={isDarkMode}
+          colorPalette={colorPalette}
+          placeholder="Search name, username, email..."
         />
-      )}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search name, username, email..."
-      drawerContent={roleDrawer}
-      drawerActive={!agentOnly && userTypeFilter !== 'All'}
-      onRefresh={() => refreshUsers()}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && users.length === 0}
-      loadingText="Loading users..."
-      error={error}
-      onRetry={() => refreshUsers()}
-      emptyText="No users found"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      toolbarActions={
-        <TouchableOpacity
-          onPress={() => { setSelectedUser(null); setShowModal(true); }}
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 8,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: primaryColor,
-          }}
-        >
-          <Plus size={20} color="#ffffff" />
-        </TouchableOpacity>
-      }
-    >
+
+        {!agentOnly && (
+          <View style={{ marginTop: 8, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 8, overflow: 'hidden', backgroundColor: '#f9fafb' }}>
+            <Picker
+              selectedValue={userTypeFilter}
+              onValueChange={(v) => { setUserTypeFilter(v as any); setCurrentPage(1); }}
+              style={{ height: 42 }}
+            >
+              <Picker.Item label="All Users" value="All" />
+              <Picker.Item label="Operations" value="Operations" />
+              <Picker.Item label="Customer" value="Customer" />
+            </Picker>
+          </View>
+        )}
+      </View>
+
+      {/* List */}
+      <View style={{ flex: 1 }}>
+        <ListContent />
+        {filteredUsers.length > 0 && (
+          <FlatList
+            data={paginatedUsers}
+            keyExtractor={(item) => String(item.id)}
+            renderItem={renderUser}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[primaryColor]} />
+            }
+            contentContainerStyle={{ backgroundColor: '#ffffff' }}
+          />
+        )}
+        {!isLoading && filteredUsers.length > 0 && <PaginationControls />}
+      </View>
+
+      {/* User Details Modal (full-screen) */}
       {selectedUser && (
         <Modal visible animationType="slide" onRequestClose={() => setSelectedUser(null)}>
           <UserDetails
@@ -257,6 +410,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
         </Modal>
       )}
 
+      {/* Add/Edit User Modal */}
       <UserModal
         isOpen={showModal}
         onClose={() => setShowModal(false)}
@@ -264,7 +418,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
         user={selectedUser}
         agentOnly={agentOnly}
       />
-    </StandardPage>
+    </View>
   );
 };
 

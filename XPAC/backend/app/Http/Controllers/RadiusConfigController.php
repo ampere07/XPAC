@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\RadiusConfig;
-use App\Services\RouterosApiService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
@@ -22,32 +21,17 @@ class RadiusConfigController extends Controller
                 $latency = null;
                 $publicIp = $config->ip;
                 
-                /*
-                 * Status comes from a real API login, not a bare socket.
-                 *
-                 * This used to be fsockopen() on the saved port, which reports "online"
-                 * the moment TCP is accepted. That is precisely the failure this app
-                 * spent a long time chasing: RouterOS' API port accepts the connection
-                 * and then answers nothing a non-API client can use, so a device that
-                 * could not actually be worked with still showed green. It also only
-                 * ever tried the saved port, so a config carrying the wrong ssl_type read
-                 * as permanently offline even though the device was reachable on its
-                 * other one.
-                 *
-                 * ping() connects and logs in through the shared connection layer, so it
-                 * answers the question the indicator claims to answer, tries the alternate
-                 * transport, and is subject to the same circuit breaker as everything else
-                 * — a device already known to be down costs no socket here either.
-                 */
                 try {
                     $start = microtime(true);
-                    $isOnline = app(RouterosApiService::class)->ping($config);
+                    $connection = @fsockopen($config->ip, $config->port, $errno, $errstr, 2);
                     $end = microtime(true);
-
-                    if ($isOnline) {
+                    
+                    if ($connection) {
+                        $isOnline = true;
                         $latency = round(($end - $start) * 1000, 2);
+                        fclose($connection);
                     }
-                } catch (\Throwable $e) {
+                } catch (\Exception $e) {
                     $isOnline = false;
                 }
                 

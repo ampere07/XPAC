@@ -21,16 +21,9 @@ class SmsController extends Controller
     public function sendSms(Request $request): JsonResponse
     {
         try {
-            // account_no / source / raw_message are optional and only ever reach
-            // sms_logs: a send from a customer record files the log against that
-            // account and keeps the message as it was composed, while an anonymous
-            // send (the test route, a blast recipient) carries none of them.
             $validator = Validator::make($request->all(), [
-                'contact_no'  => 'required|string',
-                'message'     => 'required|string|max:1000',
-                'account_no'  => 'nullable|string|max:50',
-                'source'      => 'nullable|string|max:50',
-                'raw_message' => 'nullable|string|max:1000',
+                'contact_no' => 'required|string',
+                'message' => 'required|string|max:1000'
             ]);
 
             if ($validator->fails()) {

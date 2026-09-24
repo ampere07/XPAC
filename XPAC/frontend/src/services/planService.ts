@@ -5,6 +5,8 @@ export interface Plan {
   name: string;
   description?: string;
   price?: number;
+  /** Whether the plan is offered on the public application form. */
+  show_in_application?: boolean;
   modified_date?: string;
   modified_by?: number;
 }

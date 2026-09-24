@@ -1,5 +1,5 @@
 -- ===========================================================================
---  ATSS — Job order settlement columns
+--  GOWISER — Job order settlement columns
 --
 --  Just the new columns for: settling a job order with its referring agent on
 --  approval, and holding the commission that settlement earns.

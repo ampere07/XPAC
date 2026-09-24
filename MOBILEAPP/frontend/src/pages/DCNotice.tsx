@@ -1,7 +1,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, Dimensions, Alert } from 'react-native';
-import { Calendar, ChevronDown, ChevronUp, X } from 'lucide-react-native';
-import { StandardPage, RecordCard } from '../components/common';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  Modal,
+  Dimensions,
+  Alert,
+} from 'react-native';
+import { Picker } from '@react-native-picker/picker';
+import { Calendar, ChevronDown, ChevronUp, Download, RefreshCw, X } from 'lucide-react-native';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useDCNoticeContext } from '../contexts/DCNoticeContext';
 import { DCNotice } from '../services/dcNoticeService';
@@ -186,6 +199,13 @@ const DCNoticePage: React.FC = () => {
   }, [globalFilteredRecords, selectedDate]);
 
   // Paginated slice
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredRecords.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredRecords, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
+
   const handleExport = () => {
     if (!filteredRecords || filteredRecords.length === 0) return;
     exportToCSV('dc_notice_export', allColumns, filteredRecords, renderCellValue);
@@ -464,76 +484,243 @@ const DCNoticePage: React.FC = () => {
       : null;
 
   return (
-    <StandardPage<DCNotice>
-      data={filteredRecords}
-      keyExtractor={(item, idx) => String((item as any).id ?? idx)}
-      renderItem={(item) => {
-        const r = item as any;
-        return (
-          <RecordCard
-            title={r.full_name || 'Unknown'}
-            subtitle={[
-              r.account_no ? `Acct: ${r.account_no}` : null,
-              r.invoice_id ? `Invoice: ${r.invoice_id}` : null,
-              r.plan ? `Plan: ${r.plan}` : null,
-              r.contact_number ? `Contact: ${r.contact_number}` : null,
-            ].filter(Boolean).join('  |  ')}
-            showStatus={false}
-            right={
-              r.dc_notice_date ? (
-                <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4, backgroundColor: '#ede9fe' }}>
-                  <Text style={{ fontSize: 11, fontWeight: '600', color: primaryColor }}>
-                    {formatDate(r.dc_notice_date)}
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: isTablet ? 16 : 60,
+          paddingBottom: 12,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          gap: 10,
+        }}
+      >
+        {/* Title + action buttons */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>DC Notice</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              onPress={handleExport}
+              disabled={filteredRecords.length === 0}
+              style={{
+                padding: 9,
+                borderRadius: 8,
+                backgroundColor: primaryColor,
+                opacity: filteredRecords.length === 0 ? 0.4 : 1,
+              }}
+            >
+              <Download size={16} color="#ffffff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleManualRefresh}
+              disabled={isLoading || isRefreshingManual}
+              style={{
+                padding: 9,
+                borderRadius: 8,
+                backgroundColor: primaryColor,
+                opacity: (isLoading || isRefreshingManual) ? 0.4 : 1,
+              }}
+            >
+              {(isLoading || isRefreshingManual) ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <RefreshCw size={16} color="#ffffff" />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Search */}
+        <GlobalSearch
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          isDarkMode={isDarkMode}
+          colorPalette={colorPalette}
+          placeholder="Search DC Notice records..."
+        />
+
+        {/* Filter row */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setShowFilterModal(true)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: activeFilterLabel ? primaryColor : '#d1d5db',
+              backgroundColor: activeFilterLabel ? `${primaryColor}1a` : '#f9fafb',
+            }}
+          >
+            <Calendar size={14} color={activeFilterLabel ? primaryColor : '#6b7280'} />
+            <Text style={{ fontSize: 12, color: activeFilterLabel ? primaryColor : '#6b7280', fontWeight: activeFilterLabel ? '600' : '400' }}>
+              {activeFilterLabel || 'All Dates'}
+            </Text>
+            {activeFilterLabel ? (
+              <TouchableOpacity
+                onPress={() => { setSelectedDate('All'); handleClearDateRange(); }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={12} color={primaryColor} />
+              </TouchableOpacity>
+            ) : (
+              <ChevronDown size={14} color="#6b7280" />
+            )}
+          </TouchableOpacity>
+
+          <Text style={{ fontSize: 12, color: '#6b7280', marginLeft: 'auto' }}>
+            {filteredRecords.length} records
+          </Text>
+        </View>
+      </View>
+
+      {/* Body */}
+      {isLoading && dcNoticeRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ color: '#6b7280', marginTop: 12 }}>Loading DC Notice records...</Text>
+        </View>
+      ) : error && dcNoticeRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80, gap: 12 }}>
+          <Text style={{ fontSize: 16, fontWeight: '600', color: '#ef4444', textAlign: 'center', paddingHorizontal: 24 }}>
+            {error}
+          </Text>
+          <TouchableOpacity
+            onPress={handleManualRefresh}
+            style={{ paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, backgroundColor: primaryColor }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={paginatedRecords}
+          keyExtractor={(item, idx) => String((item as any).id ?? idx)}
+          renderItem={renderItem}
+          initialNumToRender={20}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={primaryColor}
+              colors={[primaryColor]}
+            />
+          }
+          ListEmptyComponent={
+            <View style={{ paddingVertical: 80, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280' }}>No DC Notice records found</Text>
+            </View>
+          }
+          ListFooterComponent={
+            filteredRecords.length > 0 ? (
+              <View
+                style={{
+                  backgroundColor: '#ffffff',
+                  borderTopWidth: 1,
+                  borderTopColor: '#e5e7eb',
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  gap: 10,
+                }}
+              >
+                {/* Page size + count info */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 12, color: '#6b7280' }}>Show</Text>
+                    <View
+                      style={{
+                        borderWidth: 1,
+                        borderColor: '#d1d5db',
+                        borderRadius: 6,
+                        overflow: 'hidden',
+                        height: 34,
+                        justifyContent: 'center',
+                        minWidth: 80,
+                      }}
+                    >
+                      <Picker
+                        selectedValue={itemsPerPage}
+                        onValueChange={(v) => setItemsPerPage(Number(v))}
+                        style={{ color: '#111827', height: 34 }}
+                        dropdownIconColor="#6b7280"
+                      >
+                        <Picker.Item label="10" value={10} />
+                        <Picker.Item label="25" value={25} />
+                        <Picker.Item label="50" value={50} />
+                        <Picker.Item label="100" value={100} />
+                      </Picker>
+                    </View>
+                    <Text style={{ fontSize: 12, color: '#6b7280' }}>entries</Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                    {filteredRecords.length === 0
+                      ? '0'
+                      : `${(currentPage - 1) * itemsPerPage + 1}–${Math.min(currentPage * itemsPerPage, filteredRecords.length)}`
+                    } of {filteredRecords.length}
                   </Text>
                 </View>
-              ) : undefined
-            }
-          >
-            {!!r.email_address && <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>{r.email_address}</Text>}
-            {!!r.address && (
-              <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }} numberOfLines={1}>
-                {r.address}
-              </Text>
-            )}
-          </RecordCard>
-        );
-      }}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search DC Notice records..."
-      // The date filter keeps its own bottom sheet; the standard funnel button
-      // is what opens it, and the badge says whether it is narrowing anything.
-      onOpenFunnel={() => setShowFilterModal(true)}
-      activeFilterCount={activeFilterLabel ? 1 : 0}
-      rangeChip={
-        activeFilterLabel
-          ? {
-              label: 'Dates',
-              value: activeFilterLabel,
-              onClear: () => { setSelectedDate('All'); handleClearDateRange(); },
-            }
-          : null
-      }
-      onExport={handleExport}
-      exportDisabled={filteredRecords.length === 0}
-      onRefresh={handleManualRefresh}
-      isRefreshing={isLoading || isRefreshingManual}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && dcNoticeRecords.length === 0}
-      loadingText="Loading DC Notice records..."
-      error={error}
-      onRetry={handleManualRefresh}
-      emptyText="No DC Notice records found"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={setItemsPerPage}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-    >
+
+                {/* Prev / page indicator / Next */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage(1)}
+                    disabled={currentPage === 1}
+                    style={{ opacity: currentPage === 1 ? 0.3 : 1, paddingHorizontal: 8, paddingVertical: 6 }}
+                  >
+                    <Text style={{ fontSize: 18, color: primaryColor }}>{'«'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      backgroundColor: currentPage === 1 ? '#f3f4f6' : primaryColor,
+                      opacity: currentPage === 1 ? 0.5 : 1,
+                    }}
+                  >
+                    <Text style={{ color: currentPage === 1 ? '#9ca3af' : '#ffffff', fontWeight: '600' }}>Prev</Text>
+                  </TouchableOpacity>
+
+                  <Text style={{ fontSize: 13, color: '#374151' }}>
+                    Page {currentPage} of {totalPages || 1}
+                  </Text>
+
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages || totalPages === 0}
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      backgroundColor: (currentPage === totalPages || totalPages === 0) ? '#f3f4f6' : primaryColor,
+                      opacity: (currentPage === totalPages || totalPages === 0) ? 0.5 : 1,
+                    }}
+                  >
+                    <Text style={{ color: (currentPage === totalPages || totalPages === 0) ? '#9ca3af' : '#ffffff', fontWeight: '600' }}>Next</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage(totalPages)}
+                    disabled={currentPage === totalPages || totalPages === 0}
+                    style={{ opacity: (currentPage === totalPages || totalPages === 0) ? 0.3 : 1, paddingHorizontal: 8, paddingVertical: 6 }}
+                  >
+                    <Text style={{ fontSize: 18, color: primaryColor }}>{'»'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null
+          }
+        />
+      )}
+
       <FilterModal />
-    </StandardPage>
+    </View>
   );
 };
 

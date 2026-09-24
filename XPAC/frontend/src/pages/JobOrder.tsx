@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ChevronDown, ChevronRight, Columns3, ArrowUp, ArrowDown, Menu, X, RefreshCw, ChevronLeft ,Filter, ChevronsLeft, ChevronsRight, Globe, Calendar, Download } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import JobOrderDetails from '../components/JobOrderDetails';
@@ -16,11 +16,21 @@ import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { agentJobOrderBand, createAgentReferralMatcher, isAgentUser } from '../utils/agentReferral';
 import {
-  buildTechnicianLockedJobOrderIds,
-  isTechnicianUser,
-  sortJobOrdersForTechnician,
-  TECHNICIAN_LOCKED_MESSAGE
-} from '../utils/technicianJobOrderAccess';
+  deriveVipLabel,
+  deriveVatTypeLabel,
+  normalizeGenerationType,
+  isPrepaidGeneration
+} from '../utils/billingFilterOptions';
+import { mergeSavedColumns, BILLING_ATTRIBUTE_COLUMN_KEYS } from '../utils/tableColumnPrefs';
+
+// Job Orders shows a curated subset by default, not every column. The billing attributes are
+// included so they are visible out of the box, matching the Customer table.
+const DEFAULT_VISIBLE_COLUMNS = [
+  'timestamp', 'dateInstalled', 'referredBy', 'fullName', 'address', 'onsiteStatus',
+  'billingStatus', 'assignedEmail', 'billingDay', 'installationFee',
+  'vatType', 'generationType', 'expirationDate', 'vip',
+  'modifiedBy', 'modifiedDate'
+];
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -46,6 +56,10 @@ const allColumns = [
   { key: 'assignedEmail', label: 'Assigned Tech', width: 'min-w-48' },
   { key: 'billingDay', label: 'Billing Day', width: 'min-w-28' },
   { key: 'installationFee', label: 'Installation Fee', width: 'min-w-32' },
+  { key: 'vatType', label: 'VAT Type', width: 'min-w-32' },
+  { key: 'generationType', label: 'Generation Type', width: 'min-w-36' },
+  { key: 'expirationDate', label: 'Expiration Date', width: 'min-w-36' },
+  { key: 'vip', label: 'VIP', width: 'min-w-24' },
   { key: 'modifiedBy', label: 'Modified By', width: 'min-w-32' },
   { key: 'modifiedDate', label: 'Modified Date', width: 'min-w-40' },
   { key: 'modemRouterSN', label: 'Modem/Router SN', width: 'min-w-36' },
@@ -156,80 +170,15 @@ const storedAuth = (): { role: string; roleId: string | number | null; id: numbe
   }
 };
 
-/**
- * A status word in the colour its state calls for.
- *
- * At module scope on purpose. Declared inside the page, every render built a
- * new component type, so React could not match it against the previous one and
- * tore down and rebuilt every status in the table instead of leaving it alone.
- */
-const StatusText = React.memo(({ status, type }: { status?: string | null, type: 'onsite' | 'billing' }) => {
-  if (!status) return <span className="text-gray-400">-</span>;
+interface JobOrderPageProps {
+  /**
+   * Job order to open on arrival, sent when a "Job Done" notification is clicked.
+   * Empty for ordinary navigation.
+   */
+  autoOpenJobOrderId?: string;
+}
 
-  let textColor = '';
-
-  if (type === 'onsite') {
-    switch (status.toLowerCase()) {
-      case 'done':
-      case 'completed':
-        textColor = 'text-green-400';
-        break;
-      case 'reschedule':
-        textColor = 'text-blue-400';
-        break;
-      case 'inprogress':
-      case 'in progress':
-        textColor = 'text-blue-400';
-        break;
-      case 'pending':
-        textColor = 'text-orange-400';
-        break;
-      case 'failed':
-      case 'cancelled':
-        textColor = 'text-red-500';
-        break;
-      default:
-        textColor = 'text-gray-400';
-    }
-  } else {
-    switch (status.toLowerCase()) {
-      case 'done':
-      case 'active':
-      case 'completed':
-      case 'vip':
-      case 'service account':
-        textColor = 'text-green-400';
-        break;
-      case 'pending':
-      case 'in progress':
-        textColor = 'text-orange-400';
-        break;
-      case 'suspended':
-      case 'overdue':
-      case 'cancelled':
-      case 'blacklisted':
-      case 'pullout':
-        textColor = 'text-red-500';
-        break;
-      case 'freeze':
-        textColor = 'text-blue-400';
-        break;
-      case 'inactive':
-        textColor = 'text-gray-400';
-        break;
-      default:
-        textColor = 'text-gray-400';
-    }
-  }
-
-  return (
-    <span className={`${textColor} font-bold uppercase`}>
-      {status === 'inprogress' ? 'In Progress' : status}
-    </span>
-  );
-});
-
-const JobOrderPage: React.FC = () => {
+const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [currentUserOrgId, setCurrentUserOrgId] = useState<number | null>(() => {
     try {
@@ -261,20 +210,7 @@ const JobOrderPage: React.FC = () => {
   const { role: userRole, roleId, id: agentUserId, fullName: agentName, email: agentEmail } = useMemo(storedAuth, []);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState<boolean>(true);
-  // Card on a phone, table on a desktop — and whatever was last chosen after
-  // that. The table is `w-max`, so opening it on a phone put the whole list
-  // behind a sideways scroll; the card view carries the same rows in a column
-  // that fits. Kept in localStorage the way Work Order keeps its own.
-  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
-    const saved = localStorage.getItem('jobOrderDisplayMode');
-    if (saved === 'card' || saved === 'table') return saved;
-    return window.innerWidth < 768 ? 'card' : 'table';
-  });
-
-  const chooseDisplayMode = useCallback((mode: DisplayMode) => {
-    setDisplayMode(mode);
-    localStorage.setItem('jobOrderDisplayMode', mode);
-  }, []);
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
@@ -288,20 +224,23 @@ const JobOrderPage: React.FC = () => {
     const saved = localStorage.getItem('jobOrderVisibleColumns');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Merged rather than used as-is: a preference saved before a column existed omits it,
+        // which would hide newly added columns from every returning user. Only the new keys are
+        // merged in, so columns the user hid on purpose stay hidden.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          DEFAULT_VISIBLE_COLUMNS,
+          'jobOrderVisibleColumns:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
     }
-    return ['timestamp', 'dateInstalled', 'referredBy', 'fullName', 'address', 'onsiteStatus', 'billingStatus', 'assignedEmail', 'billingDay', 'installationFee', 'modifiedBy', 'modifiedDate'];
+    return [...DEFAULT_VISIBLE_COLUMNS];
   });
-  const isTechnician = isTechnicianUser(userRole, roleId);
   const isAgentViewer = isAgentUser(userRole, roleId);
-  // Technicians land on their queue in the order they are expected to work it —
-  // oldest first — which the presort below applies when no column sort is set.
-  // Everyone else keeps the newest-first default. Sorting a column still works
-  // for both.
-  const [sortColumn, setSortColumn] = useState<string | null>(isTechnician ? null : 'timestamp');
+  const [sortColumn, setSortColumn] = useState<string | null>('timestamp');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [hoveredColumn, setHoveredColumn] = useState<string | null>(null);
   const [resizingColumn, setResizingColumn] = useState<string | null>(null);
@@ -312,7 +251,14 @@ const JobOrderPage: React.FC = () => {
     const saved = localStorage.getItem('jobOrderColumnOrder');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Without merging, a new column is missing from the saved order and indexOf returns -1,
+        // which would sort it ahead of every other column.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'jobOrderColumnOrder:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -325,6 +271,11 @@ const JobOrderPage: React.FC = () => {
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
   const [technicianEmail, setTechnicianEmail] = useState<string | undefined>(undefined);
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
+
+  // Download options. The button used to export immediately; it now opens a chooser
+  // so the plain row export and the onsite-status summary can live side by side.
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState<boolean>(false);
+  const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const [dateInstalledFrom, setDateInstalledFrom] = useState<string>('');
   const [dateInstalledTo, setDateInstalledTo] = useState<string>('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -811,7 +762,15 @@ const JobOrderPage: React.FC = () => {
       // Built once for the whole scan rather than per row — see
       // createAgentReferralMatcher.
       const ownsReferral = createAgentReferralMatcher(agentName, agentEmail, agentUserId);
-      return filtered.filter((jo: JobOrder) => ownsReferral(jo.Referred_By || jo.referred_by || ''));
+      // Referred_By is now the display NAME the API resolved; the stored value
+      // (an agent id for picker-made referrals) is in Referred_By_Raw, which
+      // lets the matcher decide by id instead of by name.
+      return filtered.filter((jo: JobOrder) => {
+        const raw = (jo as any).Referred_By_Raw;
+        return ownsReferral(
+          raw !== undefined && raw !== null && raw !== '' ? String(raw) : (jo.Referred_By || jo.referred_by || '')
+        );
+      });
     }
     return filtered;
   }, [jobOrders, userRole, roleId, agentUserId, agentName, agentEmail, currentUserOrgId]);
@@ -956,7 +915,54 @@ const JobOrderPage: React.FC = () => {
       case 'addressCoordinates': return jo.address_coordinates || jo.Address_Coordinates || '';
       case 'computedTime': return jo.computed_time || jo._ComputedTime || (jo as any).computedTime || '';
       case 'modifiedBy': return jo.Modified_By || jo.modified_by || jo.updated_by_user_email || '';
-      case 'modifiedDate': return jo.Modified_Date || jo.modified_date || jo.updated_at || '';
+      case 'modifiedDate': return jo.Modified_Date || jo.modified_date || jo.updated_at || jo.Updated_At || '';
+      // Job orders carry an explicit vip_enabled flag, unlike customers where VIP is a
+      // billing status.
+      case 'vip': return deriveVipLabel(jo.vip_enabled);
+      // Matches the label JobOrderDetails shows, so the filter never disagrees with the panel.
+      case 'vatType': return deriveVatTypeLabel(jo.vat_enabled, jo.vat_type || (jo as any).Vat_Type);
+      case 'generationType': return normalizeGenerationType(jo.generation_type);
+      // Sourced from the linked billing account by JobOrderController — job_orders has no
+      // prepaid column of its own.
+      case 'prepaidExpiration': return (jo as any).prepaid_expires_at || '';
+      // Table column key. Sorts on the raw timestamp (not the formatted label) so the order is
+      // chronological, and only prepaid job orders contribute a value — matching what renders.
+      case 'expirationDate':
+        return isPrepaidGeneration(jo.generation_type) ? ((jo as any).prepaid_expires_at || '') : '';
+      // ── Columns the table renders from a differently-cased field ─────────────────────
+      // The API returns these as snake_case or Pascal_Snake, so the `default` branch below —
+      // which looks the key up verbatim — finds nothing and a filter on them would match no
+      // rows at all while appearing to work. Each mirrors the same fallback chain
+      // renderCellValue() uses, so filtering and the displayed cell agree.
+      case 'contractLink': return jo.Contract_Link || (jo as any).contract_link || '';
+      case 'createdByUserEmail': return (jo as any).created_by_user_email || (jo as any).Created_By_User_Email || '';
+      case 'updatedByUserEmail': return (jo as any).updated_by_user_email || (jo as any).Updated_By_User_Email || '';
+      case 'pppoeUsername': return (jo as any).PPPoE_Username || (jo as any).pppoe_username || '';
+      case 'pppoePassword': return (jo as any).PPPoE_Password || (jo as any).pppoe_password || '';
+      case 'location': return (jo as any).Location || (jo as any).location || '';
+      case 'secondContactNumber':
+        return (jo as any).Second_Contact_Number || (jo as any).Secondary_Mobile_Number
+          || (jo as any).second_contact_number || (jo as any).secondary_mobile_number || '';
+      case 'clientSignatureUrl':
+        return (jo as any).client_signature_url || (jo as any).Client_Signature_URL
+          || (jo as any).client_signature_image_url || (jo as any).Client_Signature_Image_URL || '';
+      case 'setupImageUrl':
+        return (jo as any).setup_image_url || (jo as any).Setup_Image_URL || (jo as any).Setup_Image_Url || '';
+      case 'speedtestImageUrl':
+        return (jo as any).speedtest_image_url || (jo as any).Speedtest_Image_URL
+          || (jo as any).speedtest_image || (jo as any).Speedtest_Image || '';
+      case 'signedContractImageUrl':
+        return (jo as any).signed_contract_image_url || (jo as any).Signed_Contract_Image_URL
+          || (jo as any).signed_contract_url || (jo as any).Signed_Contract_URL || '';
+      case 'boxReadingImageUrl':
+        return (jo as any).box_reading_image_url || (jo as any).Box_Reading_Image_URL
+          || (jo as any).box_reading_url || (jo as any).Box_Reading_URL || '';
+      case 'routerReadingImageUrl':
+        return (jo as any).router_reading_image_url || (jo as any).Router_Reading_Image_URL
+          || (jo as any).router_reading_url || (jo as any).Router_Reading_URL || '';
+      case 'portLabelImageUrl':
+        return (jo as any).port_label_image_url || (jo as any).Port_Label_Image_URL
+          || (jo as any).port_label_url || (jo as any).Port_Label_URL || '';
       default: return (jo as any)[key] || '';
     }
   };
@@ -967,6 +973,13 @@ const JobOrderPage: React.FC = () => {
     return orders.filter(order => {
       return Object.entries(filters).every(([key, filter]: [string, any]) => {
         const orderValue = getVal(order, key);
+
+        // Prepaid Expiration only applies to Prepaid job orders — a postpaid one has no expiry
+        // to compare against, so it cannot satisfy a date range. Handled before the generic
+        // date branch so postpaid records are excluded rather than silently kept.
+        if (key === 'prepaidExpiration' && !isPrepaidGeneration(order.generation_type)) {
+          return false;
+        }
 
         let match = true;
         if (filter.type === 'text') {
@@ -994,20 +1007,27 @@ const JobOrderPage: React.FC = () => {
           if (!orderValue) match = false;
           else {
             const normalizeDate = (d: any, isEnd: boolean = false) => {
+              if (!d) return NaN;
               let s = String(d).trim().replace(' ', 'T');
               if (s.length === 10) {
                 s = isEnd ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+              } else if (s.length === 16) {
+                s = isEnd ? `${s}:59.999` : `${s}:00`;
               }
               return new Date(s).getTime();
             };
 
             const orderTime = normalizeDate(orderValue);
-            const fromTime = filter.from ? normalizeDate(filter.from) : null;
-            const toTime = filter.to ? normalizeDate(filter.to, true) : null;
+            if (!isNaN(orderTime)) {
+              const fromTime = filter.from ? normalizeDate(filter.from, false) : null;
+              const toTime = filter.to ? normalizeDate(filter.to, true) : null;
 
-            if (fromTime && orderTime < fromTime) match = false;
-            else if (toTime && orderTime > toTime) match = false;
-            else match = true;
+              if (fromTime !== null && !isNaN(fromTime) && orderTime < fromTime) match = false;
+              else if (toTime !== null && !isNaN(toTime) && orderTime > toTime) match = false;
+              else match = true;
+            } else {
+              match = false;
+            }
           }
         }
 
@@ -1152,62 +1172,33 @@ const JobOrderPage: React.FC = () => {
       return true;
     });
 
-    // Technicians read their list in the order they work it: In Progress oldest
-    // first, then other active work, with Done / Reschedule / Failed at the end.
-    //
-    // Agents read theirs by status band — In Progress, then Reschedule, then
-    // Failed, with Done last — and newest first inside each band, so the visits
-    // still happening lead and the finished installations sit at the bottom.
-    //
-    // Every other role keeps the newest-first default untouched.
-    //
-    // The sort keys are worked out once per job order and remembered, rather
-    // than inside the comparator: a comparator runs O(n log n) times, so parsing
-    // each timestamp there meant parsing the same handful of dates over and over
-    // — thousands of Date constructions to order a few hundred rows. The band an
-    // agent's row falls in is cached the same way.
-    const timeKeys = new Map<JobOrder, number>();
-    const timeOf = (jo: JobOrder): number => {
-      let key = timeKeys.get(jo);
-      if (key === undefined) {
-        key = new Date(getVal(jo, 'timestamp') || 0).getTime();
-        timeKeys.set(jo, key);
-      }
-      return key;
-    };
-
-    const idKeys = new Map<JobOrder, number>();
-    const idOf = (jo: JobOrder): number => {
-      let key = idKeys.get(jo);
-      if (key === undefined) {
-        key = parseInt(String(jo.id)) || 0;
-        idKeys.set(jo, key);
-      }
-      return key;
-    };
-
+    // Agents read their list by status band — In Progress, then Reschedule,
+    // then Failed, with Done last — and newest first inside each band, so the
+    // visits still happening lead and the finished installations sit at the
+    // bottom. Every other role keeps the newest-first default untouched.
     const byRecency = (a: JobOrder, b: JobOrder) => {
-      const timeA = timeOf(a);
-      const timeB = timeOf(b);
+      const timeA = new Date(getVal(a, 'timestamp') || 0).getTime();
+      const timeB = new Date(getVal(b, 'timestamp') || 0).getTime();
       if (timeA !== timeB) return timeB - timeA;
-      return idOf(b) - idOf(a);
+
+      const idA = parseInt(String(a.id)) || 0;
+      const idB = parseInt(String(b.id)) || 0;
+      return idB - idA;
     };
 
-    const presorted = isTechnician
-      ? sortJobOrdersForTechnician(filtered)
-      : isAgentViewer
-        ? (() => {
-          const bands = new Map<JobOrder, number>();
-          for (const jo of filtered) bands.set(jo, agentJobOrderBand(jo));
+    const presorted = isAgentViewer
+      ? (() => {
+        const bands = new Map<JobOrder, number>();
+        for (const jo of filtered) bands.set(jo, agentJobOrderBand(jo));
 
-          return [...filtered].sort((a, b) => {
-            const bandA = bands.get(a) ?? 0;
-            const bandB = bands.get(b) ?? 0;
-            if (bandA !== bandB) return bandA - bandB;
-            return byRecency(a, b);
-          });
-        })()
-        : [...filtered].sort(byRecency);
+        return [...filtered].sort((a, b) => {
+          const bandA = bands.get(a) ?? 0;
+          const bandB = bands.get(b) ?? 0;
+          if (bandA !== bandB) return bandA - bandB;
+          return byRecency(a, b);
+        });
+      })()
+      : [...filtered].sort(byRecency);
 
     if (sortColumn) {
       return [...presorted].sort((a, b) => {
@@ -1225,51 +1216,24 @@ const JobOrderPage: React.FC = () => {
       });
     }
     return presorted;
-  }, [globalFilteredJobOrders, selectedLocation, sortColumn, sortDirection, isTechnician, isAgentViewer]);
-
-  /**
-   * The job orders a technician may not open yet.
-   *
-   * Built from their whole accessible set — the API already scopes it to them —
-   * and NOT from the filtered or paginated view, so searching, filtering or
-   * paging can never change which job order counts as the oldest.
-   */
-  const technicianLockedIds = useMemo(() => {
-    if (!isTechnician) return new Set<string>();
-    return buildTechnicianLockedJobOrderIds(accessibleJobOrders);
-  }, [isTechnician, accessibleJobOrders]);
-
-  const isJobOrderLocked = (jobOrder: JobOrder): boolean =>
-    technicianLockedIds.has(String(jobOrder.id));
+  }, [globalFilteredJobOrders, selectedLocation, sortColumn, sortDirection, isAgentViewer]);
 
   const currentJobOrderIndex = useMemo(() => {
     if (!selectedJobOrder || !sortedJobOrders) return -1;
     return sortedJobOrders.findIndex(r => r.id === selectedJobOrder.id);
   }, [sortedJobOrders, selectedJobOrder]);
 
-  // Record-to-record navigation skips whatever the viewer cannot open, so the
-  // arrows never land on a locked job order — and read as disabled once there is
-  // nothing left to reach in that direction.
-  const nextOpenRecordIndex = (step: 1 | -1): number => {
-    if (currentJobOrderIndex < 0) return -1;
-    for (let i = currentJobOrderIndex + step; i >= 0 && i < sortedJobOrders.length; i += step) {
-      if (!isJobOrderLocked(sortedJobOrders[i])) return i;
-    }
-    return -1;
-  };
-
-  const previousRecordIndex = nextOpenRecordIndex(-1);
-  const nextRecordIndex = nextOpenRecordIndex(1);
-
   const handlePreviousRecord = () => {
-    if (previousRecordIndex >= 0) {
-      handleRowClick(sortedJobOrders[previousRecordIndex]);
+    if (currentJobOrderIndex > 0) {
+      const prevRecord = sortedJobOrders[currentJobOrderIndex - 1];
+      handleRowClick(prevRecord);
     }
   };
 
   const handleNextRecord = () => {
-    if (nextRecordIndex >= 0) {
-      handleRowClick(sortedJobOrders[nextRecordIndex]);
+    if (currentJobOrderIndex >= 0 && currentJobOrderIndex < sortedJobOrders.length - 1) {
+      const nextRecord = sortedJobOrders[currentJobOrderIndex + 1];
+      handleRowClick(nextRecord);
     }
   };
 
@@ -1285,6 +1249,75 @@ const JobOrderPage: React.FC = () => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
     }
+  };
+
+  const StatusText = ({ status, type }: { status?: string | null, type: 'onsite' | 'billing' }) => {
+    if (!status) return <span className="text-gray-400">-</span>;
+
+    let textColor = '';
+
+    if (type === 'onsite') {
+      switch (status.toLowerCase()) {
+        case 'done':
+        case 'completed':
+          textColor = 'text-green-400';
+          break;
+        // Purple, not blue: sharing blue with "In Progress" made the two
+        // indistinguishable in the table. Matches the sidebar status tree,
+        // which already renders reschedule in purple.
+        case 'reschedule':
+          textColor = 'text-purple-400';
+          break;
+        case 'inprogress':
+        case 'in progress':
+          textColor = 'text-blue-400';
+          break;
+        case 'pending':
+          textColor = 'text-orange-400';
+          break;
+        case 'failed':
+        case 'cancelled':
+          textColor = 'text-red-500';
+          break;
+        default:
+          textColor = 'text-gray-400';
+      }
+    } else {
+      switch (status.toLowerCase()) {
+        case 'done':
+        case 'active':
+        case 'completed':
+        case 'vip':
+        case 'service account':
+          textColor = 'text-green-400';
+          break;
+        case 'pending':
+        case 'in progress':
+          textColor = 'text-orange-400';
+          break;
+        case 'suspended':
+        case 'overdue':
+        case 'cancelled':
+        case 'blacklisted':
+        case 'pullout':
+          textColor = 'text-red-500';
+          break;
+        case 'freeze':
+          textColor = 'text-blue-400';
+          break;
+        case 'inactive':
+          textColor = 'text-gray-400';
+          break;
+        default:
+          textColor = 'text-gray-400';
+      }
+    }
+
+    return (
+      <span className={`${textColor} font-bold uppercase`}>
+        {status === 'inprogress' ? 'In Progress' : status}
+      </span>
+    );
   };
 
   const handleLocationSelect = (locationId: string) => {
@@ -1328,6 +1361,38 @@ const JobOrderPage: React.FC = () => {
       }
     }
   };
+
+  /**
+   * Open the job order a notification pointed at.
+   *
+   * Goes through handleRowClick so the details panel opens exactly as it does on a
+   * real click, including the presence broadcast — a record opened this way should
+   * not be invisible to whoever else is looking at it.
+   *
+   * Tracked by id so it fires once: without this, closing the panel would reopen it
+   * on the next render, and the technician could never get back to the list.
+   */
+  const autoOpenedIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!autoOpenJobOrderId) {
+      autoOpenedIdRef.current = null;
+      return;
+    }
+    if (autoOpenedIdRef.current === autoOpenJobOrderId) return;
+
+    const target = accessibleJobOrders.find(order => String(order.id) === String(autoOpenJobOrderId));
+
+    // The list loads in pages; wait for it rather than fetching separately, so the
+    // opened record is the same object the list holds and stays in sync with refreshes.
+    if (!target) return;
+
+    autoOpenedIdRef.current = autoOpenJobOrderId;
+    handleRowClick(target);
+    // handleRowClick is stable enough for this purpose and adding it would re-run
+    // the effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenJobOrderId, accessibleJobOrders]);
 
   const handleCloseDetails = async () => {
     if (selectedJobOrder) {
@@ -1553,10 +1618,10 @@ const JobOrderPage: React.FC = () => {
         return formatPrice(jobOrder.Installation_Fee || jobOrder.installation_fee);
       case 'billingDay':
         const billingDay = jobOrder.Billing_Day ?? jobOrder.billing_day;
-        if (billingDay === null || billingDay === undefined) return '-';
+        if (billingDay === null || billingDay === undefined || billingDay === '') return '-';
         const dayValue = Number(billingDay);
         if (isNaN(dayValue)) return '-';
-        return dayValue === 0 ? String(getLastDayOfMonth()) : String(dayValue);
+        return dayValue === 0 ? 'Every end of month' : String(dayValue);
       case 'billingStatus':
         return <StatusText status={jobOrder.billing_status || jobOrder.Billing_Status} type="billing" />;
       case 'modemRouterSN':
@@ -1720,10 +1785,31 @@ const JobOrderPage: React.FC = () => {
         const start = jobOrder.start_time || jobOrder.StartTimeStamp || jobOrder.start_timestamp;
         const end = jobOrder.end_time || jobOrder.EndTimeStamp || jobOrder.end_timestamp;
         return getValue(calculateDuration(start, end));
+
+      // Billing attributes. Derived through the same helpers the funnel filters use, so the
+      // column, the filter and the details panel can never disagree about a record.
+      case 'vatType':
+        // Boolean wins; the legacy free-text column is only a fallback for older job orders.
+        return getValue(deriveVatTypeLabel(jobOrder.vat_enabled, jobOrder.vat_type || (jobOrder as any).Vat_Type));
+      case 'generationType':
+        return getValue(normalizeGenerationType(jobOrder.generation_type));
+      case 'expirationDate':
+        // Read from the linked billing account (job_orders has no prepaid column), and only
+        // meaningful for prepaid — a postpaid job order has no rolling period to expire.
+        return isPrepaidGeneration(jobOrder.generation_type)
+          ? formatOnlyDate((jobOrder as any).prepaid_expires_at)
+          : '-';
+      case 'vip':
+        // Job orders carry an explicit flag, unlike customers where VIP is a billing status.
+        return deriveVipLabel(jobOrder.vip_enabled);
     }
   };
 
-  const handleExport = () => {
+  /**
+   * The row-per-job-order export. Unchanged — it is what the Download button has
+   * always produced, and is still the default choice in the chooser.
+   */
+  const exportDefaultCsv = () => {
     if (!sortedJobOrders || sortedJobOrders.length === 0) return;
 
     const exportColumns = allColumns
@@ -1734,7 +1820,74 @@ const JobOrderPage: React.FC = () => {
         return indexA - indexB;
       });
 
-    exportToCSV('job_orders_export', exportColumns, sortedJobOrders, renderCellValue);
+    // Raw number for CSV export; on-screen display keeps ₱ via renderCellValue/formatPrice.
+    const getExportValue = (jobOrder: JobOrder, columnKey: string) => {
+      if (columnKey === 'installationFee') {
+        return Number(jobOrder.Installation_Fee ?? jobOrder.installation_fee ?? 0).toFixed(2);
+      }
+      return renderCellValue(jobOrder, columnKey);
+    };
+
+    exportToCSV('job_orders_export', exportColumns, sortedJobOrders, getExportValue);
+  };
+
+  /** Label used when a job order records no onsite status. */
+  const UNSPECIFIED = 'Unspecified';
+
+  /**
+   * Counts of job orders per onsite status.
+   *
+   * Built from sortedJobOrders, the same set the default export uses, so the report
+   * always describes what is on screen — a report that ignored the active filters
+   * would quietly disagree with the table beside it.
+   */
+  const onsiteStatusReport = useMemo(() => {
+    const rows = sortedJobOrders || [];
+    const counts = new Map<string, number>();
+
+    for (const jo of rows) {
+      const status = String(jo.Onsite_Status || jo.onsite_status || '').trim() || UNSPECIFIED;
+      counts.set(status, (counts.get(status) || 0) + 1);
+    }
+
+    // Largest first, ties broken by name so repeated exports are identical.
+    const statuses = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([status, count]) => ({ status, count }));
+
+    return { statuses, total: statuses.reduce((sum, s) => sum + s.count, 0) };
+  }, [sortedJobOrders]);
+
+  /**
+   * The onsite-status summary as CSV, through the same exportToCSV the row export
+   * uses so both files share one escaping and filename convention.
+   */
+  const exportOnsiteStatusReport = () => {
+    if (onsiteStatusReport.statuses.length === 0) return;
+
+    const reportRows: Array<{ status: string; count: number | string }> = [
+      ...onsiteStatusReport.statuses,
+      { status: '', count: '' },
+      { status: 'TOTAL', count: onsiteStatusReport.total },
+    ];
+
+    exportToCSV(
+      'job_orders_onsite_status_report',
+      [
+        { key: 'status', label: 'Onsite Status' },
+        { key: 'count', label: 'Count' },
+      ],
+      reportRows,
+      (row, key) => (row as any)[key]
+    );
+  };
+
+  /** Runs whichever mode the chooser is on, then closes it. */
+  const handleConfirmDownload = () => {
+    if (downloadMode === 'report') exportOnsiteStatusReport();
+    else exportDefaultCsv();
+
+    setIsDownloadModalOpen(false);
   };
 
   const renderCellDisplay = (jobOrder: JobOrder, columnKey: string) => {
@@ -2321,7 +2474,7 @@ const JobOrderPage: React.FC = () => {
                       }`}>
                       <button
                         onClick={() => {
-                          chooseDisplayMode('card');
+                          setDisplayMode('card');
                           setDropdownOpen(false);
                         }}
                         className={`block w-full text-left px-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
@@ -2335,7 +2488,7 @@ const JobOrderPage: React.FC = () => {
                       </button>
                       <button
                         onClick={() => {
-                          chooseDisplayMode('table');
+                          setDisplayMode('table');
                           setDropdownOpen(false);
                         }}
                         className={`block w-full text-left px-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
@@ -2351,7 +2504,12 @@ const JobOrderPage: React.FC = () => {
                   )}
                 </div>
                 <button
-                  onClick={handleExport}
+                  onClick={() => {
+                    // Always reopens on the default choice, so a previous report
+                    // selection cannot silently hand the next click a different file.
+                    setDownloadMode('default');
+                    setIsDownloadModalOpen(true);
+                  }}
                   disabled={isLoading || sortedJobOrders.length === 0}
                   title="Export to CSV"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
@@ -2517,22 +2675,13 @@ const JobOrderPage: React.FC = () => {
               ) : displayMode === 'card' ? (
                 paginatedJobOrders.length > 0 ? (
                   <div className="space-y-0">
-                    {paginatedJobOrders.map((jobOrder) => {
-                      const locked = isJobOrderLocked(jobOrder);
-                      return (
+                    {paginatedJobOrders.map((jobOrder) => (
                       <div
                         key={jobOrder.id}
-                        onClick={() => {
-                          if (locked) return;
-                          window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder);
-                        }}
-                        title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                        aria-disabled={locked}
-                        className={`px-4 py-3 transition-colors border-b ${locked
-                          ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`
-                          : `cursor-pointer ${isDarkMode
-                            ? `hover:bg-gray-800 border-gray-800 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-800' : ''}`
-                            : `hover:bg-gray-100 border-gray-200 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-100' : ''}`}`
+                        onClick={() => window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder)}
+                        className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
+                          ? `hover:bg-gray-800 border-gray-800 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-800' : ''}`
+                          : `hover:bg-gray-100 border-gray-200 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-100' : ''}`
                           }`}
                       >
                         <div className="flex items-start justify-between">
@@ -2541,11 +2690,6 @@ const JobOrderPage: React.FC = () => {
                               <div className={`font-medium text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                                 {getClientFullName(jobOrder)}
                               </div>
-                              {locked && (
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                                  Locked
-                                </span>
-                              )}
                               {(viewers[String(jobOrder.id)] || []).length > 0 && (
                                 <div className="flex flex-wrap gap-1">
                                   {(viewers[String(jobOrder.id)] || []).map((username: string) => (
@@ -2573,8 +2717,7 @@ const JobOrderPage: React.FC = () => {
                           </div>
                         </div>
                       </div>
-                      );
-                    })}
+                    ))}
                   </div>
                 ) : (
                   <div className={`text-center py-12 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -2653,23 +2796,14 @@ const JobOrderPage: React.FC = () => {
                       </thead>
                       <tbody>
                         {paginatedJobOrders.length > 0 ? (
-                          paginatedJobOrders.map((jobOrder) => {
-                            const locked = isJobOrderLocked(jobOrder);
-                            return (
+                          paginatedJobOrders.map((jobOrder) => (
                             <tr
                               key={jobOrder.id}
-                              className={`border-b transition-colors ${locked
-                                ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`
-                                : `cursor-pointer ${isDarkMode
-                                  ? `border-gray-800 hover:bg-gray-900 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-800' : ''}`
-                                  : `border-gray-200 hover:bg-gray-100 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-100' : ''}`}`
+                              className={`border-b cursor-pointer transition-colors ${isDarkMode
+                                ? `border-gray-800 hover:bg-gray-900 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-800' : ''}`
+                                : `border-gray-200 hover:bg-gray-100 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-100' : ''}`
                                 }`}
-                              title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                              aria-disabled={locked}
-                              onClick={() => {
-                                if (locked) return;
-                                window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder);
-                              }}
+                              onClick={() => window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder)}
                             >
                               {filteredColumns.map((column, index) => {
                                 const cellValue = renderCellValue(jobOrder, column.key);
@@ -2687,11 +2821,6 @@ const JobOrderPage: React.FC = () => {
                                   >
                                     <div className="truncate flex items-center justify-between" title={typeof cellValue === 'string' ? cellValue : undefined}>
                                       <span className="truncate">{cellValue}</span>
-                                      {column.key === 'fullName' && locked && (
-                                        <span className={`ml-2 flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                                          Locked
-                                        </span>
-                                      )}
                                       {column.key === 'fullName' && viewers[String(jobOrder.id)]?.length > 0 && (
                                         <div className="flex items-center gap-1 ml-2 flex-shrink-0">
                                           {viewers[String(jobOrder.id)].map(username => (
@@ -2714,8 +2843,7 @@ const JobOrderPage: React.FC = () => {
                                 );
                               })}
                             </tr>
-                            );
-                          })
+                          ))
                         ) : (
                           <tr>
                             <td colSpan={filteredColumns.length} className={`px-4 py-12 text-center border-b ${isDarkMode ? 'text-gray-400 border-gray-800' : 'text-gray-600 border-gray-200'
@@ -2819,12 +2947,11 @@ const JobOrderPage: React.FC = () => {
         <div className="fixed inset-0 z-50 md:relative md:inset-auto md:z-auto md:flex-shrink-0 md:overflow-hidden">
           <JobOrderDetails
             jobOrder={selectedJobOrder}
-            isTechnicianLocked={isJobOrderLocked(selectedJobOrder)}
             onClose={handleCloseDetails}
             onRefresh={() => fetchUpdates(technicianEmail)}
             isMobile={isMobile}
-            onPrevious={previousRecordIndex >= 0 ? handlePreviousRecord : undefined}
-            onNext={nextRecordIndex >= 0 ? handleNextRecord : undefined}
+            onPrevious={currentJobOrderIndex > 0 ? handlePreviousRecord : undefined}
+            onNext={currentJobOrderIndex < sortedJobOrders.length - 1 ? handleNextRecord : undefined}
             onExpandSection={handleExpandSection}
           />
         </div>
@@ -2841,6 +2968,106 @@ const JobOrderPage: React.FC = () => {
         }}
         currentFilters={activeFilters}
       />
+
+      {/* ── Download options ─────────────────────────────────────────────── */}
+      {isDownloadModalOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
+          onClick={() => setIsDownloadModalOpen(false)}
+        >
+          <div
+            className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
+            // The backdrop closes the chooser; a click inside it must not.
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                Download
+              </h2>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5 space-y-3">
+              {[
+                {
+                  value: 'default' as const,
+                  title: 'Default Download',
+                  description: `All ${sortedJobOrders.length.toLocaleString()} job order${sortedJobOrders.length === 1 ? '' : 's'} currently shown, one row each.`,
+                },
+                {
+                  value: 'report' as const,
+                  title: 'Data Report',
+                  description: onsiteStatusReport.statuses.length > 0
+                    ? `Counts grouped by onsite status — ${onsiteStatusReport.statuses.length} status${onsiteStatusReport.statuses.length === 1 ? '' : 'es'}, ${onsiteStatusReport.total.toLocaleString()} record${onsiteStatusReport.total === 1 ? '' : 's'} in total.`
+                    : 'No job orders to summarise.',
+                },
+              ].map(option => {
+                const isSelected = downloadMode === option.value;
+                // Offering a choice that would produce an empty file is worse than
+                // showing it as unavailable.
+                const isDisabled = option.value === 'report' && onsiteStatusReport.statuses.length === 0;
+
+                return (
+                  <label
+                    key={option.value}
+                    className={`flex items-start gap-3 p-4 rounded-lg border transition-all ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'bg-gray-900/40' : 'bg-white'}`}
+                    style={{
+                      borderColor: isSelected
+                        ? (colorPalette?.primary || '#7c3aed')
+                        : (isDarkMode ? '#374151' : '#e5e7eb'),
+                      backgroundColor: isSelected
+                        ? hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.15 : 0.06)
+                        : undefined,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadMode"
+                      value={option.value}
+                      checked={isSelected}
+                      disabled={isDisabled}
+                      onChange={() => setDownloadMode(option.value)}
+                      className="mt-1 h-4 w-4 flex-shrink-0"
+                      style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                    />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        {option.title}
+                      </div>
+                      <div className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {option.description}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className={`flex justify-end gap-3 px-6 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                onClick={() => setIsDownloadModalOpen(false)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isDarkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDownload}
+                disabled={downloadMode === 'report' && onsiteStatusReport.statuses.length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SessionExpiredModal 
         isOpen={showSessionExpired} 

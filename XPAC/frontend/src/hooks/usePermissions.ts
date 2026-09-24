@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AuthLike,
   ROLE,
+  canOpenSection,
   homeSectionFor,
   permissionsAllow,
   permissionsFor,
@@ -37,6 +38,12 @@ export interface PermissionApi {
   can: (permission: string | string[]) => boolean;
   /** Does the user hold every one of these keys? */
   canAll: (permissions: string[]) => boolean;
+  /**
+   * May the user open this section of the app? Its key, or for a seeded role
+   * a shortcut it has always had outside the menu (WEB_REACHABLE). What the
+   * section guard and the header bell ask; the menu asks `can`.
+   */
+  canOpen: (section: string) => boolean;
   /** The user's effective keys. `['*']` for a SuperAdmin. */
   permissions: string[];
   roleId: number;
@@ -55,9 +62,9 @@ export interface PermissionApi {
  * Permissions for the signed-in user.
  *
  * Re-reads authData when another tab writes it and when the app announces a
- * change itself (config/api.ts fires `auth-changed` after refreshing the stored
- * permissions), so a role edited while the user is signed in takes effect on
- * their next navigation rather than their next sign-in.
+ * change itself (Dashboard fires `auth-changed` after refreshing the stored
+ * permissions from GET /me/permissions), so a role edited while the user is
+ * signed in takes effect on their next load rather than their next sign-in.
  */
 export const usePermissions = (): PermissionApi => {
   const [auth, setAuth] = useState<AuthLike | null>(readAuth);
@@ -87,10 +94,13 @@ export const usePermissions = (): PermissionApi => {
     [permissions]
   );
 
+  const canOpen = useCallback((section: string) => canOpenSection(auth, section), [auth]);
+
   return useMemo(
     () => ({
       can,
       canAll,
+      canOpen,
       permissions,
       roleId,
       roleName: (auth?.role || '').toLowerCase().trim(),
@@ -101,7 +111,7 @@ export const usePermissions = (): PermissionApi => {
       isCustomer: roleId === ROLE.CUSTOMER,
       home: homeSectionFor(auth),
     }),
-    [can, canAll, permissions, roleId, auth]
+    [can, canAll, canOpen, permissions, roleId, auth]
   );
 };
 

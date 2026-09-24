@@ -2,44 +2,31 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Whether a service order's charge has reached the customer's balance.
+ * Records whether a service order's charge has already been posted to the balance.
  *
- * A ticket finishes twice over: a technician marks the visit Done, and support
- * marks the ticket Resolved. Both mean "this job is finished, bill it", so both
- * were posting the service charge — the same charge landing on the account
- * twice for one job.
+ * Two separate transitions each mean "the customer owes for this work" —
+ * support_status reaching Resolved, and visit_status reaching Done — and a service
+ * order normally passes through both on separate saves. Each fired its own balance
+ * update, so a ₱500 charge was added twice: once when the technician closed the
+ * visit, again when support resolved the order.
  *
- * The guard against that used to be arithmetic: read back what
- * `service_charge_logs` says has already been posted for this order and apply
- * only the difference. That is correct when the two saves arrive one after the
- * other, and wrong when they overlap — both requests read the same empty
- * ledger, both compute the full charge as owing, and both post it.
+ * `status` was carrying this meaning informally (written as 'used' after posting)
+ * but it is listed in the update endpoint's allowed fields, so the edit modal posts
+ * it back on every save and a stale form could reset it to 'unused' and re-arm the
+ * charge. This column is deliberately NOT client-writable and not on the model's
+ * $fillable: only the code that actually moves the money sets it.
  *
- * This column is the claim that closes it. Posting the charge means winning a
- * conditional UPDATE from 'pending' to 'added' first; the row lock MySQL takes
- * for that serialises the two saves, and the one that finds the row already
- * 'added' posts nothing. `service_charge_logs` stays the ledger of amounts —
- * this only records whether the posting happened.
- *
- * Values: 'pending' (nothing on the balance yet) and 'added'. Existing rows
- * backfill to 'added' where the order already carries a charge and reads as
- * finished, since those charges are on the balance already and must not be
- * posted again by the next save of an old ticket.
- *
- * Written only by App\Http\Controllers\Api\ServiceOrderApiController::update,
- * never from the request body — which is why it is absent from that method's
- * allowed-field list. A client that could set it could clear it, and clearing
- * it is exactly how you charge a customer twice.
- *
- * Guarded so it is safe to run twice, and on a deployment where the column was
- * added by hand.
+ * Nullable with no default, so 'added' is the only value that ever means "posted"
+ * and a row written before this migration reads as null rather than as a lie.
  */
 return new class extends Migration
 {
-    private const TABLE  = 'service_orders';
+    private const TABLE = 'service_orders';
     private const COLUMN = 'service_charge_status';
 
     public function up(): void
@@ -49,41 +36,47 @@ return new class extends Migration
         }
 
         if (!Schema::hasColumn(self::TABLE, self::COLUMN)) {
-            Schema::table(self::TABLE, function (Blueprint $table) {
-                $table->string(self::COLUMN, 20)
-                    ->default('pending')
-                    ->after('service_charge');
+            Schema::table(self::TABLE, function (Blueprint $table): void {
+                $table->string(self::COLUMN, 20)->nullable()->after('service_charge');
             });
         }
 
-        // Backfill. A ticket that is finished and carries a charge has had that
-        // charge posted by the old code path, so it is 'added' — marking it
-        // 'pending' would invite the next save to post it a second time.
+        // Backfill, or every order charged before today would be charged a second
+        // time on its next qualifying save — the exact bug this column exists to stop.
         //
-        // Anything else is 'pending': an unfinished ticket, or a finished one
-        // with no charge on it, has nothing on the balance to protect.
-        \Illuminate\Support\Facades\DB::table(self::TABLE)
+        // Three signals that money already moved, OR'd together because the most
+        // direct one is unreliable: 'used' is what the old code wrote after posting,
+        // but a stale client could have reset it, so a Done visit or a Resolved
+        // order carrying a charge is treated as already posted too. store() never
+        // touches the balance, so the only way such a row exists is an update() that
+        // ran the posting block.
+        //
+        // Deliberately biased towards over-marking. Marking one row 'added' that was
+        // never posted means a charge someone can notice and add by hand; missing one
+        // means billing a customer twice, which is what we are here to prevent.
+        $backfilled = DB::table(self::TABLE)
             ->whereNull(self::COLUMN)
-            ->update([self::COLUMN => 'pending']);
-
-        \Illuminate\Support\Facades\DB::table(self::TABLE)
-            ->where(self::COLUMN, 'pending')
-            ->where('service_charge', '>', 0)
-            ->where(function ($query) {
-                $query->whereRaw("LOWER(TRIM(COALESCE(support_status, ''))) = 'resolved'")
-                    ->orWhereRaw("LOWER(TRIM(COALESCE(visit_status, ''))) IN ('done', 'completed')");
+            ->whereRaw('COALESCE(service_charge, 0) > 0')
+            ->where(function ($query): void {
+                $query->whereRaw("LOWER(TRIM(COALESCE(status, ''))) = 'used'")
+                    ->orWhereRaw("LOWER(TRIM(COALESCE(visit_status, ''))) = 'done'")
+                    ->orWhereRaw("LOWER(TRIM(COALESCE(support_status, ''))) = 'resolved'");
             })
             ->update([self::COLUMN => 'added']);
+
+        Log::info('Backfilled service_charge_status on existing service orders', ['rows' => $backfilled]);
     }
 
     public function down(): void
     {
-        if (!Schema::hasTable(self::TABLE) || !Schema::hasColumn(self::TABLE, self::COLUMN)) {
+        if (!Schema::hasTable(self::TABLE)) {
             return;
         }
 
-        Schema::table(self::TABLE, function (Blueprint $table) {
-            $table->dropColumn(self::COLUMN);
-        });
+        if (Schema::hasColumn(self::TABLE, self::COLUMN)) {
+            Schema::table(self::TABLE, function (Blueprint $table): void {
+                $table->dropColumn(self::COLUMN);
+            });
+        }
     }
 };

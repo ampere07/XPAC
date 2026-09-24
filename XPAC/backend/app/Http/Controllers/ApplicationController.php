@@ -67,7 +67,7 @@ class ApplicationController extends Controller
             $columns = [
                 'id', 'first_name', 'middle_initial', 'last_name', 
                 'timestamp', 'status', 'city', 'installation_address', 
-                'organization_id', 'created_at', 'updated_at'
+                'organization_id', 'created_at', 'updated_at', 'updated_by'
             ];
 
             if (!$fastMode) {
@@ -117,6 +117,10 @@ class ApplicationController extends Controller
                 $applications = $applications->slice(0, $limit);
             }
 
+            // One query for every agent-id referral on the page (displayName()
+            // alone is a query per id it has not seen).
+            \App\Support\AgentReferral::prime($applications->pluck('referred_by'));
+
             $formattedApplications = $applications->map(function ($app) use ($fastMode) {
                 $data = [
                     'id' => (string)$app->id,
@@ -150,7 +154,7 @@ class ApplicationController extends Controller
                         // Shown as a name; the id travels beside it so an edit form can
                         // write the same referral back instead of turning it into a name.
                         'referred_by' => \App\Support\AgentReferral::displayName($app->referred_by),
-                        'referred_by_agent_id' => \App\Support\AgentReferral::agentId($app->referred_by),
+                        'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($app->referred_by),
                         'proof_of_billing_url' => $app->proof_of_billing_url,
                         'government_valid_id_url' => $app->government_valid_id_url,
                         'secondary_government_valid_id_url' => $app->secondary_government_valid_id_url,
@@ -339,7 +343,7 @@ class ApplicationController extends Controller
                 // Shown as a name; the id travels beside it so an edit form can
                 // write the same referral back instead of turning it into a name.
                 'referred_by' => \App\Support\AgentReferral::displayName($application->referred_by),
-                'referred_by_agent_id' => \App\Support\AgentReferral::agentId($application->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($application->referred_by),
                 'proof_of_billing_url' => $application->proof_of_billing_url,
                 'government_valid_id_url' => $application->government_valid_id_url,
                 'secondary_government_valid_id_url' => $application->secondary_government_valid_id_url,
@@ -420,7 +424,7 @@ class ApplicationController extends Controller
                 // Shown as a name; the id travels beside it so an edit form can
                 // write the same referral back instead of turning it into a name.
                 'referred_by' => \App\Support\AgentReferral::displayName($application->referred_by),
-                'referred_by_agent_id' => \App\Support\AgentReferral::agentId($application->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($application->referred_by),
                 'proof_of_billing_url' => $application->proof_of_billing_url,
                 'government_valid_id_url' => $application->government_valid_id_url,
                 'secondary_government_valid_id_url' => $application->secondary_government_valid_id_url,
@@ -505,7 +509,16 @@ class ApplicationController extends Controller
                 $userEmail = 'System';
             }
             $validatedData['updated_by'] = $userEmail;
-            
+
+            // Responses show an agent-id referral as the agent's name; a form that
+            // echoes that name back must not overwrite the stored id with it.
+            if (array_key_exists('referred_by', $validatedData)) {
+                $validatedData['referred_by'] = \App\Support\AgentReferral::preserveOnWrite(
+                    $validatedData['referred_by'],
+                    $application->referred_by
+                );
+            }
+
             Log::info("=== VALIDATED DATA ===", $validatedData);
             
             $application->fill($validatedData);

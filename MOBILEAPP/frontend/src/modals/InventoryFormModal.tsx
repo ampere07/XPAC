@@ -14,7 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Minus, Plus, Camera, Calendar } from 'lucide-react-native';
-import { API_BASE_URL, authFetch } from '../config/api';
+import apiClient from '../config/api';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import dayjs from 'dayjs';
@@ -95,8 +95,9 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const response = await authFetch(`${API_BASE_URL}/inventory-categories`);
-        const data = await response.json();
+        // apiClient, so the request is signed in (a bare fetch sent no session).
+        const response = await apiClient.get('/inventory-categories');
+        const data = response.data;
         if (data.success) {
           const categoryNames = data.data.map((cat: { id: number; name: string }) => cat.name);
           setCategories(categoryNames);

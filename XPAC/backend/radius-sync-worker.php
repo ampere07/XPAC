@@ -5,7 +5,7 @@
  * Standalone worker for syncing RADIUS user status and session data
  * Runs independently via cron without requiring Laravel Artisan
  * 
- * Cron: * * * * * cd /home/atsscbms/web/backend.atssfiber.ph/public_html && /usr/bin/php artisan cron:sync-radius-status
+ * Cron: * * * * * cd /home/gowiser/web/backend.gowiser.ph/public_html && /usr/bin/php artisan cron:sync-radius-status
  */
 
 define('LARAVEL_START', microtime(true));

@@ -11,6 +11,7 @@ import {
 import { X, RefreshCw } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TransactionRevert, transactionRevertService } from '../services/transactionRevertService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { ColorPalette } from '../services/settingsColorPaletteService';
 import { useBillingStore } from '../store/billingStore';
 import LoadingModal from './common/LoadingModalGlobal';
@@ -228,8 +229,8 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
                         </Text>
                     </View>
                 </View>
-                {renderField('Requested By', currentRevert.requester?.email_address || (currentRevert.requested_by ? `User ID: ${currentRevert.requested_by}` : '-'))}
-                {renderField('Updated By', currentRevert.updater?.email_address || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
+                {renderField('Requested By', getUserDisplayName(currentRevert.requester, currentRevert.requester?.email_address) || (currentRevert.requested_by ? `User ID: ${currentRevert.requested_by}` : '-'))}
+                {renderField('Updated By', getUserDisplayName(currentRevert.updater, currentRevert.updater?.email_address) || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
                 {renderField('Remarks', currentRevert.remarks || 'No remarks')}
                 <View style={{ flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5e7eb' }}>
                     <Text style={{ width: 140, fontSize: 13, color: '#6b7280', flexShrink: 0 }}>Reason</Text>

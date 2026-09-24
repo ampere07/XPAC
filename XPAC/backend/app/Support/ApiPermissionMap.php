@@ -7,9 +7,9 @@ use Illuminate\Support\Str;
 /**
  * What the API requires of a caller, endpoint by endpoint.
  *
- * The routes file grew to ~670 endpoints of which only 46 sat behind
- * `auth:sanctum`; the rest answered anyone who could reach the host. Rather
- * than annotate 600-odd route definitions — and lose the next one that gets
+ * The routes file has ~740 endpoints of which only a handful sit behind
+ * `auth:sanctum`; the rest answer anyone who can reach the host. Rather
+ * than annotate 700-odd route definitions — and lose the next one that gets
  * added without an annotation — the requirement is declared here in one table
  * and applied by App\Http\Middleware\ApiAccessControl to every request in the
  * `api` group.
@@ -39,6 +39,9 @@ use Illuminate\Support\Str;
  * any role — so a newly added route is never anonymous by accident.
  * ApiPermissionCoverageTest fails on any route that is not matched by a rule
  * here, which is what stops that default from quietly becoming the norm.
+ *
+ * Whether a refusal is applied, only logged, or skipped is the rollout mode in
+ * config/permissions.php — see App\Http\Middleware\ApiAccessControl.
  */
 final class ApiPermissionMap
 {
@@ -47,6 +50,34 @@ final class ApiPermissionMap
 
     /** Applied to any path no rule matches: signed in, no particular key. */
     public const DEFAULT_REQUIREMENT = null;
+
+    /**
+     * Keys whose holders open other pages' records read-only, as overlays.
+     *
+     * JobOrderDetails, the Service Order pane, Application Management and the
+     * LCP/NAP Location map open CustomerDetails, TransactionListDetails,
+     * SOADetails, InvoiceDetails, PaymentPortalDetails, InventoryDetails,
+     * ApplicationDetails and PlanListDetails as overlays — for the Technician
+     * (2), OSP (6) and Head Technician (8) as much as for an administrator — and
+     * those panes load their data straight from the owning page's endpoints.
+     * They worked before this table existed, so the READ side of exactly those
+     * endpoints (and the SOA PDF render) accepts these keys as well. The write
+     * side of every one of them is unchanged: an overlay that can be read is not
+     * a licence to post transactions or edit accounts from it.
+     *
+     * Job Order is represented by its working actions rather than by the bare
+     * page key. The Agent (4) holds the `job-order` page to follow their own
+     * referrals and never opens these panes; with the page key here an agent
+     * could read the billing table, every transaction, every payment-portal log
+     * and every statement. Every role that does open them works job orders
+     * (2: tech-edit, 8: admin-edit, 1/7: all) or holds one of the other three
+     * pages, so nothing the clients do is refused. Rules that already accepted
+     * the `job-order` page (job-orders/{id}, applications/{id}) still list it.
+     */
+    private const OVERLAY_READERS = [
+        'job-order.tech-edit', 'job-order.admin-edit', 'job-order.approve', 'job-order.failed', 'job-order.attachment',
+        'service-order', 'application-management', 'lcp-nap-location',
+    ];
 
     /**
      * [pattern, GET requirement, write requirement] with an optional fourth
@@ -78,6 +109,9 @@ final class ApiPermissionMap
         ['login',                        self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['forgot-password',              self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['health',                       self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
+        // "Is my session still good?" The web app asks on boot, signed in or
+        // not, and it answers 200 {authenticated:false} to a stranger.
+        ['auth/session',                 self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['cors-test',                    self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['locations-ping',               self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         // Read by the mobile app before anyone signs in, to decide whether the
@@ -124,12 +158,11 @@ final class ApiPermissionMap
 
         // ── The signed-in user's own account ─────────────────────────────────
         ['user',                         null, null],
-        ['logout',                       null, null],
+        // Deliberately anonymous, like the route itself: logging out must
+        // succeed when the session has already lapsed, or the client gets a
+        // 401 while trying to clean up (see the route in routes/api.php).
+        ['logout',                       self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['me/permissions',               null, null],
-        // The browser reporting its own JavaScript errors. Any signed-in client
-        // may file one about itself; the route is rate limited rather than
-        // gated, since the caller is whoever hit the bug.
-        ['client-log',                   null, null],
         ['user-preferences/*',           null, null],
         ['user-settings/*',              null, null],
         ['broadcasting/auth',            null, null],
@@ -137,9 +170,10 @@ final class ApiPermissionMap
         // A technician's device posts its own position; who may read the trail
         // is the restricted half.
         ['technician-location',          null, null],
-        // Only the Monitoring page draws the live map. Holding Job Order is not
-        // a reason to see where every technician is standing.
-        ['technician-locations*',        'live-monitor', null],
+        // Read by Monitoring and by the Head Technician's screens. The
+        // controller itself admits only Administrator, SuperAdmin and Head
+        // Technician, so signed in is all this table adds.
+        ['technician-locations*',        null, null],
 
         // ── Presence pings ───────────────────────────────────────────────────
         // "who else is looking at this record" — no data returned, and every
@@ -179,6 +213,12 @@ final class ApiPermissionMap
         ['vlan*',                        null, 'vlan-config', 'vlan-config'],
         ['usage-types*',                 null, 'usage-type', 'usage-type'],
         ['payment-methods*',             null, 'payment-method', 'payment-method'],
+        // The bare list is read without credentials by both clients' Assign
+        // Work Order dropdown (a plain fetch), and the controller scopes it by
+        // caller: signed out it returns the shared categories, signed in only
+        // the caller's organisation's. Keeping it anonymous keeps that dropdown
+        // exactly as it was once the gate enforces; the writes keep their keys.
+        ['work-categories',              self::PUBLIC_ACCESS, 'work-category', 'work-category'],
         ['work-categories*',             null, 'work-category', 'work-category'],
         ['router-models*',               null, 'router-models', 'router-models'],
         ['status-remarks*',              null, 'status-remarks-list', 'status-remarks-list'],
@@ -220,24 +260,28 @@ final class ApiPermissionMap
         //
         // roles/* stays open to any signed-in user because the client fetches
         // its own role at sign-in to learn what its menu should contain.
-        // Every role's app registers its own device for push, so this is
-        // "signed in is enough" and has to sit above the users* rule that would
-        // otherwise demand a staff page key from a technician or a customer.
-        ['users/push-token',             null, null],
         // 'inventory' is here because an inventory log records who took an item
         // out and who brought it back, so the log form has to offer the account
         // list — the same reason a job order has to offer technicians.
+        // Written from User Management, Tech Users and Agent Management, which
+        // all post to the same collection; each page's own verb is enough.
         ['users*', [
             'user-management', 'tech-users', 'agent-management', 'team-agent',
             'job-order', 'service-order', 'work-order', 'application-management',
-            'inventory',
-        ], ['user-management', 'tech-users', 'agent-management'], 'user-management'],
+            'inventory', 'commission', 'bonus-history', 'agent-payout', 'agent-invoices',
+        ], ['user-management', 'tech-users', 'agent-management'], [
+            'POST'   => ['user-management.create', 'tech-users.create', 'agent-management'],
+            'PUT'    => ['user-management.edit', 'tech-users.edit', 'agent-management'],
+            'PATCH'  => ['user-management.edit', 'tech-users.edit', 'agent-management'],
+            'DELETE' => ['user-management.delete', 'tech-users.delete', 'agent-management'],
+        ]],
         ['technicians*', [
             'tech-users', 'user-management',
             'job-order', 'service-order', 'work-order', 'application-management',
         ], 'tech-users', 'tech-users'],
         ['agents*', [
-            'agent-management', 'team-agent', 'bonus-history', 'agent-payout',
+            'agent-management', 'team-agent', 'bonus-history', 'agent-payout', 'commission',
+            'agent-invoices', 'agent-dashboard', 'agent-application',
             'job-order', 'work-order', 'application-management',
         ], ['agent-management', 'team-agent']],
         ['roles*',                       null, 'roles', 'roles'],
@@ -258,57 +302,80 @@ final class ApiPermissionMap
         // One application, as opposed to the list of them. A job order *is* an
         // application that was scheduled, and both the job order pane and the
         // technician's Done form read the original submission back, so the read
-        // side names those pages too.
+        // side names those pages too — and the LCP/NAP map, whose pins open the
+        // same ApplicationDetails / CustomerDetails panes (OVERLAY_READERS).
         //
-        // The collection below stays the Application Management page's own:
-        // holding Job Order is a reason to see the application behind the order
-        // in front of you, not to enumerate every application ever submitted.
-        ['applications/*',               ['application-management', 'job-order', 'service-order'], ['application-management', 'agent-application']],
-        ['applications*',                'application-management', ['application-management', 'agent-application']],
+        // The Job Order Done forms (technician and administrator) write the
+        // application behind the order back, so their keys are on the write
+        // side of the single-record rule too. Uploading from the LCP/NAP pane
+        // is NOT on it: see the audit notes (a write reached only through an
+        // overlay is not widened here).
+        ['applications/*',               ['job-order', 'agent-application', ...self::OVERLAY_READERS], ['application-management', 'agent-application', 'job-order.tech-edit', 'job-order.admin-edit']],
+        // The collection itself. ApplicationDetails, opened from a job order,
+        // a service order or the LCP/NAP map, looks the record up through the
+        // list endpoint (applicationService), so those pages read it too.
+        // Writing (a new application) stays the Application page's and the
+        // agent form's.
+        ['applications',                 ['agent-application', ...self::OVERLAY_READERS], ['application-management', 'agent-application']],
+        ['applications*',                ['application-management', 'agent-application'], ['application-management', 'agent-application']],
         ['application-visits*',          'application-management', 'application-management'],
 
         // ── Job orders ───────────────────────────────────────────────────────
         ['job-orders/*/approve',         'job-order.approve', 'job-order.approve'],
         ['job-orders/*/create-radius-account', ['job-order.approve', 'radius-config'], ['job-order.approve', 'radius-config']],
-        ['job-orders/*/enable-technician', 'job-order.admin-edit', 'job-order.admin-edit'],
         ['job-orders/*/upload-images',   'job-order.attachment', 'job-order.attachment'],
         ['job-orders/by-account/*',      null, 'job-order'],
         ['job-orders/by-item/*',         null, 'job-order'],
         ['job-orders/lookup/*',          'job-order', 'job-order'],
         ['job-orders/validate-sn',       'job-order', 'job-order'],
+        // One job order (GET job-orders/{id}), read by the overlays in
+        // OVERLAY_READERS — PlanListDetails on the LCP/NAP map, for one. Every
+        // other GET under job-orders/ has its own rule above, so this widens
+        // the single-record read and nothing else. The write side is the
+        // collection's, unchanged.
+        ['job-orders/*',                 ['job-order', ...self::OVERLAY_READERS], ['job-order.tech-edit', 'job-order.admin-edit', 'application-management.move-to-jo']],
         ['job-orders*',                  'job-order', ['job-order.tech-edit', 'job-order.admin-edit', 'application-management.move-to-jo']],
         ['job-order-items*',             'job-order', ['job-order.tech-edit', 'job-order.admin-edit']],
 
         // ── Service orders ───────────────────────────────────────────────────
         // Both spellings of the prefix are registered in routes/api.php.
-        ['service-orders/*/enable-technician', 'service-order.admin-edit', 'service-order.admin-edit'],
-        ['service_orders/*/enable-technician', 'service-order.admin-edit', 'service-order.admin-edit'],
         ['service-orders/by-account/*',  null, 'service-order'],
         ['service-orders/by-item/*',     null, 'service-order'],
-        // The customer portal's Support page: a customer lists their own
-        // tickets and files a new one. Both are pinned to their own account_no
-        // in ServiceOrderApiController — a customer carries no organization, so
-        // the org filter there does not scope them on its own.
+        // The customer portal's Support page: a customer lists their tickets
+        // and files a new one. NOTE (GOWISER): ServiceOrderApiController does
+        // NOT pin a customer to their own account_no — a customer carries no
+        // organization, so its org filter does not scope them either. This
+        // table only decides who may call the endpoint; row scoping for the
+        // portal is a separate, pre-existing gap (it was fully open before).
         //
         // These sit on the bare collection path deliberately. The wildcard rules
         // beneath cover service-orders/{id}, so reading someone else's ticket,
         // editing one and deleting one all stay closed to 'customer-support'.
         ['service-orders',               ['service-order', 'customer-support'], ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request', 'customer-support']],
         ['service_orders',               ['service-order', 'customer-support'], ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request', 'customer-support']],
+        // One service order (GET service-orders/{id}), read by the overlays in
+        // OVERLAY_READERS (CustomerDetails' related-records tabs). by-account and
+        // by-item have their own rules above; the write side is unchanged.
+        ['service-orders/*',             self::OVERLAY_READERS, ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request']],
         ['service-orders*',              'service-order', ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request']],
         ['service_orders*',              'service-order', ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request']],
         ['service-order-items*',         'service-order', ['service-order.tech-edit', 'service-order.admin-edit']],
         ['service_order_items*',         'service-order', ['service-order.tech-edit', 'service-order.admin-edit']],
 
         // ── Work orders ──────────────────────────────────────────────────────
-        // Reading is for anyone who holds the page — an agent sees the jobs
-        // they referred. Raising, reassigning or deleting one is not.
-        ['work-orders*',                 'work-order', 'work-order.manage'],
+        // Anyone who holds the page reads and works (edits, uploads to) the
+        // orders in front of them — Edit was never gated on either client.
+        // Raising one (Add Work Order) and deleting one is work-order.manage.
+        ['work-orders',                  'work-order', 'work-order.manage'],
+        ['work-orders*',                 'work-order', 'work-order', ['DELETE' => 'work-order.manage']],
 
         // ── Customers and their billing ──────────────────────────────────────
         // The customer portal reads the same records for the account it belongs
-        // to, so the customer keys sit alongside the admin ones. Controllers
-        // scope those reads to the signed-in account.
+        // to, so the customer keys sit alongside the admin ones. NOTE
+        // (GOWISER): there is no CustomerScope here — the account_no a portal
+        // caller sends is not checked against their own account by these
+        // controllers. That predates this table (the routes were open to
+        // anyone); the keys below narrow who can call, not which rows.
         // The subscriber list and the detail pane behind it. Named page by page
         // rather than left open to any signed-in user: a technician's work is
         // the job order in front of them, not the subscriber book, and an agent
@@ -319,18 +386,19 @@ final class ApiPermissionMap
         // portal's keys here would have handed a signed-in subscriber the whole
         // subscriber book.
         ['customers*', [
-            'customer',
+            'customer', 'customer.details-edit',
             'application-management', 'transaction-list', 'payment-portal',
             'soa', 'invoice', 'overdue', 'dc-notice', 'so-charge',
             'mass-rebate', 'discounts', 'staggered-payment',
         ], ['customer.details-edit', 'application-management']],
-        // Also opened from a service order's detail pane, which is a
-        // technician's screen.
+        // Also opened from the job order, service order, application and LCP/NAP
+        // panes (OVERLAY_READERS), which are the technicians' screens.
         ['customer-detail/*', [
-            'customer', 'customer-dashboard', 'customer-bills',
-            'service-order', 'application-management', 'transaction-list',
+            'customer', 'customer-dashboard', 'customer-bills', 'customer.details-edit',
+            'transaction-list',
             'payment-portal', 'soa', 'invoice', 'overdue', 'dc-notice',
             'so-charge', 'mass-rebate', 'discounts', 'staggered-payment',
+            ...self::OVERLAY_READERS,
         // Editing is the Customer page's own key alone. Job Order's admin-edit
         // is a different job: holding it should not carry the right to rewrite
         // a subscriber's record.
@@ -348,56 +416,89 @@ final class ApiPermissionMap
         ['billing-details*',             ['customer', 'customer-bills', 'customer-dashboard'], 'customer.details-edit'],
         ['billing_details*',             ['customer', 'customer-bills', 'customer-dashboard'], 'customer.details-edit'],
         // One account's billing record, read from the service order edit form to
-        // show the balance the order is being raised against.
+        // show the balance the order is being raised against, and by the
+        // overlays in OVERLAY_READERS (LcpNapLocationDetails, PlanListDetails).
         //
         // The two helpers are listed first, unchanged, so that widening applies
         // to billing/{accountNo} alone: `*` spans slashes, and a technician has
-        // no reason to page the active-account list or the whole billing table
-        // through the bare collection two rules down.
+        // no reason to page the active-account list through them.
+        //
+        // The bare collection (GET billing) is read by TransactionListDetails,
+        // which the overlays open, so it carries OVERLAY_READERS as well — the
+        // same reach those roles had before this table existed.
+        ['billing',                      ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['customer.transact', 'billing-config']],
         ['billing/accounts/*',           ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard'], ['customer.transact', 'billing-config']],
         ['billing/check-updates',        ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard'], ['customer.transact', 'billing-config']],
-        ['billing/*',                    ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard', 'service-order'], ['customer.transact', 'billing-config']],
+        ['billing/*',                    ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['customer.transact', 'billing-config']],
         ['billing*',                     ['customer', 'soa', 'invoice', 'overdue', 'customer-bills', 'customer-dashboard'], ['customer.transact', 'billing-config']],
         ['cron-test/*',                  ['customer', 'settings'], ['customer', 'settings']],
 
         ['transactions/batch-approve',   'transaction-list.batch-approve', 'transaction-list.batch-approve'],
         ['transactions/*/approve',       'transaction-list.approve', 'transaction-list.approve'],
         ['transactions/*/revert',        'transaction-list.revert-request', 'transaction-list.revert-request'],
-        ['transactions/*/status',        'transaction-list', 'transaction-list.approve'],
+        // Mark as Failed is an ungated button on the transaction pane.
+        ['transactions/*/status',        'transaction-list', ['transaction-list.approve', 'transaction-list']],
         ['transactions/upload-images',   'customer.transact', 'customer.transact'],
-        ['transactions/by-account/*',    ['transaction-list', 'customer', 'customer-bills', 'customer-dashboard'], 'customer.transact'],
+        ['transactions/by-account/*',    ['transaction-list', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'customer.transact'],
+        // Kept exactly as it was: no overlay reads it, so OVERLAY_READERS below
+        // does not reach it.
+        ['transactions/*/details',       ['transaction-list', 'customer'], ['customer.transact', 'transaction-list'], ['DELETE' => 'transaction-list.delete']],
         // Staff only, for the same reason as the subscriber collection: the
         // portal reads transactions/by-account/{accountNo}, which is the rule
-        // directly above and does carry the portal's keys.
+        // directly above and does carry the portal's keys. One transaction and
+        // its receipt are also read by the overlays (TransactionListDetails).
+        // Edit Transaction is ungated on the pane; deleting one is SuperAdmin's.
+        ['transactions/*',               ['transaction-list', 'customer', ...self::OVERLAY_READERS], ['customer.transact', 'transaction-list'], ['DELETE' => 'transaction-list.delete']],
         ['transactions*',                ['transaction-list', 'customer'], 'customer.transact'],
-        ['transaction-reverts/*/status', 'transactions-revert', 'transactions-revert'],
+        ['transaction-reverts/*/status', 'transactions-revert', 'transactions-revert.approve'],
         ['transaction-reverts*',         'transactions-revert', ['transactions-revert', 'transaction-list.revert-request']],
 
-        ['statement-of-accounts*',       ['soa', 'customer', 'customer-bills', 'customer-dashboard'], 'soa'],
-        ['soa-records',                  ['soa', 'customer', 'customer-bills', 'customer-dashboard'], ['soa', 'soa-generation.manage']],
+        // Prepaid Override: raised from the customer pane, decided on the
+        // Prepaid Override page (SuperAdmin alone today).
+        ['prepaid-overrides/*/status',   ['prepaid-override', 'customer.prepaid-override'], 'prepaid-override.approve'],
+        ['prepaid-overrides*',           ['prepaid-override', 'customer.prepaid-override', 'customer'], ['customer.prepaid-override', 'prepaid-override.approve']],
+
+        // The mobile customer Bills screen renders its statement PDF through
+        // this path (the web app uses soa/{id}/generate-pdf below), so the
+        // portal's keys are on its write side. Only renders a PDF.
+        ['statement-of-accounts/*/generate-pdf', ['soa', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['soa', 'customer-bills', 'customer-dashboard']],
+        ['statement-of-accounts*',       ['soa', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'soa'],
+        ['soa-records',                  ['soa', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['soa', 'soa-generation.manage']],
         // soa/{id}/generate-pdf is the only route here, and it is a POST that a
         // customer makes for their own statement from the portal's Bills page —
         // so the portal's keys are on the write side, not just the read one.
-        // The route itself confines a portal caller to their own account; see
-        // routes/api.php, where CustomerScope guards it.
+        // SOADetails, opened from the overlays, renders the same PDF. It only
+        // renders; nothing is written.
+        // (No per-account check on this route in GOWISER; see the note at the
+        // top of this block.)
+        ['soa/*/generate-pdf',           ['soa', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['soa', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS]],
         ['soa/*',                        ['soa', 'customer', 'customer-bills', 'customer-dashboard'], ['soa', 'customer-bills', 'customer-dashboard']],
         ['invoice-records',              ['invoice', 'customer', 'customer-bills', 'customer-dashboard'], 'invoice'],
-        ['invoices/*',                   ['invoice', 'customer', 'customer-bills', 'customer-dashboard'], 'invoice'],
+        // invoices/by-account/{accountNo} and invoices/{id} — both read by the
+        // overlays' CustomerDetails / InvoiceDetails panes.
+        ['invoices/*',                   ['invoice', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'invoice'],
         ['overdues*',                    ['overdue', 'customer', 'customer-bills', 'customer-dashboard'], 'overdue'],
         ['dc-notices*',                  'dc-notice', 'dc-notice'],
         // The customer portal's Dashboard and Bills pages both read the signed-in
-        // customer's own charges. CustomerScope pins the query to their account in
-        // routes/api.php — the account_no they send is a filter, not a boundary.
+        // customer's own charges, filtered by the account_no they send (a filter,
+        // not a boundary — see the note at the top of this block).
         ['service-charges*',             ['so-charge', 'customer', 'customer-dashboard', 'customer-bills'], 'so-charge'],
+        // CustomerDetails' related-records tabs, one account at a time. The
+        // overlays (OVERLAY_READERS) open CustomerDetails, so they read these;
+        // the rest of each family keeps its own page.
+        ['service-charge-logs/by-account/*', ['so-charge', 'customer', ...self::OVERLAY_READERS], 'so-charge'],
         ['service-charge-logs/*',        ['so-charge', 'customer'], 'so-charge'],
+        ['discounts/by-account/*',       ['discounts', ...self::OVERLAY_READERS], 'discounts.add'],
         ['discounts*',                   'discounts', 'discounts.add'],
         ['mass-rebates*',                'mass-rebate', 'mass-rebate.add'],
         ['rebates*',                     ['mass-rebate', 'customer'], 'mass-rebate.add'],
+        ['staggered-installations/by-account/*', ['staggered-payment', ...self::OVERLAY_READERS], 'staggered-payment.add'],
         ['staggered-installations*',     'staggered-payment', 'staggered-payment.add'],
         ['installment-schedules*',       ['staggered-payment', 'customer', 'customer-bills'], 'staggered-payment.add'],
         ['installments*',                ['staggered-payment', 'customer', 'customer-bills'], 'staggered-payment.add'],
         ['advanced-payments*',           ['customer', 'payment-portal', 'customer-bills', 'customer-dashboard'], ['customer.transact', 'payment-portal']],
-        ['payment-portal-logs*',         ['payment-portal', 'customer', 'customer-bills', 'customer-dashboard'], 'payment-portal'],
+        // Every read here is a pane CustomerDetails / PaymentPortalDetails opens.
+        ['payment-portal-logs*',         ['payment-portal', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'payment-portal'],
         // A customer pays their own bill from the portal; an administrator
         // takes a payment from the Payment Portal page. Both are signed in.
         ['payments/*',                   null, null],
@@ -436,11 +537,21 @@ final class ApiPermissionMap
         // ── Inventory ────────────────────────────────────────────────────────
         // Items are read from the job/service/work order forms that consume
         // them; only the Inventory pages may change stock.
+        // The category list is lookup data: the job, service and work order
+        // forms fill their item pickers from it (and the mobile app loads it
+        // for every role at start-up). Reading it is signed-in only; changing
+        // it is still the category page's.
+        ['inventory-categories',         null, 'inventory-category-list'],
         ['inventory-categories*',        ['inventory', 'inventory-category-list'], 'inventory-category-list'],
+        // One item's movement history, shown by InventoryDetails, which the
+        // overlays (OVERLAY_READERS) open from the items on an order. Logging a
+        // movement (POST inventory-logs) stays the Inventory page's.
+        ['inventory-logs/by-item/*',     ['inventory', ...self::OVERLAY_READERS], 'inventory'],
         ['inventory-logs*',              'inventory', 'inventory'],
         ['inventory-items*',             ['inventory', 'job-order', 'service-order', 'work-order'], 'inventory'],
         ['inventory*',                   ['inventory', 'job-order', 'service-order', 'work-order'], 'inventory'],
         ['borrowed-logs/*',              'inventory', 'inventory'],
+        ['defective-logs/by-item/*',     ['inventory', ...self::OVERLAY_READERS], 'inventory'],
         ['defective-logs/*',             'inventory', 'inventory'],
 
         // ── Agents ───────────────────────────────────────────────────────────
@@ -449,17 +560,24 @@ final class ApiPermissionMap
         ['agent-invoices/generate',      'agent-invoices.generate', 'agent-invoices.generate'],
         ['agent-invoices/*/status',      'agent-invoices.status', 'agent-invoices.status'],
         ['agent-invoices*',              'agent-invoices', 'agent-invoices.generate'],
-        ['commissions/*/approve',        'agent-payout.approve', 'agent-payout.approve'],
-        ['commissions/*/reject',         'agent-payout.approve', 'agent-payout.approve'],
+        // Approving or rejecting: a payout on agent-payout.approve, a bonus on
+        // bonus-history.payout. CommissionController checks the same keys
+        // itself (App\Support\AgentAccess), in every rollout mode.
+        ['commissions/bonus-history/*/approve', 'bonus-history.payout', 'bonus-history.payout'],
+        ['commissions/bonus-history/*/reject',  'bonus-history.payout', 'bonus-history.payout'],
+        ['commissions/history/*/approve', 'agent-payout.approve', 'agent-payout.approve'],
+        ['commissions/history/*/reject', 'agent-payout.approve', 'agent-payout.approve'],
         // Claiming an achievement is the agent's own act, so the page key is
         // enough: storeAchievement() discards any agent_id a non-admin sends
         // and credits the caller.
-        ['commissions/achievements',     'bonus-history', 'bonus-history'],
-        // Reading is the page — getHistory() scopes a non-admin to their own
-        // rows — while recording a payout is the button on it. The key is
-        // 'bonus-history'; 'commission' was never a key any role holds, so this
-        // rule refused every caller but SuperAdmin.
-        ['commissions*',                 'bonus-history', 'bonus-history.payout'],
+        ['commissions/achievements',     ['bonus-history', 'agent-dashboard', 'commission'], ['bonus-history', 'agent-dashboard', 'commission']],
+        // Adding a bonus: Bonus History's button, or Pay Out/In's Add Record.
+        ['commissions/bonus-history',    ['bonus-history', 'commission', 'agent-payout'], ['bonus-history.payout', 'commission.create']],
+        // Raising a payout: Pay Out/In, Agent Payout, Team Agents' Record
+        // Payout, or an agent invoice's Pay Out.
+        ['commissions/history',          ['bonus-history', 'commission', 'agent-payout', 'team-agent', 'agent-invoices'], ['agent-payout', 'commission.create', 'agent-invoices.payout']],
+        // Reading is scoped by the controller — a non-admin reads their own.
+        ['commissions*',                 ['bonus-history', 'commission', 'agent-payout', 'team-agent', 'agent-dashboard', 'agent-invoices'], ['commission.create', 'bonus-history.payout']],
 
         // ── Messaging ────────────────────────────────────────────────────────
         ['sms-blast*',                   'sms-blast', 'sms-blast'],
@@ -474,13 +592,29 @@ final class ApiPermissionMap
         ['reports/settings',             'reports', 'reports.manage'],
         ['reports*',                     'reports', 'reports.manage', ['DELETE' => 'reports.delete']],
         ['data-logs',                    'data-logs', 'data-logs'],
+        // One account's history, shown on CustomerDetails, which the overlays
+        // (OVERLAY_READERS) open. The log pages themselves keep their own key.
+        ['disconnected-logs/by-account/*', ['disconnected-logs', ...self::OVERLAY_READERS], 'disconnected-logs'],
         ['disconnected-logs*',           'disconnected-logs', 'disconnected-logs'],
         ['disconnection-logs',           'disconnected-logs', 'disconnected-logs'],
+        ['reconnection-logs/by-account/*', ['reconnection-logs', ...self::OVERLAY_READERS], 'reconnection-logs'],
         ['reconnection-logs*',           'reconnection-logs', 'reconnection-logs'],
-        ['modem-router-logs*',           'modem-router-logs', 'modem-router-logs'],
-        // Read-only: the queue is written by the workers, never from the UI.
-        ['radius-queue',                 'radius-queue', 'radius-queue'],
-        ['expenses-logs',                'expenses-log', 'expenses-log'],
+        // ── Expenses ─────────────────────────────────────────────────────────
+        // One API behind the web Expenses page and the Expenses log (web and
+        // mobile). POST /{id} is the multipart update (_method=PUT arrives as
+        // PUT; a bare POST to an id is still an edit).
+        ['expenses-logs',                ['expenses', 'expenses-log'], 'expenses', 'expenses'],
+        ['expenses-logs/*',              ['expenses', 'expenses-log'], 'expenses', [
+            'POST' => 'expenses.edit', 'PUT' => 'expenses.edit', 'PATCH' => 'expenses.edit', 'DELETE' => 'expenses.delete',
+        ]],
+        // Categories are read by every expense and payable form.
+        ['expenses-categories*',         null, 'expenses-category', 'expenses-category'],
+        ['monthly-payables/generate',    'monthly-payables', 'monthly-payables.generate'],
+        ['monthly-payables/*/payments*', 'monthly-payables', 'monthly-payables.pay'],
+        ['monthly-payables/*',           'monthly-payables', 'monthly-payables', [
+            'POST' => 'monthly-payables.edit', 'PUT' => 'monthly-payables.edit', 'PATCH' => 'monthly-payables.edit', 'DELETE' => 'monthly-payables.delete',
+        ]],
+        ['monthly-payables',             'monthly-payables', 'monthly-payables', 'monthly-payables'],
         ['file-logs/*',                  ['smart-olt-logs', 'radius-logs', 'system-logs'], 'system-logs'],
         ['logs*',                        'system-logs', 'system-logs'],
     ];

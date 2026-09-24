@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { View, Text, Pressable, TextInput, ScrollView, Alert, Linking, useWindowDimensions, Modal, PanResponder, Animated, RefreshControl, KeyboardAvoidingView, Platform, StyleSheet, DeviceEventEmitter } from 'react-native';
+import { View, Text, Pressable, TextInput, ScrollView, ActivityIndicator, Alert, Linking, useWindowDimensions, Modal, PanResponder, Animated, RefreshControl, KeyboardAvoidingView, Platform, StyleSheet, DeviceEventEmitter } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as LinkingExpo from 'expo-linking';
 import { User, Activity, Clock, Users, FileText, CheckCircle, HelpCircle, RefreshCcw, AlertCircle } from 'lucide-react-native';
@@ -8,52 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { paymentService, PendingPayment } from '../services/paymentService';
 import { useCustomerDataContext } from '../contexts/CustomerDataContext';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { reportClientEvent } from '../services/clientLogService';
-import { SESSION_EXPIRED_EVENT } from '../config/api';
-
-/**
- * A pulsing placeholder block.
- *
- * Rendered instead of a number that has not arrived. The balance card would otherwise
- * show a confident zero while the request is still in flight, which reads as "you owe
- * nothing" rather than "not loaded yet".
- */
-const Skeleton: React.FC<{
-  width: number | string;
-  height: number;
-  radius?: number;
-  light?: boolean;
-  style?: any;
-}> = ({ width, height, radius = 8, light = false, style }) => {
-  const pulse = React.useRef(new Animated.Value(0.35)).current;
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 0.85, duration: 700, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0.35, duration: 700, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [pulse]);
-
-  return (
-    <Animated.View
-      accessibilityLabel="Loading"
-      style={[
-        {
-          width: width as any,
-          height,
-          borderRadius: radius,
-          backgroundColor: light ? 'rgba(255,255,255,0.35)' : '#e5e7eb',
-          opacity: pulse,
-        },
-        style,
-      ]}
-    />
-  );
-};
+import { planService, Plan } from '../services/planService';
 
 interface Payment {
     id: string;
@@ -72,63 +27,38 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const { width, height } = useWindowDimensions();
     const isMobile = width < 768;
     const isShort = height < 700;
-    // paySummary and its own flag rather than contextLoading: the amount due comes from a
-    // dedicated one-row request, so it must not wait on the list calls this card does
-    // not render.
-    const {
-        customerDetail,
-        paySummary,
-        isPaySummaryLoading,
-        isFromCache,
-        payments,
-        invoiceRecords,
-        isLoading: contextLoading,
-        hasAttemptedLoad,
-        silentRefresh,
-    } = useCustomerDataContext();
+    const { customerDetail, payments, invoiceRecords, billingType, isPrepaid, isLoading: contextLoading, silentRefresh } = useCustomerDataContext();
     const [user, setUser] = useState<any>(null);
-
-    // An expired session is not a balance failure.
-    //
-    // Customers routinely stay signed in between visits rather than logging out, so a
-    // stale token is an ordinary state here. Every staff page in this app already
-    // watches the fetch error for an auth failure and offers a re-login; this page,
-    // the only customer-facing one, did not — so a customer whose token had lapsed sat
-    // on a dashboard reading unavailable, with a Pay Now that could never work and
-    // nothing telling them to sign in again, while each visit filed a
-    // balance-unavailable report against what was really an authentication fault.
-    //
-    // Detected from SESSION_EXPIRED_EVENT rather than from contextError, because the
-    // message this used to search was never going to contain what it was looking for.
-    // getCustomerDetail and getCustomerPaySummary each swallow their own failure and
-    // return null, so a 401 never reached the context as a status — it re-threw
-    // 'Could not fetch customer details', this test for '401' failed, and a customer
-    // with an expired token got a balance card reading Unavailable with their name and
-    // account number still showing from the stale authData behind it. The interceptor
-    // is the only place that still has the status, so that is where the event is raised.
-    //
-    // The modal itself now lives in App.tsx: the credential belongs to the app, not to
-    // this screen, and the old handler here only removed authData — which left the app
-    // sitting on a dashboard it could not load until it was restarted, instead of
-    // returning to the login screen.
-    //
-    // The ref exists as well as the state because the suppression below must not depend
-    // on render timing: the interceptor emits synchronously as the 401 arrives, which is
-    // before the rejection reaches the context and clears its loading flags.
-    const [showSessionExpired, setShowSessionExpired] = useState(false);
-    const sessionExpiredRef = React.useRef(false);
-    useEffect(() => {
-        const subscription = DeviceEventEmitter.addListener(SESSION_EXPIRED_EVENT, () => {
-            sessionExpiredRef.current = true;
-            setShowSessionExpired(true);
-        });
-
-        return () => subscription.remove();
-    }, []);
 
     const [isPaymentProcessing, setIsPaymentProcessing] = useState<boolean>(false);
     const [showPaymentVerifyModal, setShowPaymentVerifyModal] = useState<boolean>(false);
     const [paymentAmount, setPaymentAmount] = useState<number>(0);
+
+    // ── Prepaid plan selection ──────────────────────────────────────────────
+    // Prepaid customers buy a service period at a plan's price, so they pick the plan they are
+    // paying for and the amount follows it. Postpaid is untouched: they keep paying their balance.
+    const [plans, setPlans] = useState<Plan[]>([]);
+    const [isLoadingPlans, setIsLoadingPlans] = useState<boolean>(false);
+    const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
+    const [isPlanListOpen, setIsPlanListOpen] = useState<boolean>(false);
+    // Prepaid-only: "Pay Current Balance" mode — settle the outstanding balance directly
+    // instead of buying a plan/plan-change (no plan_id is sent when this is on).
+    const [payCurrentBalance, setPayCurrentBalance] = useState<boolean>(false);
+    // Prepaid-only: start the newly bought plan immediately, forfeiting the days remaining on the
+    // current one, instead of queueing the switch for when the period lapses. Opt-in, and only
+    // ever offered when there is actually something to forfeit — see canActivateNow.
+    const [activateNow, setActivateNow] = useState<boolean>(false);
+    // Prepaid onboarding re-price: a customer who has not paid their first bill yet may still swap
+    // plan, which re-prices that unpaid bill. The server quotes the real amount (plan + VAT minus
+    // withholding) so the tax maths is never duplicated here.
+    const [onboardingQuoteAmount, setOnboardingQuoteAmount] = useState<number | null>(null);
+    const [isQuotingPlan, setIsQuotingPlan] = useState<boolean>(false);
+    // Whether this account is in that window at all. Resolved when the modal opens, BEFORE any
+    // plan is picked - the cheaper plans must be selectable for a quote to ever happen.
+    const [canRepriceOnboarding, setCanRepriceOnboarding] = useState<boolean>(false);
+    // Convenience fee rate the ISP adds on top of an online payment (2.5 = 2.5%). Disclosed under
+    // the amount field so the customer is not surprised by a higher total at the gateway. 0 = none.
+    const [convenienceFeePercentage, setConvenienceFeePercentage] = useState<number>(0);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -238,98 +168,146 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         ? `${customerDetail.firstName.charAt(0)}${customerDetail.lastName.charAt(0)}`.toUpperCase()
         : displayName.split(' ').map((n: any) => n[0]).join('').substring(0, 2).toUpperCase();
     const accountNo = customerDetail?.billingAccount?.accountNo || user?.username || 'N/A';
-    // "No Plan" is a claim about the account, so it is only said once the record is
-    // actually here. Every customer in the database has a plan; a blank one meant the
-    // fetch had not landed, and the surrounding fields kept looking right because they
-    // fall back to stored authData rather than to this record.
-    const planKnown = !!customerDetail;
     const planName = customerDetail?.desiredPlan || 'No Plan';
     const address = customerDetail?.address || 'No Address';
     const installationDate = customerDetail?.billingAccount?.dateInstalled || 'Pending';
-    // The pay-summary first, the full detail only as a fallback for when that request
-    // fails. Losing the fast path should cost speed, not the ability to pay.
-    const rawBalance = paySummary
-        ? paySummary.accountBalance
-        : customerDetail?.billingAccount?.accountBalance;
-    const balance = Number(rawBalance) || 0;
-
-    // A settled account legitimately reads 0, so only a missing/unparsable value counts
-    // as "not loaded yet". `|| 0` collapsed the two, which is what rendered a confident
-    // zero while the request was still in flight.
-    const balanceKnown = rawBalance !== null && rawBalance !== undefined
-        && String(rawBalance).trim() !== '' && !isNaN(Number(rawBalance));
-
-    // Showing a figure and charging against it are different bars. A balance restored from
-    // the last visit is worth reading — far better than a skeleton on a phone connection —
-    // but it may have moved since, so Pay Now stays locked until the server confirms it.
-    //
-    // Gated on the pay-summary alone, deliberately not on contextLoading as well: making
-    // the button wait for the whole batch is exactly what it used to do, and a slow SOA or
-    // service-order call (neither of which this card renders) kept the amount due
-    // shimmering and the button reading '...'.
-    const balanceConfirmed = balanceKnown && !isPaySummaryLoading && !isFromCache;
-
-    // Still on the restored snapshot after the request finished, which means it did not
-    // land. Distinguished from "still arriving" so the card can offer a retry instead of
-    // sitting on a cached figure claiming to be checking for updates forever.
-    const revalidateInFlight = isFromCache && isPaySummaryLoading;
-    const revalidateFailed = isFromCache && !isPaySummaryLoading;
-
-    // Nothing is in flight any more and still no figure arrived.
-    //
-    // The skeleton below used to be the only alternative to a known balance, so a
-    // pay-summary that resolved with an empty body — which records no error, the store
-    // just clears its loading flag — left the amount shimmering for good on a fast
-    // connection with every request long finished. Once nothing is loading, none is
-    // coming: say so, and let the customer pull to refresh rather than watch an
-    // animation that will never resolve.
-    //
-    // Gated on hasAttemptedLoad as well, because "settled" has to mean the requests RAN
-    // and finished — not merely that none is in flight. Both loading flags read false
-    // before the first fetch is issued too, so without this the card reports a failed
-    // load on its first render, before it has asked for anything. That the pay-summary
-    // flag happens to start true is what has been hiding it here; the web dashboard,
-    // whose store starts both flags false, logged balance-unavailable with accountNo
-    // 'unknown' and error 'none' on every single visit. Not worth leaving to chance.
-    const balanceRequestsSettled = hasAttemptedLoad && !isPaySummaryLoading && !contextLoading;
-    const balanceUnavailable = !balanceKnown && balanceRequestsSettled;
-
-    // Report the outcome the customer actually sees.
-    //
-    // The service reports why each individual request failed; this reports that
-    // the card gave up, which is the thing being complained about and is not the
-    // same fact — the balance can also go missing with every request apparently
-    // fine, and only this would catch that. Once per session per account, so a
-    // re-render cannot turn it into a stream.
-    useEffect(() => {
-        // Not when the session is what failed: the modal is the right handling, and
-        // filing it here would put an auth event in customer-dashboard.log under a
-        // billing heading — the exact noise this report exists to cut through.
-        if (balanceUnavailable && !sessionExpiredRef.current) {
-            reportClientEvent('balance-unavailable', {
-                accountNo: paySummary?.accountNo
-                    || customerDetail?.billingAccount?.accountNo
-                    || user?.username
-                    || 'unknown',
-                hadDetail: String(!!customerDetail),
-                hadPaySummary: String(!!paySummary),
-                fromCache: String(isFromCache),
-                rawBalance: rawBalance === null || rawBalance === undefined
-                    ? 'missing'
-                    : String(rawBalance),
-            });
-        }
-    }, [balanceUnavailable, showSessionExpired, customerDetail, paySummary, isFromCache, rawBalance, user]);
-
-    // The summary's flag is what labels the button on load; the fuller pendingPayment
-    // object only exists once Pay Now has been tapped and fetched the payment URL.
-    const hasPendingPayment = !!pendingPayment?.payment_url || !!paySummary?.hasPendingPayment;
-
-    // An outstanding (positive) balance must be settled in full, so Pay Now is pinned to the
-    // balance and locked. At zero or on a credit balance the customer chooses the amount.
-    const isBalancePositive = balance > 0;
-    const usageType = customerDetail?.technicalDetails?.usageType || 'N/A';
+    const rawBalance = Number(customerDetail?.billingAccount?.accountBalance || 0);
     const emailAddress = customerDetail?.emailAddress || user?.email || 'N/A';
+
+    // ── Prepaid state ───────────────────────────────────────────────────────
+    // Resolved centrally in CustomerDataContext (see utils/billingType), which mirrors the
+    // backend's BillingAccount::isPrepaidType() — so both the canonical 'Prepaid' and the older
+    // 'Pre Paid' resolve, and an account that has not been through the rename still gets the
+    // plan picker. `billingType` is the same value as the customer-facing label.
+
+    // A prepaid customer never carries a negative (credit) balance: paying only extends the
+    // prepaid period, it does not bank a credit, so a fully-paid prepaid account reads as 0 —
+    // never a negative overpayment. Postpaid / blank generation_type keep the real balance
+    // (including any negative credit from overpayment), which is the existing behaviour.
+    const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
+
+    /**
+     * Partial payments are not accepted. An outstanding balance has to be cleared in full, so the
+     * amount is pinned rather than merely validated:
+     *
+     *  - Postpaid: the amount IS the balance, and the field is read-only.
+     *  - Prepaid : the amount still comes from the plan picker (so a plan change is still a
+     *              payment), but the chosen plan's price has to cover the balance. A cheaper plan
+     *              is rejected; the same or a dearer one is fine.
+     *
+     * Neither applies while nothing is owed — a zero/credit balance keeps the ₱1 floor only.
+     */
+    const requiresExactPayment = !isPrepaid && balance > 0;
+    // A quoted onboarding re-price REPLACES the outstanding balance rather than paying it off, so
+    // the "plan must cover the balance" floor does not apply - that is what lets a first-time
+    // customer move to a cheaper plan before they have paid anything.
+    const requiresPlanCoversBalance = isPrepaid && balance > 0 && !canRepriceOnboarding;
+
+    // Compared at 2 decimal places: the balance arrives as a decimal string, and float maths on
+    // centavos would otherwise make an exact-equality check fail on a legitimate amount.
+    const toCentavos = (value: number) => Math.round(value * 100);
+    const paymentCoversBalance = toCentavos(paymentAmount) >= toCentavos(balance);
+    const isPaymentAmountValid = requiresExactPayment
+        ? toCentavos(paymentAmount) === toCentavos(balance)
+        : requiresPlanCoversBalance
+            ? paymentCoversBalance
+            : paymentAmount >= 1;
+
+    // Convenience fee preview. Mirrors the server's maths (fee on top of the bill, 2 dp) purely so
+    // the customer can see the real total before leaving for the gateway — the charge is still
+    // computed server-side at checkout, so this is disclosure only and never sent anywhere.
+    const feeBaseAmount = requiresExactPayment ? balance : paymentAmount;
+    const convenienceFeeAmount = convenienceFeePercentage > 0
+        ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
+        : 0;
+    const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
+    // formatCurrency() rounds to whole pesos, which would hide the centavos a percentage fee almost
+    // always produces. No padding either: 922.5 stays 922.5. Capped at 2 dp only because the fee
+    // above is already rounded to centavos, so nothing here is ever actually rounded away.
+    const formatPeso = (value: number) =>
+        `₱${value.toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
+    // Trailing zeros trimmed so 2.50 reads as "2.5%".
+    const convenienceFeeLabel = String(Number(convenienceFeePercentage));
+
+    const prepaidExpiresAt = customerDetail?.billingAccount?.prepaid_expires_at || null;
+    const pendingPlanId = customerDetail?.billingAccount?.pending_plan_id ?? null;
+    const pendingPlanName = customerDetail?.billingAccount?.pending_plan_name || null;
+    const pendingPlanEffectiveAt = customerDetail?.billingAccount?.pending_plan_effective_at || null;
+
+    // Whether the paid-for period is still running. This is what makes a plan change QUEUE
+    // rather than apply immediately, so the modal can tell the customer which will happen.
+    const isPrepaidPeriodActive = useMemo(() => {
+        if (!prepaidExpiresAt) return false;
+        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T')).getTime();
+        return !isNaN(expiry) && expiry > Date.now();
+    }, [prepaidExpiresAt]);
+
+    // Mirrors the backend's extractPlanName(): the plan name is the first token, before any
+    // ' - ' separator or space. Keeps "which plan am I on" consistent with what billing resolves.
+    const extractPlanName = useCallback((raw?: string | null): string => {
+        if (!raw) return '';
+        let value = String(raw);
+        if (value.includes(' - ')) value = value.split(' - ')[0].trim();
+        if (value.includes(' ')) return value.split(' ')[0].trim();
+        return value.trim();
+    }, []);
+
+    const currentPlan = useMemo(
+        () => plans.find(p => p.name === extractPlanName(planName)) || null,
+        [plans, planName, extractPlanName]
+    );
+    const selectedPlan = useMemo(
+        () => plans.find(p => p.id === selectedPlanId) || null,
+        [plans, selectedPlanId]
+    );
+    // A switch already paid for and waiting. It takes priority when preselecting, so a top-up is
+    // priced at the plan the customer will actually be on rather than the one they are leaving.
+    const pendingPlan = useMemo(
+        () => (pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null),
+        [plans, pendingPlanId]
+    );
+
+    /**
+     * Whether "Activate Now" is worth offering. Mirrors the web portal exactly.
+     *
+     * All three conditions matter:
+     *  - a genuine switch    activating the plan already in force forfeits days for nothing
+     *  - a live period       once it has lapsed the new plan starts immediately regardless, so
+     *                        there is no decision left to make
+     *  - not paying balance  "Pay Current Balance" sends no plan at all
+     *
+     * The server independently refuses to forfeit days when the switch is not genuine
+     * (PrepaidPlanChangeService::isGenuineSwitch), so this governs the UI, not the outcome.
+     */
+    const canActivateNow = useMemo(
+        () => isPrepaid
+            && !payCurrentBalance
+            && isPrepaidPeriodActive
+            && !!selectedPlan
+            && !!currentPlan
+            && selectedPlan.id !== currentPlan.id,
+        [isPrepaid, payCurrentBalance, isPrepaidPeriodActive, selectedPlan, currentPlan]
+    );
+
+    // Load the plan list once, only for prepaid customers — postpaid never sees the picker.
+    // Gated on a ref, not on plans.length: an empty or all-zero-price response would otherwise
+    // leave the guard false and re-trigger this effect forever.
+    const plansRequestedRef = React.useRef(false);
+    useEffect(() => {
+        if (!isPrepaid || plansRequestedRef.current) return;
+        plansRequestedRef.current = true;
+        let cancelled = false;
+        (async () => {
+            setIsLoadingPlans(true);
+            try {
+                const fetched = await planService.getAllPlans();
+                if (!cancelled) setPlans(fetched.filter(p => Number(p.price) > 0));
+            } finally {
+                if (!cancelled) setIsLoadingPlans(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [isPrepaid]);
 
     // Format a stored date string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or ISO) to
     // MM/DD/YYYY by reading the parts directly — avoids the timezone shift that
@@ -343,23 +321,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     };
 
     let dueDateString = 'Upon Receipt';
-    // Prefer the real due date stored on the latest invoice. The pay-summary carries it,
-    // read on the server off the newest invoice with the same `invoice_date desc` ordering
-    // the list endpoint uses — the same date, one row instead of the account's entire
-    // invoice history. The list stays as the fallback for when that request fails.
-    //
-    // Only fall back to deriving it from the billing day when the account has no invoice.
-    const latestInvoiceDueDate = formatDbDate(
-        paySummary ? paySummary.dueDate : invoiceRecords?.[0]?.due_date
-    );
-    const billingDayForDueDate = paySummary
-        ? paySummary.billingDay
-        : customerDetail?.billingAccount?.billingDay;
+    // Prefer the real due date stored on the latest invoice (invoiceRecords are
+    // ordered by invoice_date desc by the backend). Only fall back to deriving it
+    // from the billing day when the account has no invoice yet.
+    const latestInvoiceDueDate = formatDbDate(invoiceRecords?.[0]?.due_date);
     if (latestInvoiceDueDate) {
         dueDateString = latestInvoiceDueDate;
-    } else if (billingDayForDueDate) {
+    } else if (customerDetail?.billingAccount?.billingDay) {
         const today = new Date();
-        const billingDay = billingDayForDueDate;
+        const billingDay = customerDetail.billingAccount.billingDay;
 
         let dueYear = today.getFullYear();
         let dueMonth = today.getMonth();
@@ -376,6 +346,30 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         dueDateString = `${String(nextDueDate.getMonth() + 1).padStart(2, '0')}/${String(nextDueDate.getDate()).padStart(2, '0')}/${nextDueDate.getFullYear()}`;
     }
 
+    // ── Prepaid: the card shows the end of the paid period, not an invoice due date ──────────
+    // A prepaid customer's service is governed by prepaid_expires_at, so a billing-day due date
+    // is meaningless to them. Show the expiry plus how long they have left.
+    const prepaidDaysLeft = useMemo(() => {
+        if (!isPrepaid || !prepaidExpiresAt) return null;
+        // Replace the space so the string parses on both iOS and Android.
+        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T')).getTime();
+        if (isNaN(expiry)) return null;
+        // Rounded UP, so any remaining part of a day still reads as "1 day left" rather than 0.
+        return Math.ceil((expiry - Date.now()) / (24 * 60 * 60 * 1000));
+    }, [isPrepaid, prepaidExpiresAt]);
+
+    const dueDateLabel = isPrepaid ? 'Expires' : 'Due Date';
+    const dueDateValue = isPrepaid
+        ? (formatDbDate(prepaidExpiresAt) ?? 'Not started')
+        : dueDateString;
+
+    // null when there is nothing meaningful to say (postpaid, or a prepaid clock not yet started).
+    const prepaidDaysLeftText = useMemo(() => {
+        if (prepaidDaysLeft === null) return null;
+        if (prepaidDaysLeft <= 0) return 'Expired';
+        return `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'} left`;
+    }, [prepaidDaysLeft]);
+
     useEffect(() => {
         const loadData = async () => {
             const storedUser = await AsyncStorage.getItem('authData');
@@ -387,10 +381,14 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 }
             }
 
-            // No pending-payment request here any more. The pay-summary carries
-            // `hasPendingPayment`, which is all the button label needs, and handlePayNow
-            // already re-checks for the payment URL when it is tapped — so this was a whole
-            // extra round trip on the launch path to decide one word of button text.
+            if (accountNo && accountNo !== 'N/A') {
+                try {
+                    const pending = await paymentService.checkPendingPayment(accountNo);
+                    setPendingPayment(pending);
+                } catch (error) {
+                    console.error('Error checking pending payment:', error);
+                }
+            }
         };
         loadData();
         silentRefresh();
@@ -424,6 +422,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             }
         };
         fetchColorPalette();
+
+        const fetchConvenienceFee = async () => {
+            const percentage = await paymentService.getConvenienceFeePercentage();
+            setConvenienceFeePercentage(percentage);
+        };
+        fetchConvenienceFee();
 
         const paletteSub = DeviceEventEmitter.addListener('colorPaletteChanged', (newPalette) => {
             setColorPalette(newPalette);
@@ -475,45 +479,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         return `₱${isNegative ? '-' : ''}${formatted}`;
     }, []);
 
-    // Keep Pay Now aligned with the balance whenever it changes — first load, a pull-to-refresh,
-    // or a live balance update — so the locked field is never stale. Declared above the loading
-    // early-return below to keep a fixed position in the hook order (rules-of-hooks).
-    useEffect(() => {
-        if (isBalancePositive) {
-            setPaymentAmount(balance);
-        }
-    }, [balance, isBalancePositive]);
-
-    // Nothing at all yet: no response, and no snapshot from a previous launch. Laid out as
-    // skeletons rather than a bare spinner so the balance card never appears with a
-    // placeholder figure in it.
-    //
-    // paySummary counts as something to show, and that matters: it is the faster of the
-    // two requests, so gating this on customerDetail alone would keep the skeleton up over
-    // a balance that had already arrived — throwing away the point of splitting them.
-    if (!customerDetail && !paySummary && (contextLoading || isPaySummaryLoading)) return (
-        <View style={{ flex: 1, backgroundColor: '#f9fafb', padding: 16, paddingTop: 60 }}>
-            <View style={{ borderRadius: 20, backgroundColor: '#111827', padding: 20, gap: 12 }}>
-                <Skeleton light width={120} height={12} />
-                <Skeleton light width={180} height={40} radius={10} />
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Skeleton light width={110} height={12} radius={6} />
-                    <Skeleton light width={96} height={34} radius={17} />
-                </View>
-            </View>
-
-            <View style={{ marginTop: 24, gap: 12 }}>
-                <Skeleton width={140} height={14} />
-                {[0, 1, 2].map((i) => (
-                    <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <View style={{ gap: 6 }}>
-                            <Skeleton width={180} height={12} />
-                            <Skeleton width={120} height={10} />
-                        </View>
-                        <Skeleton width={70} height={14} />
-                    </View>
-                ))}
-            </View>
+    if (contextLoading && !customerDetail) return (
+        <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#111827" />
         </View>
     );
 
@@ -541,15 +509,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         setErrorMessage('');
 
         // Block the payment up front if the account has no valid email on file.
-        //
-        // Only when the customer record is actually here to judge from. The balance now
-        // arrives on its own request, so Pay Now can be tapped before the detail response
-        // lands — and emailAddress falls back to the session's email, which comes from the
-        // users table while the address Xendit is given comes from the customers table.
-        // The two can differ, so refusing on the fallback would accuse an account that has
-        // a perfectly good email of not having one. Unknown is not the same as invalid:
-        // let it through and let the backend, which validates this anyway, be the judge.
-        if (customerDetail && !isValidEmail(emailAddress)) {
+        if (!isValidEmail(emailAddress)) {
             setShowEmailErrorModal(true);
             return;
         }
@@ -568,21 +528,116 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 setPendingPayment(pending);
                 setShowPendingPaymentModal(true);
             } else {
-                setPaymentAmount(balance);
-                setShowPaymentVerifyModal(true);
+                openVerifyModal();
             }
         } catch (error: any) {
             console.error('Error checking pending payment:', error);
-            setPaymentAmount(balance);
-            setShowPaymentVerifyModal(true);
+            openVerifyModal();
         } finally {
             setIsPaymentProcessing(false);
         }
     };
 
+    /**
+     * Open the confirm-payment sheet with the right starting amount.
+     *
+     * Prepaid: preselect the plan they are currently on and set the amount to that plan's price —
+     * they are buying a service period, so the amount always tracks the selected plan.
+     * Postpaid: unchanged, the amount starts at the outstanding balance.
+     */
+    async function openVerifyModal() {
+        setOnboardingQuoteAmount(null);
+        setCanRepriceOnboarding(false);
+        let preselectedPlan: Plan | null = null;
+        if (isPrepaid) {
+            // A queued switch wins over the plan currently in force: the customer has already
+            // bought it, so a top-up must be priced at that plan, not the one being replaced.
+            preselectedPlan = pendingPlan ?? currentPlan ?? plans[0] ?? null;
+            setSelectedPlanId(preselectedPlan?.id ?? null);
+            setPaymentAmount(Number(preselectedPlan?.price ?? 0));
+        } else {
+            setPaymentAmount(balance);
+        }
+        setPayCurrentBalance(false);
+        setIsPlanListOpen(false);
+        setShowPaymentVerifyModal(true);
+
+        // Resolve up front whether this is an unpaid first bill that can be re-priced. Without
+        // this, every plan cheaper than the balance renders as under-balance and the customer
+        // could never pick one to find out.
+        if (isPrepaid && preselectedPlan) {
+            setIsQuotingPlan(true);
+            try {
+                const quote = await paymentService.quotePlanChange(accountNo, preselectedPlan.id);
+                if (quote?.eligible && typeof quote.amount === 'number') {
+                    setCanRepriceOnboarding(true);
+                    setOnboardingQuoteAmount(quote.amount);
+                    setPaymentAmount(quote.amount);
+                }
+            } finally {
+                setIsQuotingPlan(false);
+            }
+        }
+    }
+
+    /** Picking a plan re-drives the amount — the two are never allowed to disagree. */
+    const handleSelectPlan = async (plan: Plan) => {
+        const price = Number(plan.price ?? 0);
+        setPayCurrentBalance(false);
+        setSelectedPlanId(plan.id);
+        // Deliberately reset: forfeiting days is a decision about ONE specific switch, so it has
+        // to be made again for a different plan rather than carried over silently.
+        setActivateNow(false);
+        setPaymentAmount(price);
+        setIsPlanListOpen(false);
+        setErrorMessage('');
+
+        // A customer still on their unpaid FIRST bill may swap plan freely: the server re-prices
+        // that bill, so the amount becomes the new plan's total rather than the old balance.
+        setIsQuotingPlan(true);
+        try {
+            const quote = await paymentService.quotePlanChange(accountNo, plan.id);
+            if (quote?.eligible && typeof quote.amount === 'number') {
+                setCanRepriceOnboarding(true);
+                setOnboardingQuoteAmount(quote.amount);
+                setPaymentAmount(quote.amount);
+                return;
+            }
+            setCanRepriceOnboarding(false);
+            setOnboardingQuoteAmount(null);
+        } finally {
+            setIsQuotingPlan(false);
+        }
+
+        // Flag a plan too cheap to clear the balance straight away, rather than letting the
+        // customer discover it only when they press Pay.
+        if (requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance)) {
+            setErrorMessage(`${plan.name} costs ${formatCurrency(price)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
+        } else {
+            setErrorMessage('');
+        }
+    };
+
+    /** "Pay Current Balance": settle the outstanding balance directly — no plan change. */
+    const handleSelectPayCurrentBalance = () => {
+        setPayCurrentBalance(true);
+        setSelectedPlanId(null);
+        setActivateNow(false);
+        setPaymentAmount(balance);
+        setIsPlanListOpen(false);
+        setErrorMessage('');
+        // Drop any onboarding re-price quote - this mode pays the balance as it stands and sends
+        // no plan, so nothing gets re-priced.
+        setOnboardingQuoteAmount(null);
+        setCanRepriceOnboarding(false);
+    };
+
     function handleCloseVerifyModal() {
         setShowPaymentVerifyModal(false);
-        setPaymentAmount(balance);
+        setIsPlanListOpen(false);
+        setPayCurrentBalance(false);
+        setActivateNow(false);
+        setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
     const handleProceedToCheckout = async () => {
@@ -594,8 +649,27 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             return;
         }
 
-        if (paymentAmount < balance) {
-            setErrorMessage(`Payment amount must be at least your current balance of ₱${formatCurrency(balance)}`);
+        // Prepaid still pays the selected plan's price — that is how a plan change is bought — but
+        // the price has to cover what is already owed, so a cheaper plan cannot be used to underpay
+        // an outstanding balance. Postpaid must settle the balance exactly.
+        if (isPrepaid && payCurrentBalance) {
+            // Paying the outstanding balance directly (no plan change). Amount is pinned to the
+            // balance; only guard against a nothing-to-pay case.
+            if (balance < 1) {
+                setErrorMessage('There is no balance to pay.');
+                return;
+            }
+        } else if (isPrepaid) {
+            if (!selectedPlan) {
+                setErrorMessage('Please select a plan to continue.');
+                return;
+            }
+            if (requiresPlanCoversBalance && !paymentCoversBalance) {
+                setErrorMessage(`${selectedPlan.name} costs ${formatCurrency(paymentAmount)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
+                return;
+            }
+        } else if (requiresExactPayment && !isPaymentAmountValid) {
+            setErrorMessage(`Payment must be exactly your current balance of ${formatCurrency(balance)}`);
             return;
         }
 
@@ -606,13 +680,24 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
         try {
             const redirectUrl = LinkingExpo.createURL('payment-success');
-            const response = await paymentService.createPayment(accountNo, paymentAmount, redirectUrl);
+            // activate_now is re-checked against canActivateNow rather than sent raw: the flag
+            // is only meaningful for the exact selection it was ticked for, and the server
+            // ignores it without a genuine plan switch anyway.
+            const response = await paymentService.createPayment(
+                accountNo,
+                paymentAmount,
+                redirectUrl,
+                (isPrepaid && !payCurrentBalance) ? selectedPlanId : null,
+                activateNow && canActivateNow
+            );
 
             if (response.status === 'success' && response.payment_url) {
                 setShowPaymentVerifyModal(false);
                 setPaymentLinkData({
                     referenceNo: response.reference_no || '',
-                    amount: response.amount || paymentAmount,
+                    // total_charged, not amount: this modal is telling the customer what they are
+                    // about to pay at the gateway, which includes the convenience fee.
+                    amount: response.total_charged ?? response.amount ?? paymentAmount,
                     paymentUrl: response.payment_url
                 });
                 setShowPaymentLinkModal(true);
@@ -760,64 +845,42 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 <View style={styles.billingRow}>
                                     <View style={styles.billingLeft}>
                                         <Text allowFontScaling={false} style={styles.balanceLabel}>Total Amount</Text>
-                                        {balanceKnown && revalidateFailed ? (
-                                            <Pressable onPress={() => { silentRefresh(); }} accessibilityRole="button">
-                                                <Text allowFontScaling={false} style={styles.staleHintText}>
-                                                    Last known balance — tap to retry
-                                                </Text>
-                                            </Pressable>
-                                        ) : balanceKnown && revalidateInFlight ? (
-                                            <Text allowFontScaling={false} style={styles.staleHintText}>
-                                                Last known balance — updating…
-                                            </Text>
-                                        ) : null}
-                                        {balanceKnown ? (
-                                            <Text
-                                                numberOfLines={1}
-                                                adjustsFontSizeToFit
-                                                minimumFontScale={0.5}
-                                                allowFontScaling={false}
-                                                style={[styles.balanceAmountText, { fontSize: balance >= 1000 ? (isMobile ? (isShort ? 28 : 32) : 44) : (isMobile ? (isShort ? 36 : 40) : 56) }]}
-                                            >
-                                                {formatCurrency(balance)}
-                                            </Text>
-                                        ) : balanceUnavailable ? (
-                                            // Every request has finished without a figure.
-                                            // A shimmer here would never resolve.
-                                            <Text
-                                                numberOfLines={1}
-                                                allowFontScaling={false}
-                                                style={[styles.balanceAmountText, { fontSize: isShort ? 20 : 24 }]}
-                                            >
-                                                Unavailable
-                                            </Text>
-                                        ) : (
-                                            <Skeleton light width={isShort ? 150 : 180} height={isShort ? 34 : 42} radius={10} style={{ marginTop: 4 }} />
-                                        )}
+                                        <Text 
+                                            numberOfLines={1} 
+                                            adjustsFontSizeToFit
+                                            minimumFontScale={0.5}
+                                            allowFontScaling={false}
+                                            style={[styles.balanceAmountText, { fontSize: balance >= 1000 ? (isMobile ? (isShort ? 28 : 32) : 44) : (isMobile ? (isShort ? 36 : 40) : 56) }]}
+                                        >
+                                            {formatCurrency(balance)}
+                                        </Text>
                                     </View>
 
                                     <View style={styles.billingRightCol}>
                                         <View style={styles.dueDateContainer}>
-                                            {balanceKnown ? (
-                                                <Text allowFontScaling={false} style={styles.infoText}>Due Date: <Text allowFontScaling={false} style={styles.infoValue}>{dueDateString}</Text></Text>
-                                            ) : balanceUnavailable ? (
-                                                // Same reasoning as the amount above: a
-                                                // shimmer with nothing left in flight
-                                                // never resolves.
-                                                <Text allowFontScaling={false} style={styles.infoText}>Due Date: <Text allowFontScaling={false} style={styles.infoValue}>—</Text></Text>
-                                            ) : (
-                                                <Skeleton light width={110} height={12} radius={6} />
+                                            {/* Prepaid shows when the paid period ends; postpaid keeps the invoice due date. */}
+                                            <Text allowFontScaling={false} style={styles.infoText}>{dueDateLabel}: <Text allowFontScaling={false} style={styles.infoValue}>{dueDateValue}</Text></Text>
+                                            {prepaidDaysLeftText && (
+                                                <Text
+                                                    allowFontScaling={false}
+                                                    style={[
+                                                        styles.daysLeftText,
+                                                        prepaidDaysLeft !== null && prepaidDaysLeft <= 3 && styles.daysLeftUrgent,
+                                                    ]}
+                                                >
+                                                    {prepaidDaysLeftText}
+                                                </Text>
                                             )}
                                         </View>
 
                                         <Pressable
                                             onPress={handlePayNow}
-                                            disabled={isPaymentProcessing || !balanceConfirmed}
-                                            style={[styles.payBtn, { opacity: (isPaymentProcessing || !balanceConfirmed) ? 0.5 : 1 }]}
+                                            disabled={isPaymentProcessing}
+                                            style={[styles.payBtn, { opacity: isPaymentProcessing ? 0.5 : 1 }]}
                                         >
                                             <View style={styles.payBtnInner}>
                                                 <Text style={styles.payBtnText}>
-                                                    {(!balanceConfirmed || isPaymentProcessing) ? '...' : (hasPendingPayment ? 'Proceed' : 'Pay Now')}
+                                                    {isPaymentProcessing ? '...' : (pendingPayment ? 'Proceed' : 'Pay Now')}
                                                 </Text>
                                             </View>
                                         </Pressable>
@@ -829,15 +892,16 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <View style={{ flex: 1 }}>
                                             <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 }}>Plan</Text>
-                                            {planKnown ? (
-                                                <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{planName}</Text>
-                                            ) : (
-                                                <Skeleton light width={120} height={18} radius={6} />
-                                            )}
+                                            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{planName}</Text>
                                         </View>
                                         <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                                            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 }}>Usage Type</Text>
-                                            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{usageType}</Text>
+                                            {/* Was "Usage Type", which read N/A for every customer because the
+                                                usage type is an internal technical-details field that is not
+                                                captured for retail accounts. Billing type is the value the
+                                                customer actually needs here — it explains why they see an
+                                                expiry instead of a due date, and top-ups instead of bills. */}
+                                            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, marginBottom: 4 }}>Billing Type</Text>
+                                            <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: '700' }}>{billingType}</Text>
                                         </View>
                                     </View>
                                 </View>
@@ -845,8 +909,52 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                         </LinearGradient>
                     </Animated.View>
 
+                    {/* Prepaid plan summary. Prepaid buys a service period, so the plan only means
+                        something next to the date it runs out — and a plan change already paid for
+                        is listed separately, because it is NOT what they are on today. Shown here
+                        rather than on the flipped card so it needs no interaction to find. */}
+                    {isPrepaid && (
+                        <View style={styles.sectionGap}>
+                            <View style={styles.sectionHeader}>
+                                <Text style={styles.sectionTitle}>Plan</Text>
+                            </View>
 
+                            <View style={styles.referralContent}>
+                                <View style={styles.verifyRow}>
+                                    <Text style={styles.verifyLabel}>Current Plan</Text>
+                                    <Text style={styles.verifyValue}>{planName}</Text>
+                                </View>
+                                <View style={styles.verifyRow}>
+                                    <Text style={styles.verifyLabel}>Expires</Text>
+                                    <Text style={styles.verifyValue}>
+                                        {formatDbDate(prepaidExpiresAt) ?? 'Not started'}
+                                    </Text>
+                                </View>
 
+                                {pendingPlanName && (
+                                    <>
+                                        <View style={styles.verifyRow}>
+                                            <Text style={styles.verifyLabel}>Upcoming Plan</Text>
+                                            <Text style={[styles.verifyValue, { color: colorPalette?.primary || '#ef4444' }]}>
+                                                {pendingPlanName}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.verifyRow}>
+                                            <Text style={styles.verifyLabel}>Starts</Text>
+                                            <Text style={styles.verifyValue}>
+                                                {/* No effective date stored means the switch lands as soon as
+                                                    the current period lapses, not on a fixed day. */}
+                                                {formatDbDate(pendingPlanEffectiveAt)
+                                                    ?? (formatDbDate(prepaidExpiresAt)
+                                                        ? `After ${formatDbDate(prepaidExpiresAt)}`
+                                                        : 'After current period')}
+                                            </Text>
+                                        </View>
+                                    </>
+                                )}
+                            </View>
+                        </View>
+                    )}
 
                     {/* Payment History Section */}
                     <View style={styles.sectionGap}>
@@ -1006,13 +1114,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                                 <View style={styles.verifyRow}>
                                     <Text style={styles.verifyLabel}>Current Balance</Text>
-                                    {balanceConfirmed ? (
-                                        <Text style={[styles.verifyValue, { fontWeight: 'bold', color: balance > 0 ? (colorPalette?.primary || '#ef4444') : '#16a34a' }]}>
-                                            {formatCurrency(balance)}
-                                        </Text>
-                                    ) : (
-                                        <Skeleton width={90} height={14} radius={6} />
-                                    )}
+                                    <Text style={[styles.verifyValue, { fontWeight: 'bold', color: balance > 0 ? (colorPalette?.primary || '#ef4444') : '#16a34a' }]}>
+                                        {formatCurrency(balance)}
+                                    </Text>
                                 </View>
                             </View>
 
@@ -1022,43 +1126,224 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                             )}
 
+                            {/* Prepaid only: pick the plan being paid for. The amount below follows
+                                this selection, so the two can never disagree. */}
+                            {isPrepaid && (
+                                <View style={styles.planWrap}>
+                                    <Text style={styles.inputLabel}>Plan</Text>
+
+                                    {isLoadingPlans ? (
+                                        <View style={styles.planLoading}>
+                                            <ActivityIndicator size="small" color={colorPalette?.primary || '#111827'} />
+                                            <Text style={styles.planLoadingText}>Loading plans…</Text>
+                                        </View>
+                                    ) : plans.length === 0 ? (
+                                        <Text style={styles.planEmptyText}>
+                                            No plans are available right now. Please contact support.
+                                        </Text>
+                                    ) : (
+                                        <>
+                                            <Pressable
+                                                onPress={() => setIsPlanListOpen(open => !open)}
+                                                style={[styles.planTrigger, isPlanListOpen && { borderColor: colorPalette?.primary || '#7c3aed' }]}
+                                            >
+                                                <Text style={styles.planTriggerText} numberOfLines={1}>
+                                                    {payCurrentBalance
+                                                        ? `Pay Current Balance — ${formatCurrency(balance)}`
+                                                        : selectedPlan
+                                                            ? `${selectedPlan.name} — ${formatCurrency(Number(selectedPlan.price ?? 0))}`
+                                                            : 'Select a plan'}
+                                                </Text>
+                                                <Text style={styles.planChevron}>{isPlanListOpen ? '▲' : '▼'}</Text>
+                                            </Pressable>
+
+                                            {isPlanListOpen && (
+                                                <View style={styles.planList}>
+                                                    <ScrollView
+                                                        style={{ maxHeight: 200 }}
+                                                        nestedScrollEnabled
+                                                        keyboardShouldPersistTaps="handled"
+                                                    >
+                                                        {/* Static option: pay the outstanding balance directly, no plan
+                                                            change. Only offered when there is actually a balance to settle. */}
+                                                        {balance > 0 && (
+                                                            <Pressable
+                                                                onPress={handleSelectPayCurrentBalance}
+                                                                style={[
+                                                                    styles.planOption,
+                                                                    payCurrentBalance && { backgroundColor: (colorPalette?.primary || '#7c3aed') + '12' },
+                                                                ]}
+                                                            >
+                                                                <View style={{ flex: 1, marginRight: 8 }}>
+                                                                    <Text style={styles.planOptionName} numberOfLines={1}>Pay Current Balance</Text>
+                                                                </View>
+                                                                <Text style={[styles.planOptionPrice, payCurrentBalance && { color: colorPalette?.primary || '#7c3aed' }]}>
+                                                                    {formatCurrency(balance)}
+                                                                </Text>
+                                                            </Pressable>
+                                                        )}
+                                                        {plans.map(plan => {
+                                                            const isSelected = plan.id === selectedPlanId;
+                                                            const isCurrent = plan.id === currentPlan?.id;
+                                                            return (
+                                                                <Pressable
+                                                                    key={plan.id}
+                                                                    onPress={() => handleSelectPlan(plan)}
+                                                                    style={[
+                                                                        styles.planOption,
+                                                                        isSelected && { backgroundColor: (colorPalette?.primary || '#7c3aed') + '12' },
+                                                                    ]}
+                                                                >
+                                                                    <View style={{ flex: 1, marginRight: 8 }}>
+                                                                        <Text style={styles.planOptionName} numberOfLines={1}>
+                                                                            {plan.name}{isCurrent ? '  (current)' : ''}
+                                                                        </Text>
+                                                                        {!!plan.description && (
+                                                                            <Text style={styles.planOptionDesc} numberOfLines={1}>{plan.description}</Text>
+                                                                        )}
+                                                                    </View>
+                                                                    <Text style={[styles.planOptionPrice, isSelected && { color: colorPalette?.primary || '#7c3aed' }]}>
+                                                                        {formatCurrency(Number(plan.price ?? 0))}
+                                                                    </Text>
+                                                                </Pressable>
+                                                            );
+                                                        })}
+                                                    </ScrollView>
+                                                </View>
+                                            )}
+                                        </>
+                                    )}
+
+                                    {/* Explain what this payment will actually do. Three distinct
+                                        cases, because a plan bought mid-period does not take
+                                        effect until the paid-for period lapses. */}
+                                    {selectedPlan && pendingPlan && selectedPlan.id === pendingPlan.id ? (
+                                        <Text style={styles.planNoteText}>
+                                            {pendingPlanName || selectedPlan.name} is already scheduled
+                                            {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                            This payment extends your service period.
+                                        </Text>
+                                    ) : selectedPlan && currentPlan && selectedPlan.id === currentPlan.id && pendingPlan ? (
+                                        <Text style={styles.planNoteText}>
+                                            You have {pendingPlan.name} scheduled
+                                            {pendingPlanEffectiveAt ? ` for ${formatDbDate(pendingPlanEffectiveAt)}` : ''}.
+                                            Paying for {selectedPlan.name} instead will cancel that change.
+                                        </Text>
+                                    ) : selectedPlan && currentPlan && selectedPlan.id !== currentPlan.id ? (
+                                        <Text style={styles.planNoteText}>
+                                            {activateNow
+                                                ? `${selectedPlan.name} starts as soon as this payment is confirmed.`
+                                                : isPrepaidPeriodActive && prepaidExpiresAt
+                                                    ? `Your current plan stays active until ${formatDbDate(prepaidExpiresAt)}. ${selectedPlan.name} starts right after.`
+                                                    : `${selectedPlan.name} starts as soon as this payment is confirmed.`}
+                                        </Text>
+                                    ) : null}
+
+                                    {/* Activate Now — only worth offering while there are days left
+                                        to forfeit AND the selection is a real switch. Outside those
+                                        conditions the new plan already starts immediately, so the
+                                        choice would be meaningless. */}
+                                    {canActivateNow && (
+                                        <View style={styles.activateNowWrap}>
+                                            <Pressable
+                                                onPress={() => setActivateNow(!activateNow)}
+                                                style={styles.activateNowRow}
+                                                accessibilityRole="checkbox"
+                                                accessibilityState={{ checked: activateNow }}
+                                                accessibilityLabel="Activate Now"
+                                            >
+                                                <View
+                                                    style={[
+                                                        styles.activateNowBox,
+                                                        activateNow && {
+                                                            backgroundColor: colorPalette?.primary || '#7c3aed',
+                                                            borderColor: colorPalette?.primary || '#7c3aed',
+                                                        },
+                                                    ]}
+                                                >
+                                                    {activateNow && <Text style={styles.activateNowTick}>✓</Text>}
+                                                </View>
+                                                <Text style={styles.activateNowLabel}>Activate Now</Text>
+                                            </Pressable>
+
+                                            {activateNow ? (
+                                                <View style={styles.activateNowWarning}>
+                                                    <Text style={styles.activateNowWarningText}>
+                                                        Heads up: {selectedPlan?.name} starts as soon as your payment is
+                                                        confirmed and your service period resets to 30 days from today.
+                                                        You will lose the{' '}
+                                                        {prepaidDaysLeft !== null && prepaidDaysLeft > 0
+                                                            ? `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'}`
+                                                            : 'days'}{' '}
+                                                        remaining on your current plan. This cannot be undone.
+                                                    </Text>
+                                                </View>
+                                            ) : (
+                                                <Text style={styles.activateNowHint}>
+                                                    Tick to switch immediately instead of waiting for your current
+                                                    period to end.
+                                                </Text>
+                                            )}
+                                        </View>
+                                    )}
+                                </View>
+                            )}
+
                             <View style={styles.inputWrap}>
                                 <Text style={styles.inputLabel}>Payment Amount</Text>
                                 <TextInput
                                     keyboardType="decimal-pad"
+                                    // Not hand-editable when the amount is already determined:
+                                    // prepaid takes it from the plan picker above, and postpaid
+                                    // with a balance owed must settle that balance in full.
+                                    editable={!isPrepaid && !requiresExactPayment}
                                     value={paymentAmount !== undefined && paymentAmount !== null ? paymentAmount.toString() : ''}
-                                    editable={!isBalancePositive}
                                     onChangeText={(value) => {
-                                        // Locked to the outstanding balance; ignore any edit attempt.
-                                        if (isBalancePositive) return;
-
                                         if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
                                             const amount = value === '' || value === '-' ? 0 : parseFloat(value) || 0;
                                             setPaymentAmount(amount);
-
-                                            if (balance > 0 && amount < balance) {
-                                                setErrorMessage(`Payment amount must be at least your current balance of ${formatCurrency(balance)}`);
-                                            } else {
-                                                setErrorMessage('');
-                                            }
+                                            setErrorMessage('');
                                         }
                                     }}
                                     placeholder="0.00"
-                                    style={[styles.inputField, isBalancePositive && styles.inputFieldReadOnly]}
+                                    style={[styles.inputField, (isPrepaid || requiresExactPayment) && styles.inputFieldLocked]}
                                 />
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
-                                        {isBalancePositive ? `Outstanding: ${formatCurrency(balance)} — full amount required` : 'Minimum: ₱1.00'}
+                                        {isPrepaid
+                                            ? (isQuotingPlan
+                                                ? 'Computing amount…'
+                                                : payCurrentBalance
+                                                    ? 'Paying your current balance'
+                                                    : selectedPlan
+                                                        ? (onboardingQuoteAmount !== null
+                                                            ? `${selectedPlan.name} — first bill re-priced (incl. VAT/withholding)`
+                                                            : `Set by your ${selectedPlan.name} plan`)
+                                                        : 'Select a plan above')
+                                            : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
                                     </Text>
                                 </View>
+
+                                {/* Convenience fee disclosure. The field above is the amount that
+                                    settles the bill; the gateway collects this total instead. */}
+                                {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
+                                    <Text style={styles.feeNoteText}>
+                                        + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
+                                    </Text>
+                                )}
                             </View>
 
                             <Pressable
                                 onPress={handleProceedToCheckout}
-                                disabled={!balanceConfirmed || isPaymentProcessing || paymentAmount < 1 || (balance > 0 && paymentAmount < balance)}
+                                disabled={
+                                    isPaymentProcessing
+                                    || paymentAmount < 1
+                                    || !isPaymentAmountValid
+                                    || (isPrepaid && !selectedPlan && !payCurrentBalance)
+                                }
                                 style={[styles.primaryBtn, {
                                     backgroundColor: colorPalette?.primary || '#ef4444',
-                                    opacity: (!balanceConfirmed || isPaymentProcessing || paymentAmount < 1) ? 0.5 : 1,
+                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isPaymentAmountValid || (isPrepaid && !selectedPlan && !payCurrentBalance)) ? 0.5 : 1,
                                 }]}
                             >
                                 <Text style={styles.primaryBtnText}>
@@ -1099,8 +1384,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                                 <View style={styles.verifyRow}>
                                     <Text style={styles.verifyLabel}>Payment Amount</Text>
+                                    {/* Exact centavos, not formatCurrency's rounded pesos: this is the
+                                        figure the gateway will charge, so it has to match to the cent. */}
                                     <Text style={[styles.verifyValue, { fontWeight: 'bold', color: colorPalette?.primary || '#ef4444' }]}>
-                                        {formatCurrency(paymentLinkData?.amount || 0)}
+                                        {formatPeso(paymentLinkData?.amount || 0)}
                                     </Text>
                                 </View>
                             </View>
@@ -1144,8 +1431,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                             <View style={styles.pendingBox}>
                                 <View style={styles.verifyRow}>
                                     <Text style={styles.pendingLabel}>Amount Due</Text>
+                                    {/* Gross, to the cent — a resumed payment is charged the same
+                                        total (convenience fee included) that was quoted at checkout. */}
                                     <Text style={styles.pendingAmount}>
-                                        {formatCurrency(pendingPayment?.amount || 0)}
+                                        {formatPeso(pendingPayment?.amount || 0)}
                                     </Text>
                                 </View>
                             </View>
@@ -1270,11 +1559,13 @@ const styles = StyleSheet.create({
     billingLeft: { flex: 1, minWidth: 120 },
     billingRightCol: { alignItems: 'flex-end', gap: 12, flexShrink: 0 },
     dueDateContainer: { alignItems: 'flex-end' },
-    staleHintText: { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
     balanceLabel: { color: '#e5e7eb', fontSize: 12, marginBottom: 4 },
     balanceAmountText: { fontWeight: 'bold', color: '#ffffff' },
     infoText: { color: '#e5e7eb', fontSize: 12 },
     infoValue: { color: '#ffffff', fontWeight: 'bold', fontSize: 12 },
+    // Prepaid remaining-days line under the expiry, on the dark billing card.
+    daysLeftText: { color: '#d1d5db', fontSize: 11, marginTop: 2 },
+    daysLeftUrgent: { color: '#fca5a5', fontWeight: 'bold' },
     payBtn: { borderWidth: 1, borderColor: '#ffffff', paddingHorizontal: 32, paddingVertical: 10, borderRadius: 12 },
     payBtnInner: { alignItems: 'center' },
     payBtnText: { color: '#ffffff', fontWeight: 'bold', textAlign: 'center' },
@@ -1333,9 +1624,40 @@ const styles = StyleSheet.create({
     inputWrap: { marginBottom: 32 },
     inputLabel: { fontWeight: '500', marginBottom: 8, color: '#374151', fontSize: 14 },
     inputField: { width: '100%', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, fontSize: 16, borderWidth: 1, borderColor: '#d1d5db', color: '#111827', backgroundColor: '#ffffff' },
-    inputFieldReadOnly: { backgroundColor: '#f3f4f6', color: '#4b5563' },
+    // Prepaid: the amount is derived from the selected plan, so it reads as locked.
+    inputFieldLocked: { backgroundColor: '#f3f4f6', color: '#374151' },
+    planWrap: { marginBottom: 20 },
+    planTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', backgroundColor: '#ffffff' },
+    planTriggerText: { flex: 1, fontSize: 15, color: '#111827', fontWeight: '500' },
+    planChevron: { fontSize: 10, color: '#6b7280', marginLeft: 8 },
+    planList: { marginTop: 6, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#ffffff', overflow: 'hidden' },
+    planOption: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+    planOptionName: { fontSize: 14, color: '#111827', fontWeight: '500' },
+    planOptionDesc: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+    planOptionPrice: { fontSize: 14, color: '#374151', fontWeight: '700' },
+    planLoading: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
+    planLoadingText: { marginLeft: 8, fontSize: 14, color: '#6b7280' },
+    planEmptyText: { fontSize: 13, color: '#b45309', paddingVertical: 8 },
+    planNoteText: { fontSize: 12, color: '#6b7280', marginTop: 8, lineHeight: 17 },
+    // Activate Now. Separated from the plan note above by a hairline rule, because ticking it is
+    // an irreversible choice and should not read as more of the same explanatory copy.
+    activateNowWrap: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' },
+    activateNowRow: { flexDirection: 'row', alignItems: 'center' },
+    activateNowBox: {
+        width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: '#9ca3af',
+        alignItems: 'center', justifyContent: 'center', marginRight: 8,
+    },
+    activateNowTick: { color: '#ffffff', fontSize: 12, fontWeight: '700', lineHeight: 14 },
+    activateNowLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
+    activateNowHint: { fontSize: 12, color: '#6b7280', marginTop: 6, marginLeft: 26, lineHeight: 17 },
+    activateNowWarning: {
+        marginTop: 8, borderWidth: 1, borderColor: '#fbbf24', backgroundColor: '#fffbeb',
+        borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8,
+    },
+    activateNowWarningText: { fontSize: 12, color: '#92400e', lineHeight: 17 },
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
+    feeNoteText: { fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 16 },
     primaryBtn: { paddingVertical: 12, borderRadius: 50, width: '50%', alignSelf: 'center', alignItems: 'center' },
     primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
     spacer: { height: 24 },

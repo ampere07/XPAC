@@ -5,7 +5,6 @@ import { API_BASE_URL } from '../config/api';
 import AddUsageTypeModal from '../modals/AddUsageTypeModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
-import { authFetch } from '../config/api';
 import { usePageActions } from '../hooks/usePageActions';
 
 interface UsageType {
@@ -151,7 +150,7 @@ const UsageTypeList: React.FC = () => {
   const loadUsageTypes = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const response = await authFetch(`${API_BASE_URL}/usage-types`, {
+      const response = await fetch(`${API_BASE_URL}/usage-types`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -201,7 +200,7 @@ const UsageTypeList: React.FC = () => {
     showGlobalModal('loading', 'Deleting', `Removing usage type "${usageType.usage_name}"...`);
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/usage-types/${usageType.id}`, {
+      const response = await fetch(`${API_BASE_URL}/usage-types/${usageType.id}`, {
         method: 'DELETE',
         headers: {
           'Accept': 'application/json',

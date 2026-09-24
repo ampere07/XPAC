@@ -4,6 +4,7 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { createInventoryLog } from '../services/inventoryLogService';
 import { InventoryItem } from '../services/inventoryItemService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 
 interface InventoryLogsFormModalProps {
     isOpen: boolean;
@@ -133,9 +134,9 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
         }
     }, [isOpen, selectedItem]);
 
-    const getUserDisplayName = (user: any) => {
-        return `${user.first_name} ${user.last_name}`.trim();
-    };
+    // This log stores the actor as a display string, so the same value backs the option
+    // label and the submitted payload. Falls back to the email when no name is on file.
+    const getUserLabel = (user: any) => getUserDisplayName(user, user?.email_address || user?.email || '');
 
     const getAvailableUsers = (currentValue: string) => {
         const otherSelectedValues = [
@@ -144,7 +145,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
             formData.requested_with_10
         ].filter(val => val !== 'None' && val !== currentValue);
 
-        return users.filter(u => !otherSelectedValues.includes(getUserDisplayName(u)));
+        return users.filter(u => !otherSelectedValues.includes(getUserLabel(u)));
     };
 
 
@@ -400,7 +401,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                     >
                                         <option value="None">None</option>
                                         {getAvailableUsers(formData.requested_by).map(u => (
-                                            <option key={u.id} value={getUserDisplayName(u)}>{getUserDisplayName(u)}</option>
+                                            <option key={u.id} value={getUserLabel(u)}>{getUserLabel(u)}</option>
                                         ))}
                                     </select>
                                     <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -425,7 +426,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                     >
                                         <option value="None">None</option>
                                         {getAvailableUsers(formData.requested_with).map(u => (
-                                            <option key={u.id} value={getUserDisplayName(u)}>{getUserDisplayName(u)}</option>
+                                            <option key={u.id} value={getUserLabel(u)}>{getUserLabel(u)}</option>
                                         ))}
                                     </select>
                                     <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -450,7 +451,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                     >
                                         <option value="None">None</option>
                                         {getAvailableUsers(formData.requested_with_10).map(u => (
-                                            <option key={u.id} value={getUserDisplayName(u)}>{getUserDisplayName(u)}</option>
+                                            <option key={u.id} value={getUserLabel(u)}>{getUserLabel(u)}</option>
                                         ))}
                                     </select>
                                     <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">

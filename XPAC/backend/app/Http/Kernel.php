@@ -16,10 +16,6 @@ class Kernel extends HttpKernel
     protected $middleware = [
         // \App\Http\Middleware\TrustHosts::class,
         \App\Http\Middleware\TrustProxies::class,
-        // First in the stack so its RESPONSE half runs last, after every cookie
-        // has been added. Sanctum forces session.same_site back to 'lax' on
-        // every API request, so the cookies can only be corrected here.
-        \App\Http\Middleware\ConfigureCrossSiteCookies::class,
         \App\Http\Middleware\HandleCorsManually::class,  // Use custom CORS handler
         \App\Http\Middleware\PreventRequestsDuringMaintenance::class,
         \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
@@ -50,7 +46,8 @@ class Kernel extends HttpKernel
             // Authorization for every API endpoint, from the table in
             // App\Support\ApiPermissionMap. Last in the group so the session
             // Sanctum starts above is available to it, and so a request that is
-            // refused has already been rate limited.
+            // refused has already been rate limited. Whether it refuses, only
+            // logs, or stands aside is config('permissions.api_access_control').
             \App\Http\Middleware\ApiAccessControl::class,
         ],
     ];

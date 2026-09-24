@@ -33,6 +33,7 @@ import { getCustomerDetail, CustomerDetailData } from '../services/customerDetai
 import { BillingDetailRecord } from '../types/billing';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 const { width } = Dimensions.get('window');
@@ -44,9 +45,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -77,7 +78,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',
@@ -150,7 +150,6 @@ const StaggeredPayment: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [userRole, setUserRole] = useState('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [orgId, setOrgId] = useState<number | null>(null);
 
   const selectedStaggeredRef = useRef<StaggeredInstallation | null>(null);
@@ -167,20 +166,6 @@ const StaggeredPayment: React.FC = () => {
         setUserRole(userData.role || '');
         setRoleId(userData.role_id || null);
         setOrgId(userData.organization_id || null);
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
       } catch (err) {
         console.error('Error parsing auth data in StaggeredPayment:', err);
       }
@@ -221,9 +206,8 @@ const StaggeredPayment: React.FC = () => {
     setCurrentPage(1);
   }, [searchQuery, selectedDate, staggeredDateFrom, staggeredDateTo]);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
   const { can: hasPermission } = usePermissions();
 
   const globalFilteredRecords = useMemo(() => {

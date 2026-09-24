@@ -15,87 +15,9 @@ use App\Services\RadiusQueueService;
 use App\Models\RadiusConfig;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Auth;
-use App\Models\ActivityLog;
-use App\Models\AuditTrailLog;
-use App\Models\Role;
-use App\Models\ServiceOrder;
-use App\Support\CustomerScope;
 
 class ServiceOrderApiController extends Controller
 {
-    /**
-     * `service_orders.service_charge_status`: whether this order's service
-     * charge has reached the customer's account balance.
-     *
-     * 'pending' — nothing posted. 'added' — the charge is on the balance, and
-     * must not be posted again however many times the ticket is saved.
-     */
-    private const CHARGE_PENDING = 'pending';
-    private const CHARGE_ADDED   = 'added';
-
-    /**
-     * How a reactivation is spelled, in `concern` and in `repair_category`.
-     *
-     * Support files it as a concern, the technician picks it as a repair
-     * category, and the two fields disagree about the word — the category list
-     * says "Reactivate" while older rows and the migration branch say
-     * "Reactivation". Both spellings are read everywhere, from one list, so a
-     * reactivation is never missed because of which field it was filed in or
-     * which word was used.
-     */
-    private const REACTIVATE_CATEGORIES = ['reactivate', 'reactivation'];
-
-    /**
-     * The technical_details columns a PPPoE username is built out of.
-     *
-     * PppoeUsernameService encodes the LCP, the NAP and the port into the name,
-     * so a change to any one of them is what makes the stored username describe
-     * a line the customer is no longer on. Nothing else on the record has that
-     * property, which is why the reactivation re-sync watches these three and
-     * not the whole row.
-     */
-    private const LINE_IDENTITY_COLUMNS = ['lcp', 'nap', 'port'];
-
-    /**
-     * The online_status readings that mean the RADIUS account is not cut off.
-     *
-     * RadiusStatusSyncService writes one of Online, Offline, Restricted,
-     * Disconnected or Not Found. Only the first two say the account sits in a
-     * normal plan group: "Offline" is a customer whose router is unplugged, not
-     * a customer who has been cut off, and reconnecting them would achieve
-     * nothing except dropping whatever session they do have.
-     *
-     * Restricted and Disconnected are the opposite — the account is in a cut-off
-     * group and a reactivation has to move it back whatever billing says.
-     */
-    private const RADIUS_CONNECTED_STATUSES = ['online', 'offline'];
-
-    /**
-     * How old an online_status reading may be and still be trusted to SKIP a
-     * reconnection.
-     *
-     * The sync runs every minute but works in batches of a few hundred accounts,
-     * so on a large base a given account's row is refreshed every several
-     * minutes rather than every minute. Fifteen leaves room for that without
-     * trusting a reading from an hour ago.
-     *
-     * Only the skip direction is gated on this. Acting on a stale "Restricted"
-     * costs a redundant reconnection; acting on a stale "Online" would leave a
-     * customer cut off after a reactivation that reported success, which is the
-     * failure worth being asymmetric about.
-     */
-    private const RADIUS_STATUS_TRUSTED_FOR_MINUTES = 15;
-
-    /**
-     * What `users.status` reads for a live portal account.
-     *
-     * Lowercase, matching the value JobOrderController writes when it creates a
-     * customer's login. `active` is the column the sign-in actually gates on;
-     * this one is the human-readable state beside it, and the two are written
-     * together so a row can never say "active" while being locked out.
-     */
-    private const PORTAL_STATUS_ACTIVE = 'active';
-
     /** True when at least one failed RADIUS operation was successfully queued for retry. */
     private bool $radiusQueued = false;
 
@@ -145,18 +67,7 @@ class ServiceOrderApiController extends Controller
             $query = DB::table('service_orders as so')
                 ->select('so.*', 'so.id as ticket_id');
 
-            // A customer has no organization_id, which would otherwise send them
-            // down the super-admin branch and hand them the whole table. Pin them
-            // to their own account before any request filter is applied — the
-            // account_no filter below is client-supplied and cannot be trusted to
-            // do this job.
-            $customerAccountNo = CustomerScope::accountNo('service-order');
-
-            if ($customerAccountNo !== null) {
-                $isSuperAdmin = false;
-                $query->where('so.account_no', $customerAccountNo);
-            }
-            elseif (!$isSuperAdmin && $organizationId) {
+            if (!$isSuperAdmin && $organizationId) {
                 $query->where('so.organization_id', $organizationId);
             }
 
@@ -266,10 +177,36 @@ class ServiceOrderApiController extends Controller
                 $technicalDetails = \App\Models\TechnicalDetail::whereIn('account_no', $accountNos)
                     ->get()
                     ->keyBy('account_no');
+
+                // Accounts installed before technical_details.pppoe_password existed were not
+                // backfilled and still carry the password only on their job order. Resolved in one
+                // batched query rather than per row: ascending id so keyBy keeps the newest, which
+                // is the one that wins when an account has been re-installed.
+                $accountIdsNeedingFallback = $accountNos
+                    ->filter(function ($accountNo) use ($technicalDetails) {
+                        $td = $technicalDetails->get($accountNo);
+                        return !$td || $td->pppoe_password === null || $td->pppoe_password === '';
+                    })
+                    ->map(function ($accountNo) use ($billingAccounts) {
+                        $ba = $billingAccounts->get($accountNo);
+                        return $ba ? $ba->id : null;
+                    })
+                    ->filter()
+                    ->values();
+
+                $jobOrderPasswords = $accountIdsNeedingFallback->isNotEmpty()
+                    ? \App\Models\JobOrder::whereIn('account_id', $accountIdsNeedingFallback)
+                        ->whereNotNull('pppoe_password')
+                        ->where('pppoe_password', '!=', '')
+                        ->orderBy('id')
+                        ->get(['account_id', 'pppoe_password'])
+                        ->keyBy('account_id')
+                    : collect();
             }
             else {
                 $billingAccounts = collect();
                 $technicalDetails = collect();
+                $jobOrderPasswords = collect();
             }
 
             // Map related data to service orders
@@ -278,7 +215,7 @@ class ServiceOrderApiController extends Controller
             // agent's user id, and every screen shows their name.
             \App\Support\AgentReferral::prime($serviceOrders->pluck('referred_by'));
 
-            $mappedOrders = $serviceOrders->map(function ($so) use ($billingAccounts, $technicalDetails) {
+            $mappedOrders = $serviceOrders->map(function ($so) use ($billingAccounts, $technicalDetails, $jobOrderPasswords) {
                 $ba = $billingAccounts->get($so->account_no);
                 $c = $ba ? $ba->customer : null;
                 $td = $technicalDetails->get($so->account_no);
@@ -291,22 +228,35 @@ class ServiceOrderApiController extends Controller
                 // Manually populate fields that were previously joined
                 $so->account_id = $ba ? $ba->id : null;
                 $so->date_installed = $ba ? $ba->date_installed : null;
+                // Prepaid vs Postpaid lives on the billing account, not on the service order.
+                // Carried through so the sidebar can group by it without a second round trip.
+                $so->generation_type = $ba ? $ba->generation_type : null;
 
                 // Customer details
                 $so->full_name = $c ? trim(($c->first_name ?? '') . ' ' . ($c->middle_initial ?? '') . ' ' . ($c->last_name ?? '')) : null;
                 $so->contact_number = $c ? $c->contact_number_primary : null;
                 $so->full_address = $c ? trim(($c->address ?? '') . ', ' . ($c->barangay ?? '') . ', ' . ($c->city ?? '') . ', ' . ($c->region ?? '')) : null;
-                $so->contact_address = $c ? $c->address : null;
-                // Address parts returned separately so the Relocation concern can edit them individually
+                // Also exposed individually, not only folded into full_address, so the
+                // table can column and sort on them and the funnel filter can match
+                // exactly instead of substring-searching the concatenated address —
+                // where a barangay named "San Jose" also matches a city of the same name.
                 $so->barangay = $c ? $c->barangay : null;
                 $so->city = $c ? $c->city : null;
                 $so->region = $c ? $c->region : null;
+                $so->contact_address = $c ? $c->address : null;
                 $so->email_address = $c ? $c->email_address : null;
                 $so->house_front_picture_url = $c ? $c->house_front_picture_url : null;
                 $so->plan = $c ? $c->desired_plan : null;
 
                 // Technical details
                 $so->username = $td ? $td->username : null;
+                // Included here as well as in show() so the details panel opened straight from the
+                // list shows the password instead of a dash.
+                $tdPassword = $td && $td->pppoe_password !== null && $td->pppoe_password !== ''
+                    ? $td->pppoe_password
+                    : null;
+                $fallbackJobOrder = $ba ? $jobOrderPasswords->get($ba->id) : null;
+                $so->pppoe_password = $tdPassword ?? ($fallbackJobOrder ? $fallbackJobOrder->pppoe_password : null);
                 $so->connection_type = $td ? $td->connection_type : null;
                 $so->router_modem_sn = $td ? $td->router_modem_sn : null;
                 $so->lcp = $td ? $td->lcp : null;
@@ -396,14 +346,9 @@ class ServiceOrderApiController extends Controller
                 $timestamp = now('Asia/Manila')->format('Y-m-d H:i:s');
             }
 
-            // A customer may only file under their own account, whatever the
-            // payload says.
-            $customerAccountNo = CustomerScope::accountNo('service-order');
-            $accountNo = $customerAccountNo ?? $validated['account_no'];
-
             $data = [
                 'ticket_id' => $ticketId,
-                'account_no' => $accountNo,
+                'account_no' => $validated['account_no'],
                 'timestamp' => $timestamp,
                 'support_status' => $validated['support_status'] ?? 'In Progress',
                 'concern' => $validated['concern'],
@@ -456,10 +401,10 @@ class ServiceOrderApiController extends Controller
 
             $reconnectStatus = null;
             if ($currentConcern && strtolower($currentConcern) === 'reconnect' && $supportStatus === 'resolved') {
-                $billingAccount = BillingAccount::where('account_no', $accountNo)->first();
+                $billingAccount = BillingAccount::where('account_no', $validated['account_no'])->first();
                 if ($billingAccount) {
                     Log::info('Triggering auto-reconnect for NEW Service Order with Reconnect concern', [
-                        'account_no' => $accountNo
+                        'account_no' => $validated['account_no']
                     ]);
                     $serviceOrderUpdatedByUser = $request->input('updated_by_user') ?: ($request->input('updated_by') ?: (Auth::user()->name ?? 'System'));
                     $reconnectStatus = $this->attemptReconnection($billingAccount, $id, $serviceOrderUpdatedByUser);
@@ -560,11 +505,12 @@ class ServiceOrderApiController extends Controller
                     DB::raw("CONCAT(IFNULL(c.first_name, ''), ' ', IFNULL(c.middle_initial, ''), ' ', IFNULL(c.last_name, '')) as full_name"),
                     'c.contact_number_primary as contact_number',
                     DB::raw("CONCAT(IFNULL(c.address, ''), ', ', IFNULL(c.barangay, ''), ', ', IFNULL(c.city, ''), ', ', IFNULL(c.region, '')) as full_address"),
-                    'c.address as contact_address',
-                    // Address parts selected separately so the Relocation concern can edit them individually
+                    // Individually as well as concatenated above — see index(). Safe to
+                    // select alongside so.*: service_orders has no columns of these names.
                     'c.barangay',
                     'c.city',
                     'c.region',
+                    'c.address as contact_address',
                     'c.email_address',
                     'c.house_front_picture_url',
                     'c.desired_plan as plan',
@@ -574,7 +520,21 @@ class ServiceOrderApiController extends Controller
                     'td.lcp',
                     'td.nap',
                     'td.port',
-                    'td.vlan'
+                    'td.vlan',
+                    // technical_details.pppoe_password is the account's current password. Accounts
+                    // installed before that column existed were not backfilled, so fall back to the
+                    // newest job order — a correlated subquery rather than a join, since an account
+                    // can have several job orders and joining would multiply the service order rows.
+                    DB::raw("COALESCE(NULLIF(td.pppoe_password, ''),
+                             (SELECT jo.pppoe_password FROM job_orders jo
+                              WHERE jo.account_id = ba.id
+                                AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
+                              ORDER BY jo.id DESC LIMIT 1)) as pppoe_password"),
+                    DB::raw("COALESCE(NULLIF(td.username, ''),
+                             (SELECT jo.pppoe_username FROM job_orders jo
+                              WHERE jo.account_id = ba.id
+                                AND jo.pppoe_password IS NOT NULL AND jo.pppoe_password != ''
+                              ORDER BY jo.id DESC LIMIT 1)) as pppoe_username")
                 )
                 ->where('so.id', $id);
 
@@ -603,8 +563,8 @@ class ServiceOrderApiController extends Controller
 
                 // Shown as a name, with the id beside it so an edit form writes
                 // the same referral back rather than turning it into a name.
-                $serviceOrder->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($serviceOrder->referred_by);
-                $serviceOrder->referred_by = \App\Support\AgentReferral::displayName($serviceOrder->referred_by);
+                $serviceOrder->referred_by_agent_id = \App\Support\AgentReferral::agentIdIfAgent($serviceOrder->referred_by ?? null);
+                $serviceOrder->referred_by = \App\Support\AgentReferral::displayName($serviceOrder->referred_by ?? null);
             }
 
             return response()->json([
@@ -652,21 +612,6 @@ class ServiceOrderApiController extends Controller
                 ], 403);
             }
 
-            // A technician works their queue from the top. Enforced here as well
-            // as in the UI so the lock cannot be stepped over by calling the API
-            // directly with another service order's id.
-            if ($this->isServiceOrderLockedForTechnician($serviceOrder, $this->resolveActingUser($request))) {
-                Log::warning('Service order update blocked: locked for technician', [
-                    'id' => $id,
-                    'user_email' => optional($this->resolveActingUser($request))->email,
-                ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This job order is locked. Finish the job order at the top of your list first, or ask an administrator to enable this one.',
-                ], 403);
-            }
-
             $updatedByUser = $request->input('updated_by_user') ?: ($request->input('updated_by') ?: (Auth::user()->name ?? 'System'));
 
             $accountRef = $serviceOrder->account_no;
@@ -675,10 +620,6 @@ class ServiceOrderApiController extends Controller
             $oldBilling = DB::selectOne("SELECT * FROM billing_accounts WHERE account_no = ?", [$accountRef]);
             $oldTechnical = DB::selectOne("SELECT * FROM technical_details WHERE account_no = ?", [$accountRef]);
 
-            // `service_charge_status` is deliberately absent: it is the server's
-            // record of whether this order's charge has reached a balance, and a
-            // client that could set it could reset it to 'pending' — which is
-            // precisely how the same charge gets posted to a customer twice.
             $allowedFields = [
                 'account_no',
                 'timestamp',
@@ -739,32 +680,6 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
-            // The day a technician moved the visit status.
-            //
-            // Derived here rather than read from the request: it is a claim
-            // about who acted and on what day, and neither the acting role nor
-            // the device's clock is the client's to assert. `visit_status_date`
-            // is deliberately absent from $allowedFields above, so a request
-            // naming it is ignored rather than trusted.
-            //
-            // Written only when the status actually moves. Re-saving a ticket
-            // without touching the dropdown — which both clients do on every
-            // save, since visit_status is sent whenever the ticket is For Visit
-            // — leaves the original date standing.
-            if (array_key_exists('visit_status', $data)
-                && $this->isTechnician($this->resolveActingUser($request))
-                && $this->visitStatusChanged($serviceOrder->visit_status ?? null, $data['visit_status'])
-            ) {
-                $data['visit_status_date'] = now()->toDateString();
-
-                Log::info('Visit status moved by a technician', [
-                    'id' => $id,
-                    'from' => $serviceOrder->visit_status ?? null,
-                    'to' => $data['visit_status'],
-                    'visit_status_date' => $data['visit_status_date'],
-                ]);
-            }
-
             $data['updated_at'] = now();
 
             Log::info('Filtered data for update', ['data' => $data]);
@@ -778,9 +693,14 @@ class ServiceOrderApiController extends Controller
                 $request->filled('new_vlan') ||
                 $request->filled('new_router_modem_sn');
 
-            // Captured where the swap is detected, applied only after the writes
-            // below have landed: SmartOLT is an external HTTP API and must never be
-            // called with a database write still in flight.
+            // Deferred rather than written here so the technical_details change lands
+            // in the same transaction as the service_orders row further down. A router
+            // swap that updates one and not the other leaves the account pointing at
+            // hardware it does not have, with no record of the previous SN to undo it.
+            $pendingTechnicalUpdate = null;
+
+            // Captured here, applied only after that transaction commits: SmartOLT is
+            // an external HTTP API and must never be called with a transaction open.
             $smartOltSync = null;
 
             if ($hasNewTechnicalDetails) {
@@ -843,23 +763,13 @@ class ServiceOrderApiController extends Controller
                     $data['new_router_modem_sn'] = $newSN;
                     $data['new_lcpnap'] = $newLcpNap;
 
-                    // Prepare update array for technical_details.
-                    //
-                    // router_modem_sn is deliberately NOT written here. The serial
-                    // only becomes the account's active router once the visit is
-                    // Done — see the deferred write further down, which lands it at
-                    // the same moment SmartOLT is told about the swap so the two
-                    // never disagree about which router is live.
-                    //
-                    // Holding it back also keeps old_router_modem_sn above honest:
-                    // it is read straight off technical_details, so writing the new
-                    // serial now would make a re-save record the new router as the
-                    // one that came out.
+                    // Prepare update array for technical_details
                     $techUpdateData = [
                         'lcp' => $newLcp,
                         'nap' => $newNap,
                         'port' => $newPort,
                         'vlan' => $newVlan,
+                        'router_modem_sn' => $newSN,
                         'lcpnap' => $newLcpNap,
                         'updated_at' => now(),
                         'updated_by' => $updatedByUser
@@ -870,35 +780,28 @@ class ServiceOrderApiController extends Controller
                         $techUpdateData['connection_type'] = 'Fiber';
                     }
 
-                    // Update technical_details table
-                    DB::table('technical_details')
-                        ->where('account_no', $serviceOrder->account_no)
-                        ->update($techUpdateData);
-
-                    // Also update job_orders table to keep lcpnap/port/vlan in sync
+                    // Also keep job_orders' lcpnap/port/vlan in sync
                     $billingAccountForJobOrder = DB::table('billing_accounts')
                         ->where('account_no', $serviceOrder->account_no)
                         ->first();
 
-                    if ($billingAccountForJobOrder) {
-                        $jobOrderSyncData = array_filter([
-                            'lcpnap' => $newLcpNap ?: null,
-                            'port' => $newPort ?: null,
-                            'vlan' => $newVlan ?: null,
-                            'updated_at' => now(),
-                        ], fn($v) => !is_null($v));
+                    $jobOrderSyncData = array_filter([
+                        'lcpnap' => $newLcpNap ?: null,
+                        'port' => $newPort ?: null,
+                        'vlan' => $newVlan ?: null,
+                        'updated_at' => now(),
+                    ], fn($v) => !is_null($v));
 
-                        $joAffected = DB::table('job_orders')
-                            ->where('account_id', $billingAccountForJobOrder->id)
-                            ->update($jobOrderSyncData);
-
-                        Log::info('[API SERVICE ORDER] Synced job_orders lcpnap/port/vlan for account_id ' . $billingAccountForJobOrder->id, [
-                            'rows_affected' => $joAffected,
-                            'lcpnap' => $newLcpNap,
-                            'port' => $newPort,
-                            'vlan' => $newVlan,
-                        ]);
-                    }
+                    // Staged, not executed — see $pendingTechnicalUpdate above.
+                    $pendingTechnicalUpdate = [
+                        'account_no' => $serviceOrder->account_no,
+                        'technical' => $techUpdateData,
+                        'job_order_account_id' => $billingAccountForJobOrder->id ?? null,
+                        'job_order' => $jobOrderSyncData,
+                        'lcpnap' => $newLcpNap,
+                        'port' => $newPort,
+                        'vlan' => $newVlan,
+                    ];
 
                     // A replaced router is the SN actually changing. Comparing the
                     // stored SN against the new one is what keeps a re-saved order
@@ -936,125 +839,53 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
-            // Relocation address fields (customers table). Optional: only the fields actually
-            // sent are written, so an untouched field is never overwritten. Restricted to
-            // Administrator (role 1) and SuperAdmin (role 7) so a technician cannot change a
-            // customer address by posting these directly. The unauthenticated fallback matches
-            // the $isSuperAdmin convention above (these routes carry no auth middleware).
-            // Old/new values are captured by the customers diff logged at the end of update().
-            $canEditCustomerAddress = !$authUser || in_array((int) $roleId, [1, 7], true);
-            $addressFields = ['address', 'barangay', 'city', 'region'];
+            // ── Service charge: apply once, and only once ────────────────────
+            //
+            // Two different transitions each mean "the work is finished and the
+            // customer owes for it": support_status reaching Resolved, and
+            // visit_status reaching Done. A service order normally passes through
+            // BOTH, on separate saves — the technician closes the visit as Done,
+            // then support marks the order Resolved — so each one fired its own
+            // balance update and the customer was billed the same charge twice.
+            //
+            // service_charge_status is the record of that: 'added' once the money has
+            // moved, null before. It is not in $allowedFields and not on the model's
+            // $fillable, so no request can set or clear it — unlike `status`, which the
+            // edit modal posts back on every save and a stale form could reset.
+            $serviceChargeApplied = strtolower(trim((string) ($serviceOrder->service_charge_status ?? ''))) === 'added';
 
-            if ($canEditCustomerAddress) {
-                $addressUpdate = [];
-                foreach ($addressFields as $addressField) {
-                    if ($request->has($addressField)) {
-                        $addressUpdate[$addressField] = $request->input($addressField);
-                    }
-                }
+            $shouldAddServiceCharge = false;
+            $statusChanged = false;
 
-                if (!empty($addressUpdate)) {
-                    $addressUpdate['updated_at'] = now();
-                    DB::table('customers')
-                        ->where('account_no', $serviceOrder->account_no)
-                        ->update($addressUpdate);
+            if ($request->has('support_status') && $request->input('support_status') === 'Resolved' && $serviceOrder->support_status !== 'Resolved') {
+                $shouldAddServiceCharge = true;
+                $statusChanged = true;
+                Log::info('Support status changed to Resolved, will add service charge to account balance');
+            }
 
-                    Log::info('Updated customer address from service order', [
-                        'account_no' => $serviceOrder->account_no,
-                        'fields' => array_keys($addressUpdate)
-                    ]);
-                }
-            } elseif (count(array_intersect($addressFields, array_keys($request->all()))) > 0) {
-                Log::warning('Blocked customer address update from service order: role not permitted', [
+            if ($request->has('visit_status') && $request->input('visit_status') === 'Done' && $serviceOrder->visit_status !== 'Done') {
+                $shouldAddServiceCharge = true;
+                $statusChanged = true;
+                Log::info('Visit status changed to Done, will add service charge to account balance');
+            }
+
+            if ($serviceChargeApplied && $shouldAddServiceCharge) {
+                Log::info('Service charge already posted for this service order; skipping duplicate balance update.', [
+                    'service_order_id' => $id,
                     'account_no' => $serviceOrder->account_no,
-                    'role_id' => $roleId
                 ]);
             }
 
-            // ── Service charge → account balance ───────────────────────────────
-            // The charge is posted once the ticket is finished (support Resolved,
-            // or the visit marked Done). It is keyed to the service order rather
-            // than to the moment the status flips, so a charge entered — or
-            // corrected — on a ticket that is *already* Resolved still reaches the
-            // balance.
-            //
-            // A ticket finishes twice, though: the technician marks the visit
-            // Done, and support marks it Resolved. Both mean "bill this job", so
-            // both reach here, and the charge must land once across the two.
-            //
-            // Two things stop it landing twice, because they fail in different
-            // ways. `service_charge_logs` records every amount posted for this
-            // order, so a later save applies only the difference — that handles
-            // the saves arriving one after the other, and handles a charge
-            // corrected after the fact. It does not handle the two saves
-            // overlapping: both read the same empty ledger and both conclude the
-            // whole charge is owing. `service_charge_status` handles that one —
-            // the first posting has to win a conditional UPDATE off 'pending'
-            // before it may touch the balance, and only one request can.
-            $effectiveSupportStatus = strtolower(trim((string) ($request->has('support_status')
-                ? $request->input('support_status')
-                : ($serviceOrder->support_status ?? ''))));
-            $effectiveVisitStatus = strtolower(trim((string) ($request->has('visit_status')
-                ? $request->input('visit_status')
-                : ($serviceOrder->visit_status ?? ''))));
-
-            $chargeIsDue = $effectiveSupportStatus === 'resolved'
-                || in_array($effectiveVisitStatus, ['done', 'completed'], true);
-
-            $serviceChargeTotal = round(floatval($request->has('service_charge')
-                ? $request->input('service_charge')
-                : ($serviceOrder->service_charge ?? 0)), 2);
-
-            if ($chargeIsDue) {
-                $alreadyAdded = strtolower(trim((string) ($serviceOrder->service_charge_status ?? '')))
-                    === self::CHARGE_ADDED;
-
-                $chargeLogs = DB::table('service_charge_logs')
-                    ->where('service_order_id', $serviceOrder->id)
-                    ->get();
-
-                // What has already been posted for this order. Charges applied
-                // before they were logged left only status = 'used' behind — and,
-                // on a ticket the backfill marked, only service_charge_status —
-                // so for those the stored charge stands in as the amount already
-                // posted. Without that, an old ticket's first save under this
-                // code would read an empty ledger and post its charge again.
-                if ($chargeLogs->isNotEmpty()) {
-                    $postedSoFar = round((float) $chargeLogs->sum('service_charge'), 2);
-                } elseif ($alreadyAdded || strtolower(trim((string) ($serviceOrder->status ?? ''))) === 'used') {
-                    $postedSoFar = round(floatval($serviceOrder->service_charge ?? 0), 2);
-                } else {
-                    $postedSoFar = 0.0;
-                }
-
-                $chargeDelta = round($serviceChargeTotal - $postedSoFar, 2);
-
-                // The first posting has to claim the order before it may move the
-                // balance. Two saves racing — the visit marked Done and the ticket
-                // marked Resolved, arriving together — both get this far with the
-                // same delta; only one wins the UPDATE, and the other stops here.
-                //
-                // A correction on an order already marked 'added' skips the claim:
-                // there is nothing left to win, and the ledger delta above is what
-                // keeps it honest.
-                if (abs($chargeDelta) >= 0.01 && !$alreadyAdded && !$this->claimServiceCharge($serviceOrder->id)) {
-                    Log::info('Service charge already posted by a concurrent save; skipping', [
-                        'service_order_id' => $serviceOrder->id,
-                        'account_no'       => $serviceOrder->account_no,
-                        'charge'           => $serviceChargeTotal,
-                    ]);
-
-                    $chargeDelta = 0.0;
-                }
-
-                if (abs($chargeDelta) >= 0.01) {
+            if ($shouldAddServiceCharge && $statusChanged && !$serviceChargeApplied && $request->has('service_charge')) {
+                $serviceCharge = floatval($request->input('service_charge'));
+                if ($serviceCharge > 0) {
                     $billingAccount = DB::table('billing_accounts')
                         ->where('account_no', $serviceOrder->account_no)
                         ->first();
 
                     if ($billingAccount) {
                         $currentBalance = floatval($billingAccount->account_balance);
-                        $newBalance = round($currentBalance + $chargeDelta, 2);
+                        $newBalance = $currentBalance + $serviceCharge;
 
                         DB::table('billing_accounts')
                             ->where('account_no', $serviceOrder->account_no)
@@ -1062,25 +893,6 @@ class ServiceOrderApiController extends Controller
                             'account_balance' => $newBalance,
                             'balance_update_date' => now(),
                             'updated_at' => now()
-                        ]);
-
-                        // Logged as already applied ('Used'): the balance was moved
-                        // here, so billing generation — which bills 'Unused' rows —
-                        // must not charge it a second time. The row is also what the
-                        // next save reads back to work out the delta.
-                        DB::table('service_charge_logs')->insert([
-                            'organization_id'     => $serviceOrder->organization_id ?? null,
-                            'account_no'          => $serviceOrder->account_no,
-                            'service_order_id'    => $serviceOrder->id,
-                            'service_charge'      => $chargeDelta,
-                            'service_charge_type' => 'Service Order Charge',
-                            'status'              => 'Used',
-                            'date_used'           => now(),
-                            'remarks'             => "Posted to account balance from service order #{$serviceOrder->id}",
-                            'created_by'          => $updatedByUser,
-                            'updated_by'          => $updatedByUser,
-                            'created_at'          => now(),
-                            'updated_at'          => now(),
                         ]);
 
                         try {
@@ -1100,26 +912,16 @@ class ServiceOrderApiController extends Controller
                             ]);
                         }
 
-                        $data['status'] = $serviceChargeTotal > 0 ? 'used' : 'unused';
+                        // The new marker, and the legacy one it replaces: `status` is
+                        // still written so anything reading it keeps seeing what it
+                        // always saw, but service_charge_status is what the guard above
+                        // consults.
+                        $data['service_charge_status'] = 'added';
+                        $data['status'] = 'used';
 
-                        // A charge corrected back down to nothing has been taken
-                        // off the balance again, so the order is owed a posting
-                        // once more if a charge is entered later. Written through
-                        // $data, which is applied below, so it takes effect after
-                        // the claim rather than fighting it.
-                        $data['service_charge_status'] = $serviceChargeTotal > 0
-                            ? self::CHARGE_ADDED
-                            : self::CHARGE_PENDING;
-
-                        Log::info("Updated account balance from {$currentBalance} to {$newBalance} (service order #{$serviceOrder->id} charge: {$serviceChargeTotal}, already posted: {$postedSoFar}, applied now: {$chargeDelta}).");
+                        Log::info("Updated account balance from {$currentBalance} to {$newBalance} (added service charge: {$serviceCharge}). service_charge_status marked 'added'.");
                     }
                     else {
-                        // The claim was taken above but nothing reached a balance,
-                        // because there is no billing account to reach. Give it
-                        // back: left at 'added' the order would be treated as paid
-                        // for ever after and the charge would never be posted.
-                        $data['service_charge_status'] = self::CHARGE_PENDING;
-
                         Log::warning('Billing account not found for account_no: ' . $serviceOrder->account_no);
                     }
                 }
@@ -1150,8 +952,15 @@ class ServiceOrderApiController extends Controller
                     : ($serviceOrder->visit_status ?? ''))));
 
                 $visitInProgress = in_array($effectiveVisit, ['in progress', 'in-progress', 'inprogress'], true);
-                $leftInProgress  = ($effectiveSupport === 'failed')
+                $leftInProgress  = ($effectiveSupport === 'failed' || $effectiveSupport === 'resolved')
                     || ($effectiveVisit !== '' && !$visitInProgress);
+
+                // Auto-synchronize visit_status when support_status moves to terminal and visit_status was not explicitly given
+                if ($effectiveSupport === 'failed' && !array_key_exists('visit_status', $data) && $visitInProgress) {
+                    $data['visit_status'] = 'Failed';
+                } elseif ($effectiveSupport === 'resolved' && !array_key_exists('visit_status', $data) && $visitInProgress) {
+                    $data['visit_status'] = null;
+                }
 
                 $startTimePresent = array_key_exists('start_time', $data)
                     ? !empty($data['start_time'])
@@ -1164,15 +973,80 @@ class ServiceOrderApiController extends Controller
                 if ($leftInProgress && $startTimePresent && !$callerManagesEndTime && empty($serviceOrder->end_time)) {
                     $data['end_time'] = \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s');
                 }
+
+                if ($effectiveVisit === 'done' && !array_key_exists('date_installed', $data) && empty($serviceOrder->date_installed)) {
+                    $data['date_installed'] = $data['end_time'] ?? ($serviceOrder->end_time ?? \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s'));
+                }
             }
             // ──────────────────────────────────────────────────────────────────
 
-            DB::table('service_orders')->where('id', $id)->update($data);
+            // A service order coming back from Failed or Reschedule is a NEW visit, so the
+            // timings the previous attempt left on the row are cleared. Folded into $data so
+            // the reset lands in the same UPDATE as the status change and is picked up by the
+            // change log below — see VisitTimerResetService for why a stale start_time is
+            // worse than none.
+            $data = app(\App\Services\VisitTimerResetService::class)->applyTo(
+                $data,
+                $serviceOrder->visit_status ?? null,
+                $data['visit_status'] ?? null,
+                [
+                    'entity' => 'service_order',
+                    'id' => $id,
+                    'ticket_id' => $serviceOrder->ticket_id ?? null,
+                    'actor' => $updatedByUser,
+                ]
+            );
 
-            // The SmartOLT handover used to fire here, on any save that carried a new
-            // SN. It now waits until the ticket says the replacement visit is
-            // finished — see the "Replace Router" block further down, next to the
-            // pullout and migration triggers it belongs with.
+            // The row's own write is transactional: the status change and the timing reset it
+            // triggers have to land together, or a half-applied save leaves an In Progress
+            // visit still carrying the previous attempt's clock. The technical_details and
+            // job_orders writes join it because a router/LCP-NAP swap is one change across
+            // three tables — the new SN on the account, the old SN recorded on the order, and
+            // the port sync — and any subset of those landing alone is a wrong record.
+            //
+            // Still scoped to these statements on purpose: the SmartOLT, RADIUS and
+            // reconnection work below makes outbound HTTP calls, and holding a transaction
+            // open across those would pin row locks for the length of a network round trip.
+            $joAffected = null;
+
+            DB::transaction(function () use ($id, $data, $pendingTechnicalUpdate, &$joAffected) {
+                if ($pendingTechnicalUpdate !== null) {
+                    DB::table('technical_details')
+                        ->where('account_no', $pendingTechnicalUpdate['account_no'])
+                        ->update($pendingTechnicalUpdate['technical']);
+
+                    if ($pendingTechnicalUpdate['job_order_account_id'] !== null) {
+                        $joAffected = DB::table('job_orders')
+                            ->where('account_id', $pendingTechnicalUpdate['job_order_account_id'])
+                            ->update($pendingTechnicalUpdate['job_order']);
+                    }
+                }
+
+                DB::table('service_orders')->where('id', $id)->update($data);
+            });
+
+            // Logged after commit so the line never claims a sync that rolled back.
+            if ($joAffected !== null) {
+                Log::info('[API SERVICE ORDER] Synced job_orders lcpnap/port/vlan for account_id ' . $pendingTechnicalUpdate['job_order_account_id'], [
+                    'rows_affected' => $joAffected,
+                    'lcpnap' => $pendingTechnicalUpdate['lcpnap'],
+                    'port' => $pendingTechnicalUpdate['port'],
+                    'vlan' => $pendingTechnicalUpdate['vlan'],
+                ]);
+            }
+
+            // Hand the ONU over in SmartOLT: unbind the router that came out, name the
+            // one that went in. Post-commit and best-effort by design — a SmartOLT
+            // outage must never fail a visit the technician already saved, so the
+            // service swallows and logs every failure to the smartoltrelated channel.
+            if ($smartOltSync !== null) {
+                app(\App\Services\SmartOltService::class)->syncOnuForRouterReplacement(
+                    $serviceOrder->account_no,
+                    $smartOltSync['old_sn'],
+                    $smartOltSync['new_sn'],
+                    '[API SERVICE ORDER REPLACE ROUTER]'
+                );
+            }
 
             if (isset($data['assigned_email']) && $data['assigned_email'] !== ($serviceOrder->assigned_email ?? null)) {
                 try {
@@ -1267,20 +1141,12 @@ class ServiceOrderApiController extends Controller
 
             $isAlreadyResolvedReconnect = (($originalConcern === 'Reconnect' || $originalConcern === 'Upgrade/Downgrade Plan') && $originalSupportStatus === 'resolved');
             $isAlreadyResolvedRestrict = (($originalConcern === 'Restrict' || $originalConcern === 'Disconnect') && $originalSupportStatus === 'resolved');
-            // Mirrors the trigger below, by asking the same object the same
-            // question against the row as it was BEFORE this write. Its job is to
-            // stop a re-save of a finished pullout from running it a second time,
-            // so it has to agree with the trigger or it will suppress a pullout
-            // that has not happened yet.
-            $isAlreadyPulloutDone = \App\Support\PulloutCategory::deactivatesPortalLogin(
-                $originalRepairCategory,
-                $originalVisitStatus
-            );
+            $pulloutCategories = ['pullout', 'for pullout'];
+            $isAlreadyPulloutDone = (
+                    in_array(strtolower(trim($originalRepairCategory)), $pulloutCategories, true)
+                    || in_array(strtolower(trim($originalConcern)), $pulloutCategories, true)
+                ) && $originalVisitStatus === 'done';
             $isAlreadyMigrationDone = (in_array($originalRepairCategory, ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port']) && $originalVisitStatus === 'done');
-            // Was the ONU handover already earned before this write? If so this save
-            // is a re-save of a finished replacement and must not run it again.
-            $isAlreadyReplaceRouterDone = ($originalRepairCategory === \App\Services\SmartOltService::REPLACE_ROUTER_CATEGORY
-                && $originalVisitStatus === \App\Services\SmartOltService::VISIT_STATUS_DONE);
 
             $reconnectStatus = null;
             $normalizedConcern = $currentConcern ? strtolower(trim($currentConcern)) : '';
@@ -1331,32 +1197,11 @@ class ServiceOrderApiController extends Controller
             // Compared case-insensitively — the old `=== 'Reactivate'` check missed
             // any other casing. 'reactivation' is accepted too because the
             // repair-category lookup spells it that way and the two get mixed up.
-            $reactivateConcerns = self::REACTIVATE_CATEGORIES;
-
-            // Read from the repair category as well as the concern.
-            //
-            // A reactivation gets recorded in either field depending on who files
-            // it — support sets the concern, the technician picks the repair
-            // category — and the pullout trigger further down already reads
-            // repair_category for exactly that reason. Matching only `concern`
-            // here meant a resolved Reactivation ticket could leave the account
-            // pulled out with no way back, because this branch is the ONLY place
-            // in the codebase that sets users.active to 1.
-            $reactivateRepairCategory = strtolower(trim($request->input('repair_category') ?? ''));
-            if ($reactivateRepairCategory === '' && isset($serviceOrder->repair_category)) {
-                $reactivateRepairCategory = strtolower(trim($serviceOrder->repair_category));
-            }
-
-            $isReactivateRequest = in_array($normalizedConcern, $reactivateConcerns, true)
-                || in_array($reactivateRepairCategory, $reactivateConcerns, true);
-
-            $isAlreadyResolvedReactivate = (
-                    in_array(strtolower(trim($originalConcern)), $reactivateConcerns, true)
-                    || in_array(strtolower(trim($originalRepairCategory)), $reactivateConcerns, true)
-                )
+            $reactivateConcerns = ['reactivate', 'reactivation'];
+            $isAlreadyResolvedReactivate = in_array(strtolower(trim($originalConcern)), $reactivateConcerns, true)
                 && $originalSupportStatus === 'resolved';
 
-            if ($isReactivateRequest && $supportStatus === 'resolved') {
+            if (in_array($normalizedConcern, $reactivateConcerns, true) && $supportStatus === 'resolved') {
                 // Forced, and deliberately outside the billing check below.
                 // Gating this on "billing is not already Active" is exactly what
                 // kept users.active at 0: four other paths restore
@@ -1365,16 +1210,8 @@ class ServiceOrderApiController extends Controller
                 // looked Active already and the write was skipped. Re-running it
                 // is harmless and repairs any account left stuck that way.
                 try {
-                    // Both columns, together. `active` is what the sign-in checks;
-                    // `status` is the state shown beside the account and is what a
-                    // new portal login is created holding. Writing only the first
-                    // left a reactivated customer able to sign in while every
-                    // screen still described them as inactive.
                     $activated = \App\Models\User::where('username', $serviceOrder->account_no)
-                        ->update([
-                            'active' => 1,
-                            'status' => self::PORTAL_STATUS_ACTIVE,
-                        ]);
+                        ->update(['active' => 1]);
 
                     if ($activated === 0) {
                         // Not the same as success: no portal login exists for this
@@ -1383,63 +1220,32 @@ class ServiceOrderApiController extends Controller
                             'account_no' => $serviceOrder->account_no
                         ]);
                     } else {
-                        \Log::info('[REACTIVATE] users.active set to 1 and users.status set to active', [
+                        \Log::info('[REACTIVATE] users.active set to 1', [
                             'account_no' => $serviceOrder->account_no,
                             'rows' => $activated
                         ]);
                     }
                 } catch (\Exception $e) {
-                    \Log::error('[REACTIVATE] Failed to activate the portal login: ' . $e->getMessage(), [
+                    \Log::error('[REACTIVATE] Failed to set users.active = 1: ' . $e->getMessage(), [
                         'account_no' => $serviceOrder->account_no
                     ]);
                 }
 
-                // Reconnect, unless the line is already up.
-                //
-                // "Already up" used to mean billing_status_id == 1 and nothing
-                // else, which was wrong in both directions. An account can carry
-                // Active billing while its RADIUS account still sits in the
-                // Restricted or Disconnected group — several paths set the
-                // billing column without touching RADIUS — and that reactivation
-                // reported success while leaving the customer cut off. The
-                // reverse costs less but is still churn: an account already in
-                // its plan group gets its session dropped and re-applied for
-                // nothing.
-                //
-                // So RADIUS is asked first and billing is the fallback for when
-                // there is no usable reading. See radiusSaysConnected().
+                // The billing/RADIUS side stays gated — re-running it for an
+                // account that is already Active would be a no-op at best.
                 if (!$isAlreadyResolvedReactivate) {
                     $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
-
-                    if (!$billingAccount) {
-                        $reactivateStatus = 'no_account';
-                        \Log::warning('[REACTIVATE] No billing account; reconnection skipped', [
+                    if ($billingAccount && (int) $billingAccount->billing_status_id !== 1) {
+                        \Log::info('Triggering reactivation for Service Order with Reactivate concern', [
                             'account_no' => $serviceOrder->account_no,
+                            'current_billing_status_id' => $billingAccount->billing_status_id
                         ]);
+                        // attemptReconnection sets billing_status_id to 1 (Active) and re-applies the plan in RADIUS
+                        $reactivateStatus = $this->attemptReconnection($billingAccount, $id, $updatedByUser, $organizationId);
                     } else {
-                        $radiusConnected = $this->radiusSaysConnected($serviceOrder->account_no);
-                        $billingActive = (int) $billingAccount->billing_status_id === 1;
-
-                        // A reading beats the billing column either way; billing
-                        // only decides when RADIUS has nothing fresh to say.
-                        $alreadyUp = $radiusConnected ?? $billingActive;
-
-                        if ($alreadyUp) {
-                            $reactivateStatus = $radiusConnected === true ? 'already_online' : 'already_active';
-                            \Log::info('[REACTIVATE] Account is already connected; RADIUS step skipped', [
-                                'account_no'                => $serviceOrder->account_no,
-                                'radius_says_connected'     => $radiusConnected,
-                                'billing_status_id'         => $billingAccount->billing_status_id,
-                            ]);
-                        } else {
-                            \Log::info('Triggering reactivation for Service Order with Reactivate concern', [
-                                'account_no' => $serviceOrder->account_no,
-                                'current_billing_status_id' => $billingAccount->billing_status_id,
-                                'radius_says_connected' => $radiusConnected,
-                            ]);
-                            // attemptReconnection sets billing_status_id to 1 (Active) and re-applies the plan in RADIUS
-                            $reactivateStatus = $this->attemptReconnection($billingAccount, $id, $updatedByUser, $organizationId);
-                        }
+                        \Log::info('Reactivate: billing already Active or account not found; RADIUS step skipped', [
+                            'account_no' => $serviceOrder->account_no
+                        ]);
                     }
                 }
             }
@@ -1474,88 +1280,29 @@ class ServiceOrderApiController extends Controller
                 $repairCategory = strtolower(trim($serviceOrder->repair_category));
             }
 
-
-            // The pullout itself is decided on what the ticket says AFTER this
-            // request's write, not on $request and not on the pre-update copy above.
-            //
-            // This is the write that disables the customer's portal login, so the
-            // request-or-stored fallbacks are too loose for it in both directions:
-            //   • a request that only sets the category to Pullout would inherit a
-            //     'Done' left behind by an earlier, unrelated visit, and disable the
-            //     login without any pullout visit having been completed;
-            //   • a request that merely claims visit_status=Done would be trusted
-            //     even if that value never reached the row.
-            // Reading the row back closes both: no completed pullout visit on the
-            // record, no deactivation.
-            $pulloutRow = DB::table('service_orders')->where('id', $id)->first();
-            $pulloutVisitStatus = strtolower(trim((string) ($pulloutRow->visit_status ?? '')));
-            $pulloutRepairCategory = strtolower(trim((string) ($pulloutRow->repair_category ?? '')));
-
-            // The REPAIR CATEGORY decides this, and nothing else. Every spelling
-            // of it — "Pullout", "Pull Out", "for pullout" — is one instruction;
-            // see App\Support\PulloutCategory, which holds the whole rule.
-            //
-            // Consequence worth knowing: AutoDisconnectService::createPulloutRequest
-            // raises its tickets with concern = 'for pullout' and no category, so
-            // closing one of those disables the login only if the technician picks
-            // Pullout as the Repair Category. The modal requires a category when
-            // the visit is Done and Pullout is in the list, so it is available —
-            // but it is a choice now rather than an inference.
-            $isPulloutVisitDone = \App\Support\PulloutCategory::deactivatesPortalLogin(
-                $pulloutRepairCategory,
-                $pulloutVisitStatus
-            );
-
-            if ($isPulloutVisitDone && !$isAlreadyPulloutDone) {
+            $pulloutCategories = ['pullout', 'for pullout'];
+            $pulloutConcern = strtolower(trim((string) ($serviceOrder->concern ?? $request->input('concern') ?? '')));
+            if ((in_array($repairCategory, $pulloutCategories, true) || in_array($pulloutConcern, $pulloutCategories, true)) && $visitStatus === 'done' && !$isAlreadyPulloutDone) {
                 $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
                 if ($billingAccount) {
                     \Log::info('Triggering auto-pullout for Service Order with Pullout repair category', [
                         'account_no' => $serviceOrder->account_no
                     ]);
-                    $pulloutStatus = $this->attemptPullout($billingAccount, $updatedByUser, $organizationId, (int) ($pulloutRow->id ?? $id));
+                    $pulloutStatus = $this->attemptPullout($billingAccount, $updatedByUser, $organizationId);
                 }
             }
 
-            // The new serial becomes the account's active router only now, once the
-            // ticket says the visit is Done. Held back from the technical_details
-            // write earlier in this method so a repair still in progress does not
-            // move the customer onto a router that has not been installed yet.
-            //
-            // Read from the stored row, not the request: the serial may have been
-            // entered on an earlier save and the visit completed by a later one that
-            // carries no SN at all.
-            \App\Support\ReplacementRouterSn::applyIfVisitDone($pulloutRow, $updatedByUser, '[API SERVICE ORDER REPLACE ROUTER]');
-
-            // Trigger the SmartOLT router handover when repair category is
-            // 'Replace Router' AND visit status is 'Done'.
-            //
-            // Decided on $pulloutRow — the ticket as stored AFTER this request's
-            // write — for the same reason the pullout above is: neither the request
-            // body nor the pre-update copy can be trusted to say the visit is
-            // finished. A replacement still in progress therefore never reaches
-            // SmartOLT, however the payload is spelled.
-            //
-            // Best-effort by design: a SmartOLT outage must never fail a visit the
-            // technician already saved, so the service logs every outcome to the
-            // smartoltrelated channel and returns rather than throwing.
-            $replaceRouterStatus = app(\App\Services\SmartOltService::class)
-                ->syncOnuForCompletedRouterReplacement(
-                    $pulloutRow,
-                    $isAlreadyReplaceRouterDone,
-                    $smartOltSync,
-                    '[API SERVICE ORDER REPLACE ROUTER]'
-                );
-
             // Trigger Migration if repair category is 'Migrate', 'Relocate', or 'Transfer LCP/NAP/PORT' and visit status is 'Done'
             $migrationStatus = null;
-            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port'];
+            $relocateCategories = ['migrate', 'relocate', 'relocate router', 'transfer lcp/nap/port', 'transfer lcp nap port', 'transfer lcp nap vlan', 'transfer lcp / nap / port', 'update vlan'];
             if (in_array($repairCategory, $relocateCategories) && $visitStatus === 'done' && !$isAlreadyMigrationDone) {
                 $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
                 if ($billingAccount) {
                     \Log::info('Triggering auto-migration for Service Order', [
-                        'account_no' => $serviceOrder->account_no
+                        'account_no' => $serviceOrder->account_no,
+                        'repair_category' => $repairCategory
                     ]);
-                    $migrationStatus = $this->attemptMigration($billingAccount, $repairCategory, $updatedByUser, $organizationId);
+                    $migrationStatus = $this->attemptMigration($billingAccount, $repairCategory, $updatedByUser, $organizationId, $serviceOrder, $request);
 
                     // Update job_orders table with new LCPNAP, port, and vlan for relocation categories
                     $newLcpnap = $request->input('new_lcpnap');
@@ -1584,68 +1331,9 @@ class ServiceOrderApiController extends Controller
                 }
             }
 
-            // Re-point a reactivated account's RADIUS account at the line it came
-            // back on.
-            //
-            // A reactivation is not a relocation, so it is not in the list above
-            // and must not be: most reactivations put the customer back on the
-            // port they left on, and renaming their PPPoE account for that would
-            // churn a working credential for nothing. But some come back on a
-            // different LCP, NAP or port, and those three are exactly what
-            // PppoeUsernameService encodes into the username — so when one of
-            // them moves, the stored credential starts describing a line the
-            // customer is no longer on, and RADIUS has to be told.
-            //
-            // The change is read off the row rather than off the request: the
-            // technical_details write further up has already landed by here, so
-            // comparing it against the copy taken before the write answers "did
-            // this save move the line" for any route into it, and cannot be
-            // claimed by a client that did not actually change anything.
-            //
-            // No `already done` guard, unlike the migration trigger beside it.
-            // This one is self-limiting — a re-save of an unchanged ticket
-            // produces no diff and does nothing — and adding one would block the
-            // legitimate case of a second move on a ticket that is already Done.
-            $reactivateRadiusStatus = null;
-
-            if (in_array($repairCategory, self::REACTIVATE_CATEGORIES, true) && $visitStatus === 'done') {
-                $technicalAfterUpdate = DB::selectOne(
-                    "SELECT * FROM technical_details WHERE account_no = ?",
-                    [$accountRef]
-                );
-
-                $movedColumns = $this->changedLineIdentity($oldTechnical, $technicalAfterUpdate);
-
-                if (empty($movedColumns)) {
-                    $reactivateRadiusStatus = 'no_change';
-                    \Log::info('[API SERVICE ORDER REACTIVATE RADIUS SKIP] LCP/NAP/Port unchanged', [
-                        'account_no' => $serviceOrder->account_no,
-                    ]);
-                } else {
-                    $billingAccount = BillingAccount::where('account_no', $serviceOrder->account_no)->first();
-
-                    if (!$billingAccount) {
-                        $reactivateRadiusStatus = 'no_account';
-                        \Log::warning('[API SERVICE ORDER REACTIVATE RADIUS SKIP] No billing account', [
-                            'account_no' => $serviceOrder->account_no,
-                        ]);
-                    } else {
-                        \Log::info('[API SERVICE ORDER REACTIVATE RADIUS] Line moved, re-syncing RADIUS', [
-                            'account_no' => $serviceOrder->account_no,
-                            'changed'    => $movedColumns,
-                        ]);
-
-                        $reactivateRadiusStatus = $this->attemptReactivationRadiusSync(
-                            $billingAccount,
-                            $id,
-                            $updatedByUser,
-                            $organizationId
-                        );
-                    }
-                }
-            }
-
             $updatedServiceOrder = DB::table('service_orders')->where('id', $id)->first();
+
+            $this->broadcastServiceChargeClaimed($serviceOrder, $updatedServiceOrder);
 
             // Compare and log changes to customers, billing_accounts, and technical_details
             $newCustomer = DB::selectOne("SELECT * FROM customers WHERE account_no = ?", [$accountRef]);
@@ -1698,11 +1386,6 @@ class ServiceOrderApiController extends Controller
                 'data' => $updatedServiceOrder,
                 'reconnect_status' => $reconnectStatus,
                 'reactivate_status' => $reactivateStatus,
-                // The RADIUS rename a reactivation onto a different LCP/NAP/port
-                // triggers. Separate from reactivate_status, which is the billing
-                // and portal side: one can succeed while the other is queued, and
-                // the technician needs to be told which.
-                'reactivate_radius_status' => $reactivateRadiusStatus,
                 'restricted_status' => $restrictedStatus,
                 'pullout_status' => $pulloutStatus,
                 'migration_status' => $migrationStatus,
@@ -1842,314 +1525,79 @@ class ServiceOrderApiController extends Controller
     }
 
     /**
-     * Release a service order to its technician ahead of their queue.
+     * Announce a service charge the moment a technician claims one.
      *
-     * Technicians work In Progress first and oldest first within that: only the
-     * record at the top of their list is actionable, everything else active is
-     * greyed out. An administrator calls this to unlock one specific service
-     * order early. Restricted to administrators by the `role` middleware on the
-     * route — technician_enabled is not fillable, so this is the only way it can
-     * be set.
+     * Fires on the transition, not on every save: either the visit just completed
+     * carrying a charge, or a charge appeared/changed on a visit that was already
+     * Done. Without the second case a technician who marks the visit Done first and
+     * fills the amount in afterwards would never announce the claim; without the
+     * change comparison every later edit to an unrelated field would re-announce it.
+     *
+     * Compared as floats because service_charge arrives as a decimal string from
+     * the driver — '500.00' and '500' are the same claim and must not look like a
+     * change. Wrapped in its own try/catch for the same reason broadcastJobOrderDone
+     * is: a broadcast transport that is down must not fail the technician's save.
      */
-    public function enableForTechnician(Request $request, $id): JsonResponse
+    private function broadcastServiceChargeClaimed($before, $after): void
     {
         try {
-            $currentUser = $this->resolveActingUser($request);
-            $organizationId = $currentUser ? $currentUser->organization_id : null;
-            $isSuperAdmin = !$currentUser || (int) $currentUser->role_id === Role::SUPER_ADMIN || !$organizationId;
-
-            $serviceOrder = DB::table('service_orders')->where('id', $id)->first();
-
-            if (!$serviceOrder) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Service order not found'
-                ], 404);
+            if (!$after) {
+                return;
             }
 
-            if (!$isSuperAdmin && $organizationId && $serviceOrder->organization_id !== $organizationId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized access to service order'
-                ], 403);
+            $chargeBefore = (float) ($before->service_charge ?? 0);
+            $chargeAfter = (float) ($after->service_charge ?? 0);
+            $wasDone = ($before->visit_status ?? null) === 'Done';
+            $isDone = ($after->visit_status ?? null) === 'Done';
+
+            if (!$isDone || $chargeAfter <= 0) {
+                return;
             }
 
-            // Already released — answer successfully with the current state rather
-            // than writing an audit entry for a no-op.
-            if (!empty($serviceOrder->technician_enabled)) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'This service order is already enabled for the technician.',
-                    'data' => [
-                        'id' => $serviceOrder->id,
-                        'technician_enabled' => true,
-                    ],
-                ]);
+            // Half a centavo: the column is decimal(10,2), so anything smaller is
+            // float representation noise rather than a real change to the claim.
+            if ($wasDone && abs($chargeAfter - $chargeBefore) < 0.005) {
+                return;
             }
 
-            $performedBy = $request->input('updated_by_user')
-                ?? optional($currentUser)->email_address
-                ?? optional($currentUser)->email
-                ?? 'System';
+            // Same shape the consolidated feed emits, so a row arriving over the
+            // socket and the same row arriving from a later poll are interchangeable.
+            $customer = DB::table('billing_accounts')
+                ->leftJoin('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->where('billing_accounts.account_no', $after->account_no)
+                ->select('customers.first_name', 'customers.last_name')
+                ->first();
 
-            DB::table('service_orders')->where('id', $id)->update([
-                'technician_enabled' => 1,
-                'updated_by_user' => $performedBy,
-                'updated_at' => Carbon::now(),
+            $customerName = $customer
+                ? trim(($customer->first_name ?? '') . ' ' . ($customer->last_name ?? ''))
+                : '';
+
+            $technician = trim((string) ($after->visit_by_user ?? ''));
+            $amount = '₱ ' . number_format($chargeAfter, 2);
+
+            event(new \App\Events\ServiceChargeClaimed([
+                'id' => $after->id,
+                'type' => 'service_order_charge_claimed',
+                'customer_name' => $customerName ?: ($after->account_no ?? 'Unknown account'),
+                'plan_name' => $amount,
+                'technician' => $technician !== '' ? $technician : null,
+                'title' => 'Service Charge Claimed',
+                'message' => ($technician !== '' ? $technician : 'A technician')
+                    . " claimed a {$amount} service charge on service order #{$after->id}",
+                'timestamp' => now()->timestamp,
+                'formatted_date' => now()->format('Y-m-d h:i:s A'),
+                'organization_id' => $after->organization_id ?? null,
+            ]));
+
+            Log::info('Real-time broadcast sent for Service Charge Claimed', [
+                'service_order_id' => $after->id,
+                'service_charge' => $chargeAfter,
             ]);
-
-            AuditTrailLog::create([
-                'old_details' => [
-                    'type' => 'serviceorders',
-                    'id' => $serviceOrder->id,
-                    'data' => ['technician_enabled' => false],
-                ],
-                'new_details' => [
-                    'type' => 'serviceorders',
-                    'id' => $serviceOrder->id,
-                    'data' => ['technician_enabled' => true],
-                ],
-                'created_by_user' => $performedBy,
-                'updated_by_user' => $performedBy,
-            ]);
-
-            ActivityLog::log(
-                'Service Order Enabled For Technician',
-                "Service Order #{$serviceOrder->id} unlocked for technician access by {$performedBy}",
-                'info',
-                [
-                    'user_email' => $performedBy,
-                    'resource_type' => 'ServiceOrder',
-                    'resource_id' => $serviceOrder->id,
-                ]
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Service order enabled for technician access.',
-                'data' => [
-                    'id' => $serviceOrder->id,
-                    'technician_enabled' => true,
-                ],
-            ]);
-        }
-        catch (\Exception $e) {
-            Log::error('Failed to enable service order for technician', [
-                'service_order_id' => $id,
+        } catch (\Exception $e) {
+            Log::warning('Failed to broadcast Service Charge Claimed via Soketi', [
                 'error' => $e->getMessage(),
             ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to enable service order for technician',
-                'error' => $e->getMessage()
-            ], 500);
         }
-    }
-
-    /**
-     * The signed-in user, however this request authenticated.
-     *
-     * The service-orders routes sit outside the `auth:sanctum` group, so the
-     * default session guard resolves the web portal (cookie based) but NOT the
-     * mobile app, which sends a bearer token. Asking Sanctum's guard covers both,
-     * and it is asked only for the technician queue checks below — the rest of
-     * this controller keeps using auth()->user() exactly as it did.
-     */
-    private function resolveActingUser(Request $request)
-    {
-        if ($user = $request->user()) {
-            return $user;
-        }
-
-        try {
-            return $request->user('sanctum');
-        }
-        catch (\Throwable $e) {
-            // No sanctum guard configured — treat as unidentified.
-            return null;
-        }
-    }
-
-    /**
-     * Is the signed-in user a technician?
-     *
-     * Read strictly off role_id, the way isServiceOrderLockedForTechnician()
-     * below and JobOrderController do. A hybrid custom role that merely builds
-     * on Technician is deliberately not counted: it does not get the queue lock
-     * either, and visit_status_date records that a technician was on site, not
-     * that somebody held a technician-derived permission set.
-     *
-     * An unidentified caller is not a technician, so a request that fails to
-     * authenticate leaves the column alone rather than stamping today onto it.
-     */
-    private function isTechnician($currentUser): bool
-    {
-        return $currentUser !== null && (int) $currentUser->role_id === Role::TECHNICIAN;
-    }
-
-    /**
-     * Claim the right to post this order's service charge to a balance.
-     *
-     * True when the caller may post it, false when someone else already has.
-     *
-     * The UPDATE is the lock. A ticket finishes twice — the visit marked Done
-     * and support marking it Resolved — and when those two saves overlap, both
-     * read a service order that has not been charged yet and both work out the
-     * full charge as owing. Reading the column and then writing it would not
-     * help: both would read 'pending' before either wrote.
-     *
-     * Writing it conditionally does. MySQL takes a row lock for the UPDATE, so
-     * the two run one after the other whatever order they arrived in, and the
-     * WHERE clause is then false for the second — it matches no rows, gets 0
-     * back, and posts nothing. No transaction is needed for this, because the
-     * single statement is the whole of the critical section.
-     *
-     * Matched loosely — null, '', 'pending', any casing — so a row that predates
-     * the column, or one a hand-run UPDATE left empty, is claimable rather than
-     * silently stuck. Only the exact string 'added' blocks a claim.
-     */
-    private function claimServiceCharge(int $serviceOrderId): bool
-    {
-        $claimed = DB::table('service_orders')
-            ->where('id', $serviceOrderId)
-            ->whereRaw(
-                "LOWER(TRIM(COALESCE(service_charge_status, ''))) <> ?",
-                [self::CHARGE_ADDED]
-            )
-            ->update([
-                'service_charge_status' => self::CHARGE_ADDED,
-                'updated_at'            => now(),
-            ]);
-
-        return $claimed > 0;
-    }
-
-    /**
-     * Did the visit status actually move?
-     *
-     * Compared on the trimmed, case-folded strings. Both clients normalise the
-     * dropdown before sending it, but they do so from their own lists and the
-     * stored value may predate either — the show() query hands back whatever is
-     * in the column. A difference in casing or padding alone is not a
-     * technician moving anything, so it must not restamp the date.
-     *
-     * A null and an empty string are the same absence of a status, so clearing
-     * an already-empty field does not count as a move either.
-     */
-    private function visitStatusChanged($previous, $next): bool
-    {
-        $normalise = static fn ($value): string => strtolower(trim((string) ($value ?? '')));
-
-        return $normalise($previous) !== $normalise($next);
-    }
-
-    /**
-     * Is this service order locked for the signed-in user because it is not their
-     * next one in the queue?
-     *
-     * Only ever true for technicians. A service order is open when any of these
-     * hold:
-     *   • it heads the queue of work still assigned to them — the oldest In
-     *     Progress visit, or the oldest other active one when they have none in
-     *     progress, or the oldest rescheduled one when that is all that is left.
-     *     A reschedule sorts last, so it reaches the head only when there is no
-     *     active work in front of it;
-     *   • an administrator enabled it (technician_enabled);
-     *   • they have already started it and not yet closed it — a visit in flight
-     *     must never become unreachable;
-     *   • it is done, resolved, failed or cancelled: nothing is left to act on.
-     *
-     * A rescheduled service order is deliberately NOT open on its status alone.
-     * It stays out of the queue's way, so it never blocks the work behind it, but
-     * booking the return visit back in is an administrator's call.
-     *
-     * A service order that is not part of the technician's own assigned queue is
-     * left alone: this restriction governs the order of their own work, and must
-     * not start blocking records reached some other way.
-     *
-     * Mirrors JobOrderController::isJobOrderLockedForTechnician() and the two
-     * clients' utils/technicianServiceOrderAccess.ts.
-     */
-    private function isServiceOrderLockedForTechnician($serviceOrder, $currentUser): bool
-    {
-        if (!$currentUser || (int) $currentUser->role_id !== Role::TECHNICIAN) {
-            return false;
-        }
-
-        if (!empty($serviceOrder->technician_enabled)) {
-            return false;
-        }
-
-        $visitStatus = strtolower(trim((string) ($serviceOrder->visit_status ?? '')));
-        if (in_array($visitStatus, ServiceOrder::TECHNICIAN_QUEUE_CLOSED_VISIT_STATUSES, true)) {
-            return false;
-        }
-
-        // Already in flight for this technician. A zero date counts as unset, the
-        // same way the two clients read these columns.
-        $isTimeSet = static function ($value): bool {
-            $normalised = strtolower(trim((string) $value));
-            return !in_array($normalised, ['', '0000-00-00 00:00:00', 'not set', '-', 'none', 'null'], true);
-        };
-
-        if ($isTimeSet($serviceOrder->start_time ?? null) && !$isTimeSet($serviceOrder->end_time ?? null)) {
-            return false;
-        }
-
-        $technicianEmail = $currentUser->email ?? $currentUser->email_address ?? null;
-        if (!$technicianEmail) {
-            return false;
-        }
-
-        // The technician's open queue, in the order the two clients paint their
-        // list: In Progress first, then other active work, then deferred work
-        // last, oldest first within each band on the ticket's own timestamp
-        // falling back to the row's creation date. So the head of this list is the
-        // record that appears at the top of the technician's screen.
-        //
-        // Deferred work is ranked here rather than excluded with the finished
-        // work. Sorting last is what keeps it from taking the slot away from
-        // active work; excluding it made it neither next nor locked.
-        //
-        // Membership of THIS list is also what decides whether the service order
-        // is one of theirs to queue at all. Testing ownership separately would
-        // mean two comparisons of the same email that can disagree — and a
-        // disagreement fails open, because an empty queue never blocks.
-        $inProgressFirst = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(visit_status, ''))) IN ('%s') THEN 0 ELSE 1 END",
-            implode("', '", ServiceOrder::TECHNICIAN_IN_PROGRESS_VISIT_STATUSES)
-        );
-
-        $deferredLast = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(visit_status, ''))) IN ('%s') THEN 1 ELSE 0 END",
-            implode("', '", ServiceOrder::TECHNICIAN_QUEUE_DEFERRED_VISIT_STATUSES)
-        );
-
-        $queue = DB::table('service_orders')
-            ->where('assigned_email', $technicianEmail)
-            ->whereNotIn(
-                DB::raw("LOWER(TRIM(COALESCE(visit_status, '')))"),
-                ServiceOrder::TECHNICIAN_QUEUE_CLOSED_VISIT_STATUSES
-            )
-            ->when($currentUser->organization_id, function ($q) use ($currentUser) {
-                $q->where('organization_id', $currentUser->organization_id);
-            }, function ($q) {
-                $q->whereNull('organization_id');
-            })
-            ->orderBy(DB::raw($deferredLast))
-            ->orderBy(DB::raw($inProgressFirst))
-            ->orderBy(DB::raw('COALESCE(`timestamp`, `created_at`)'))
-            ->orderBy('id')
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id);
-
-        // Not part of their own queue — leave the existing behaviour alone.
-        if (!$queue->contains((int) $serviceOrder->id)) {
-            return false;
-        }
-
-        return $queue->first() !== (int) $serviceOrder->id;
     }
 
     public function destroy($id): JsonResponse
@@ -2664,7 +2112,7 @@ class ServiceOrderApiController extends Controller
         }
     }
 
-    private function attemptPullout($billingAccount, $updatedByUser = 'System', ?int $organizationId = null, ?int $serviceOrderId = null): string
+    private function attemptPullout($billingAccount, $updatedByUser = 'System', ?int $organizationId = null): string
     {
         try {
             // Reload billing account
@@ -2739,32 +2187,14 @@ class ServiceOrderApiController extends Controller
 
             \Log::info('[API SERVICE ORDER PULLOUT DB] Updated billing_status_id to 5 (Pullout) for Account: ' . $accountNo);
 
-            // Preserve the hardware serial on the pullout service order before clearing technical_details
-            // so downstream reconciliation (SmartOLT unprovisioning after 2 weeks) can identify the device.
+            // Clear the ONU name in SmartOLT before wiping the SN from technical_details (best-effort)
             if (!empty($routerModemSn)) {
-                $soUpdateQuery = DB::table('service_orders')
-                    ->where('account_no', $accountNo)
-                    ->where(function ($q) {
-                        $q->whereNull('old_router_modem_sn')->orWhere('old_router_modem_sn', '');
-                    });
-
-                if ($serviceOrderId) {
-                    $soUpdateQuery->where('id', $serviceOrderId);
-                } else {
-                    $soUpdateQuery->where(function ($q) {
-                        $q->whereIn(DB::raw("LOWER(TRIM(COALESCE(concern, '')))"), ['pullout', 'for pullout'])
-                          ->orWhere(DB::raw("LOWER(TRIM(COALESCE(repair_category, '')))"), '=', 'pullout');
-                    });
-                }
-
-                $soUpdateQuery->update([
-                    'old_router_modem_sn' => $routerModemSn,
-                    'updated_at' => now(),
+                $smartOltStatus = app(\App\Services\SmartOltService::class)->clearOnuNameBySn($routerModemSn);
+                \Log::info('[API SERVICE ORDER PULLOUT SMARTOLT] Clear ONU name result: ' . $smartOltStatus, [
+                    'account_no' => $accountNo,
+                    'router_modem_sn' => $routerModemSn,
                 ]);
             }
-
-            // Do NOT delete or modify the ONU on SmartOLT during Service Order pullout.
-            // ONU unprovisioning is deferred for 2 weeks (14 days) and handled by cron:smartolt-daily-automation.
 
             // Clear technical details
             DB::table('technical_details')
@@ -2880,150 +2310,23 @@ class ServiceOrderApiController extends Controller
         }
     }
 
-    /**
-     * Does RADIUS currently have this account in a normal plan group?
-     *
-     * Read from online_status, which the every-minute sync keeps in step with
-     * the RADIUS servers — the controller does not call RADIUS itself for this,
-     * because a reachability round trip on the save path would make a slow or
-     * unreachable server slow down every reactivation, and the answer is already
-     * being collected.
-     *
-     * Three answers, and the third is the point of returning a nullable:
-     *
-     *   true   the account is in its plan group (Online, or Offline with the
-     *          router unplugged). Nothing to reconnect.
-     *   false  the account is Restricted, Disconnected or absent from RADIUS.
-     *          It is cut off and a reactivation has to bring it back.
-     *   null   no row, or one too old to trust. The caller falls back to the
-     *          billing column rather than guessing — and the fallback errs
-     *          towards reconnecting, because a redundant reconnection costs a
-     *          dropped session and a missed one costs a customer still cut off
-     *          after being told they were restored.
-     */
-    private function radiusSaysConnected(?string $accountNo): ?bool
-    {
-        if (empty($accountNo)) {
-            return null;
-        }
-
-        try {
-            $reading = DB::table('online_status')
-                ->where('account_no', $accountNo)
-                ->select('session_status', 'updated_at')
-                ->first();
-
-            if (!$reading || $reading->session_status === null) {
-                return null;
-            }
-
-            $status = strtolower(trim((string) $reading->session_status));
-
-            if ($status === '') {
-                return null;
-            }
-
-            $connected = in_array($status, self::RADIUS_CONNECTED_STATUSES, true);
-
-            // Staleness is only allowed to veto the skip. A stale reading that
-            // says "cut off" still sends us down the reconnect path, which is
-            // the safe direction to be wrong in.
-            if ($connected) {
-                $updatedAt = $reading->updated_at ? Carbon::parse($reading->updated_at) : null;
-
-                if (!$updatedAt || $updatedAt->lt(now()->subMinutes(self::RADIUS_STATUS_TRUSTED_FOR_MINUTES))) {
-                    \Log::info('[REACTIVATE] online_status says connected but the reading is stale; ignoring it', [
-                        'account_no'     => $accountNo,
-                        'session_status' => $reading->session_status,
-                        'updated_at'     => $reading->updated_at,
-                    ]);
-
-                    return null;
-                }
-            }
-
-            return $connected;
-        } catch (\Exception $e) {
-            // online_status is an optimisation, not a dependency: a deployment
-            // without the table, or a failed read, must not stop a reactivation.
-            \Log::warning('[REACTIVATE] Could not read online_status: ' . $e->getMessage(), [
-                'account_no' => $accountNo,
-            ]);
-
-            return null;
-        }
-    }
-
-    /**
-     * Which of the LCP/NAP/port columns this save actually moved.
-     *
-     * Compared trimmed and case-folded so a cosmetic difference — "lcp-008" in
-     * one field and "LCP-008" in the other, or a stray trailing space picked up
-     * from a paste — is not read as a move and does not rename a working PPPoE
-     * account. A missing row on either side means there is nothing to compare
-     * and therefore nothing moved.
-     *
-     * @param  object|null  $before  technical_details as it was before the write.
-     * @param  object|null  $after   technical_details as it is now.
-     * @return string[]  The column names that differ, in LINE_IDENTITY_COLUMNS order.
-     */
-    private function changedLineIdentity($before, $after): array
-    {
-        if (!$before || !$after) {
-            return [];
-        }
-
-        $normalize = static fn ($value) => strtolower(trim((string) ($value ?? '')));
-
-        $changed = [];
-
-        foreach (self::LINE_IDENTITY_COLUMNS as $column) {
-            if ($normalize($before->$column ?? null) !== $normalize($after->$column ?? null)) {
-                $changed[] = $column;
-            }
-        }
-
-        return $changed;
-    }
-
-    /**
-     * Rename a reactivated account's RADIUS account to match the line it is on.
-     *
-     * Called only when the save moved the LCP, NAP or port — see the caller.
-     * Everything here reads the record as it stands AFTER that write, so the
-     * name is generated from the line the customer is actually on rather than
-     * from what the request happened to carry.
-     *
-     * The rename itself goes through ManualRadiusOperationsService::
-     * updateCredentials, the same call Migrate and Transfer LCP/NAP/PORT use.
-     * That is deliberate rather than convenient: it writes technical_details and
-     * job_orders first and only then renames on the device, and on a device
-     * failure it throws so the caller can queue the rename — which is what makes
-     * a half-completed rename recoverable instead of a silent split between the
-     * two. Nothing here writes the username itself; doing so would put a second
-     * writer on the same column and the two would disagree the first time one of
-     * them failed.
-     *
-     * Return values, all surfaced to the client:
-     *   no_username   the account has no PPPoE credential to rename
-     *   no_change     the generated name already matches what is stored
-     *   success       renamed in the database and on the device
-     *   radius_failed the database holds the new name; the device rename is queued
-     *   exception     nothing was attempted
-     */
-    private function attemptReactivationRadiusSync(
+    private function attemptMigration(
         $billingAccount,
-        $serviceOrderId = null,
+        $repairCategory = null,
         $updatedByUser = 'System',
-        ?int $organizationId = null
+        ?int $organizationId = null,
+        $serviceOrder = null,
+        ?Request $request = null
     ): string {
         try {
             $accountNo = $billingAccount->account_no;
 
-            \Log::info('[API SERVICE ORDER REACTIVATE RADIUS] Starting for account: ' . $accountNo);
+            \Log::info('[API SERVICE ORDER MIGRATION] Starting credential migration for account: ' . $accountNo, [
+                'repair_category' => $repairCategory,
+                'updated_by' => $updatedByUser
+            ]);
 
-            // The same projection attemptMigration builds its name from, so the
-            // two produce identical usernames for identical lines.
+            // Get customer & technical details
             $fullInfo = DB::table('billing_accounts')
                 ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
                 ->leftJoin('technical_details', 'billing_accounts.id', '=', 'technical_details.account_id')
@@ -3044,221 +2347,103 @@ class ServiceOrderApiController extends Controller
             $oldUsername = $fullInfo->pppoe_username ?? null;
 
             if (empty($oldUsername)) {
-                \Log::info('[API SERVICE ORDER REACTIVATE RADIUS SKIP] No PPPoE username on the account');
-                return 'no_username';
-            }
-
-            $pppoeService = new PppoeUsernameService();
-            $newUsername = $pppoeService->generateUniqueUsername((array) $fullInfo);
-
-            // The line moved but the name did not — a pattern that does not
-            // encode the port, say. Renaming to the name already in use would be
-            // a no-op on the device and a pointless session drop for the
-            // customer, so stop here.
-            if ($oldUsername === $newUsername) {
-                \Log::info('[API SERVICE ORDER REACTIVATE RADIUS SKIP] Username unchanged', [
-                    'account_no' => $accountNo,
-                    'username'   => $oldUsername,
-                ]);
-                return 'no_change';
-            }
-
-            \Log::info("[API SERVICE ORDER REACTIVATE RADIUS] Renaming '{$oldUsername}' -> '{$newUsername}'");
-
-            $credParams = [
-                'accountNumber' => $accountNo,
-                'username'      => $oldUsername,
-                'newUsername'   => $newUsername,
-                // Reactivation restores an account; it does not re-issue it. The
-                // customer's router is still configured with the old password and
-                // keeping it is what lets them come back up without a re-config.
-                'newPassword'   => null,
-                'updatedBy'     => $updatedByUser,
-            ];
-
-            $radiusSuccess = false;
-            $lastRadiusError = '';
-
-            for ($attempt = 1; $attempt <= 2; $attempt++) {
-                $this->radiusSteps[] = ['step' => 'attempt_' . $attempt, 'operation' => 'reactivate', 'status' => 'trying'];
-
-                try {
-                    $radiusOps = app(ManualRadiusOperationsService::class);
-                    $credResult = $radiusOps->updateCredentials($credParams);
-
-                    if (($credResult['status'] ?? '') === 'success') {
-                        $radiusSuccess = true;
-                        $this->radiusSteps[count($this->radiusSteps) - 1]['status'] = 'success';
-                        \Log::channel('radiusrelated')->info("[API SERVICE ORDER REACTIVATE RADIUS] Renamed on attempt {$attempt}");
-                        break;
-                    }
-
-                    $lastRadiusError = $credResult['message'] ?? 'Operation returned failure';
-                    $this->radiusSteps[count($this->radiusSteps) - 1]['status'] = 'failed';
-                    \Log::channel('radiusrelated')->warning("[API SERVICE ORDER REACTIVATE RADIUS] Attempt {$attempt}/2 failed: {$lastRadiusError}");
-                } catch (\Exception $radEx) {
-                    $lastRadiusError = $radEx->getMessage();
-                    $this->radiusSteps[count($this->radiusSteps) - 1]['status'] = 'failed';
-                    \Log::channel('radiusrelated')->warning("[API SERVICE ORDER REACTIVATE RADIUS] Attempt {$attempt}/2 exception: {$lastRadiusError}");
-                }
-
-                if ($attempt < 2) {
-                    sleep(1);
-                }
-            }
-
-            if ($radiusSuccess) {
-                return 'success';
-            }
-
-            // updateCredentials renames the database before it touches the
-            // device, so by here the account already holds the new name and the
-            // device does not. Queuing the same call is what closes that gap —
-            // the worker replays it until the device agrees. Losing it would
-            // leave the customer unable to authenticate with either name.
-            \Log::channel('radiusrelated')->error('[API SERVICE ORDER REACTIVATE RADIUS] All attempts failed. Queuing for retry.');
-            $this->radiusSteps[] = ['step' => 'queued', 'operation' => 'reactivate', 'status' => 'trying'];
-
-            $this->trackRadiusQueue([
-                'organization_id' => $organizationId ?? null,
-                'source_type'     => 'service_order',
-                'source_id'       => $serviceOrderId ?? 0,
-                'account_no'      => $accountNo,
-                'operation'       => 'update_credentials',
-                'params'          => $credParams,
-                'last_error'      => $lastRadiusError,
-                'created_by'      => $updatedByUser,
-            ]);
-
-            $this->radiusSteps[count($this->radiusSteps) - 1]['status'] = $this->radiusQueued ? 'success' : 'failed';
-
-            return 'radius_failed';
-        } catch (\Exception $e) {
-            \Log::error('[API SERVICE ORDER REACTIVATE RADIUS EXCEPTION] ' . $e->getMessage());
-            return 'exception';
-        }
-    }
-
-    private function attemptMigration($billingAccount, $repairCategory = null, $updatedByUser = 'System', ?int $organizationId = null): string
-    {
-        try {
-            $accountNo = $billingAccount->account_no;
-
-            \Log::info('[API SERVICE ORDER MIGRATION] Force starting for account: ' . $accountNo);
-
-            // Get data for username generation
-            $fullInfo = DB::table('billing_accounts')
-                ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
-                ->leftJoin('technical_details', 'billing_accounts.id', '=', 'technical_details.account_id')
-                ->where('billing_accounts.account_no', $accountNo)
-                ->select(
-                'customers.first_name',
-                'customers.middle_initial',
-                'customers.last_name',
-                'customers.contact_number_primary as mobile_number',
-                'customers.desired_plan',
-                'technical_details.lcp',
-                'technical_details.nap',
-                'technical_details.port',
-                'technical_details.username as pppoe_username'
-            )
-                ->first();
-
-            $oldUsername = $fullInfo->pppoe_username ?? null;
-
-            if (empty($oldUsername)) {
                 \Log::info('[API SERVICE ORDER MIGRATION SKIP] No PPPoE username found');
                 return 'no_username';
             }
 
             \Log::info('[API SERVICE ORDER MIGRATION] Found old username: ' . $oldUsername);
 
-            // SPECIAL CASE: Transfer LCP/NAP/PORT, Migrate & Reactivation
-            $normalizedCategory = $repairCategory ? strtolower(trim($repairCategory)) : '';
-            if ($normalizedCategory === 'transfer lcp/nap/port' || $normalizedCategory === 'migrate') {
-                \Log::info("[API SERVICE ORDER] Handling {$repairCategory} via updateCredentials (rename in place)");
+            // Determine LCP, NAP, PORT from request, service order, or fallback to fullInfo
+            $newLcp = $request?->input('new_lcp') ?? $request?->input('lcp') ?? $serviceOrder?->new_lcp ?? null;
+            $newNap = $request?->input('new_nap') ?? $request?->input('nap') ?? $serviceOrder?->new_nap ?? null;
+            $newPort = $request?->input('new_port') ?? $request?->input('port') ?? $serviceOrder?->new_port ?? null;
+            $newLcpNap = $request?->input('new_lcpnap') ?? $serviceOrder?->new_lcpnap ?? null;
 
-                // 1. Generate new username (keep existing password)
-                $pppoeService = new PppoeUsernameService();
-                $customerData = (array)$fullInfo;
-                $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $lcp = $newLcp;
+            $nap = $newNap;
 
-                \Log::info("[API SERVICE ORDER] Renaming username: '{$oldUsername}' -> '{$newUsername}'");
-
-                // 2. Update Credentials with retry (3 attempts, then queue)
-                $credParams = [
-                    'accountNumber' => $accountNo,
-                    'username' => $oldUsername,
-                    'newUsername' => $newUsername,
-                    'newPassword' => null,
-                    'updatedBy' => $updatedByUser
-                ];
-                $radiusSuccess = false;
-                $lastRadiusError = '';
-                for ($attempt = 1; $attempt <= 2; $attempt++) {
-                    try {
-                        $radiusOps = app(ManualRadiusOperationsService::class);
-                        $credResult = $radiusOps->updateCredentials($credParams);
-                        if (($credResult['status'] ?? '') === 'success') {
-                            $radiusSuccess = true;
-                            \Log::info("[API SERVICE ORDER] Username renamed successfully on attempt {$attempt}");
-                            break;
-                        }
-                        $lastRadiusError = $credResult['message'] ?? 'Operation returned failure';
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 failed: {$lastRadiusError}");
-                    } catch (\Exception $radEx) {
-                        $lastRadiusError = $radEx->getMessage();
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 exception: {$lastRadiusError}");
-                    }
-                    if ($attempt < 2) sleep(1);
+            if ((empty($lcp) || empty($nap)) && !empty($newLcpNap)) {
+                $lcpnapData = DB::table('lcpnap_locations')
+                    ->where('lcpnap_name', trim($newLcpNap))
+                    ->orWhere('id', trim($newLcpNap))
+                    ->first();
+                if ($lcpnapData) {
+                    $lcp = $lcp ?: trim($lcpnapData->lcp ?? '');
+                    $nap = $nap ?: trim($lcpnapData->nap ?? '');
                 }
-                if ($radiusSuccess) {
-                    return 'success';
-                }
-                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All 3 attempts failed. Queuing for retry.');
-                $this->trackRadiusQueue([
-                    'organization_id' => $organizationId ?? null,
-                    'source_type' => 'service_order',
-                    'source_id' => 0,
-                    'account_no' => $accountNo,
-                    'operation' => 'update_credentials',
-                    'params' => $credParams,
-                    'last_error' => $lastRadiusError,
-                    'created_by' => $updatedByUser,
-                ]);
-                return 'radius_failed';
             }
 
-            // Generate new username using the same logic as JobOrderController
-            $pppoeService = new PppoeUsernameService();
-            $customerData = (array)$fullInfo;
-            $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $lcp = $lcp ?: ($fullInfo->lcp ?? '');
+            $nap = $nap ?: ($fullInfo->nap ?? '');
+            $port = $newPort ?: ($fullInfo->port ?? '');
 
-            \Log::info('[API SERVICE ORDER MIGRATION] Generated new username', [
-                'old' => $oldUsername,
-                'new' => $newUsername
+            // Determine technician completion timestamp
+            $completionTimestamp = $request?->input('end_time')
+                ?: ($serviceOrder?->end_time
+                ?: ($request?->input('date_installed')
+                ?: ($serviceOrder?->date_installed
+                ?: \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s'))));
+
+            // Ensure timestamp has time portion
+            if (strlen(trim((string)$completionTimestamp)) <= 10) {
+                try {
+                    $completionTimestamp = \Carbon\Carbon::parse($completionTimestamp)
+                        ->setTimeFrom(\Carbon\Carbon::now('Asia/Manila'))
+                        ->format('Y-m-d H:i:s');
+                } catch (\Throwable $ex) {
+                    $completionTimestamp = \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s');
+                }
+            }
+
+            $customerData = [
+                'first_name' => $fullInfo->first_name ?? '',
+                'middle_initial' => $fullInfo->middle_initial ?? '',
+                'last_name' => $fullInfo->last_name ?? '',
+                'mobile_number' => $fullInfo->mobile_number ?? '',
+                'desired_plan' => $fullInfo->desired_plan ?? '',
+                'lcp' => trim($lcp ?? ''),
+                'nap' => trim($nap ?? ''),
+                'port' => trim($port ?? ''),
+                'date_installed' => $completionTimestamp,
+                'custom_password' => $request?->input('custom_password') ?? null,
+                'tech_input_username' => $request?->input('tech_input_username') ?? null,
+            ];
+
+            $pppoeService = new PppoeUsernameService();
+            $newUsername = $pppoeService->generateUniqueUsername($customerData);
+            $newPassword = $pppoeService->generatePassword($customerData);
+
+            \Log::info('[API SERVICE ORDER MIGRATION] Generated new credentials', [
+                'old_username' => $oldUsername,
+                'new_username' => $newUsername,
+                'password_length' => strlen($newPassword),
+                'completion_timestamp' => $completionTimestamp,
+                'lcp' => $lcp,
+                'nap' => $nap,
+                'port' => $port,
             ]);
 
-            if ($oldUsername === $newUsername) {
-                \Log::info('[API SERVICE ORDER MIGRATION SKIP] Username did not change');
-                return 'no_change';
+            $normalizedCategory = $repairCategory ? strtolower(trim(str_replace(['/', '_'], ' ', $repairCategory))) : '';
+            $targetCategories = ['relocate', 'relocate router', 'transfer lcp nap vlan', 'transfer lcp nap port', 'migrate', 'update vlan'];
+            $isTargetRadiusCategory = false;
+            foreach ($targetCategories as $tc) {
+                if (str_contains($normalizedCategory, $tc) || $normalizedCategory === $tc) {
+                    $isTargetRadiusCategory = true;
+                    break;
+                }
             }
 
-            // RADIUS RENAME LOGIC — same approach as Transfer LCP/NAP/PORT:
-            // updateCredentials does disable → kill session → PATCH name → re-enable in place.
-            // No delete + recreate — that was wiping the user and breaking the connection.
-            $targetCategories = ['relocate', 'relocate router', 'transfer lcp nap vlan'];
-
-            if (in_array($normalizedCategory, $targetCategories)) {
-                \Log::info("[API SERVICE ORDER] Handling {$normalizedCategory} via updateCredentials (rename in place)");
+            if ($isTargetRadiusCategory || $oldUsername !== $newUsername) {
+                \Log::info("[API SERVICE ORDER] Handling {$repairCategory} via updateCredentials (rename in place with new password)");
 
                 $credParams = [
                     'accountNumber' => $accountNo,
                     'username' => $oldUsername,
                     'newUsername' => $newUsername,
-                    'newPassword' => null,
+                    'newPassword' => $newPassword,
                     'updatedBy' => $updatedByUser
                 ];
+
                 $radiusSuccess = false;
                 $lastRadiusError = '';
                 for ($attempt = 1; $attempt <= 2; $attempt++) {
@@ -3267,25 +2452,27 @@ class ServiceOrderApiController extends Controller
                         $credResult = $radiusOps->updateCredentials($credParams);
                         if (($credResult['status'] ?? '') === 'success') {
                             $radiusSuccess = true;
-                            \Log::info("[API SERVICE ORDER MIGRATION] Username renamed on attempt {$attempt}");
+                            \Log::info("[API SERVICE ORDER MIGRATION] Credentials updated successfully on attempt {$attempt}");
                             break;
                         }
                         $lastRadiusError = $credResult['message'] ?? 'Operation returned failure';
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 failed: {$lastRadiusError}");
+                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/2 failed: {$lastRadiusError}");
                     } catch (\Exception $radEx) {
                         $lastRadiusError = $radEx->getMessage();
-                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/3 exception: {$lastRadiusError}");
+                        \Log::channel('radiusrelated')->warning("[API SERVICE ORDER MIGRATION RADIUS] Attempt {$attempt}/2 exception: {$lastRadiusError}");
                     }
                     if ($attempt < 2) sleep(1);
                 }
+
                 if ($radiusSuccess) {
                     return 'success';
                 }
-                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All 3 attempts failed. Queuing for retry.');
+
+                \Log::channel('radiusrelated')->error('[API SERVICE ORDER MIGRATION RADIUS] All attempts failed. Queuing for retry.');
                 $this->trackRadiusQueue([
                     'organization_id' => $organizationId ?? null,
                     'source_type' => 'service_order',
-                    'source_id' => 0,
+                    'source_id' => $serviceOrder->id ?? 0,
                     'account_no' => $accountNo,
                     'operation' => 'update_credentials',
                     'params' => $credParams,
@@ -3293,34 +2480,35 @@ class ServiceOrderApiController extends Controller
                     'created_by' => $updatedByUser,
                 ]);
                 return 'radius_failed';
-            }
-            else {
-                // For other categories, DB-only update (no RADIUS change needed)
+            } else {
+                // For other categories, DB-only update
                 \Log::info('[API SERVICE ORDER MIGRATION PROCEED] Updating database credentials (DB ONLY) for ' . $oldUsername);
 
                 DB::table('technical_details')
                     ->where('account_id', $billingAccount->id)
                     ->update([
-                    'username' => $newUsername,
-                    'updated_at' => now(),
-                    'updated_by' => $updatedByUser
-                ]);
+                        'username' => $newUsername,
+                        'updated_at' => now(),
+                        'updated_by' => $updatedByUser
+                    ]);
 
-                DB::table('job_orders')
-                    ->where('account_id', $billingAccount->id)
-                    ->update([
+                $joUpdate = [
                     'pppoe_username' => $newUsername,
                     'username' => $newUsername,
                     'updated_at' => now()
-                ]);
+                ];
+                if (!empty($newPassword)) {
+                    $joUpdate['pppoe_password'] = $newPassword;
+                }
+
+                DB::table('job_orders')
+                    ->where('account_id', $billingAccount->id)
+                    ->update($joUpdate);
 
                 \Log::info('[API SERVICE ORDER MIGRATION SUCCESS] DB Only migration completed');
                 return 'success';
             }
-
-
-        }
-        catch (\Exception $e) {
+        } catch (\Exception $e) {
             \Log::error('[API SERVICE ORDER MIGRATION EXCEPTION] ' . $e->getMessage());
             return 'exception';
         }

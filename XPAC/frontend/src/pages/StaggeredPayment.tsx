@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronsLeft, ChevronsRight, X, Menu, Globe, Calendar, RefreshCw , ChevronLeft, ChevronRight, ArrowUp, ArrowDown, Columns3, Download } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, X, Menu, Globe, Calendar, RefreshCw , ChevronLeft, ChevronRight, ArrowUp, ArrowDown, Columns3, Download, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import StaggeredListDetails from '../components/StaggeredListDetails';
 import StaggeredInstallationFormModal from '../modals/StaggeredInstallationFormModal';
@@ -11,6 +11,9 @@ import pusher from '../services/pusherService';
 import apiClient from '../config/api';
 import SessionExpiredModal from '../components/SessionExpiredModal';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 import { usePermissions } from '../hooks/usePermissions';
 
 const hexToRgba = (hex: string, opacity: number) => {
@@ -30,6 +33,27 @@ const allColumns = [
   { key: 'plan', label: 'Plan', width: 'min-w-36' },
   { key: 'address', label: 'Address', width: 'min-w-64' },
   { key: 'remarks', label: 'Remarks', width: 'min-w-48' },
+];
+
+/**
+ * One filter entry per table column above, so every column the table can show is filterable.
+ * Keys match allColumns exactly — the table renders each cell from record[key] and the filter
+ * reads the same key, so the two cannot disagree. The money and term columns are ranges, which
+ * is what makes "every plan still owing more than X over more than N months" answerable in the
+ * table rather than in an export.
+ */
+const funnelColumns: FunnelColumn[] = [
+  { key: 'staggered_install_no', label: 'ID', dataType: 'varchar' },
+  { key: 'account_no', label: 'Account No', dataType: 'varchar' },
+  { key: 'full_name', label: 'Customer Name', dataType: 'varchar' },
+  { key: 'staggered_date', label: 'Date', dataType: 'date' },
+  { key: 'staggered_balance', label: 'Total Amount', dataType: 'decimal' },
+  { key: 'monthly_payment', label: 'Monthly', dataType: 'decimal' },
+  { key: 'months_to_pay', label: 'Months', dataType: 'int' },
+  { key: 'status', label: 'Status', dataType: 'checklist' },
+  { key: 'plan', label: 'Plan', dataType: 'checklist' },
+  { key: 'address', label: 'Address', dataType: 'text' },
+  { key: 'remarks', label: 'Remarks', dataType: 'text' },
 ];
 
 const StaggeredPayment: React.FC = () => {
@@ -73,42 +97,13 @@ const StaggeredPayment: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [viewers, setViewers] = useState<Record<string, string[]>>({});
   const [isRefreshingManual, setIsRefreshingManual] = useState<boolean>(false);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in StaggeredPayment:', error);
-      }
-    }
-  }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   const [showSessionExpired, setShowSessionExpired] = useState(false);
 
@@ -203,11 +198,20 @@ const StaggeredPayment: React.FC = () => {
     return filtered;
   }, [staggeredRecords, searchQuery, staggeredDateFrom, staggeredDateTo]);
 
+  // Applied here, on the search-narrowed set, so the sidebar counts, the tab counts and the
+  // table all describe the same rows. Customer.tsx applies its funnel at the same point; a
+  // filter applied further down would leave the counts describing the unfiltered set.
+  const funnel = useFunnelFilter({
+    storageKey: 'staggeredPaymentFunnelFilters',
+    columns: funnelColumns,
+    rows: globalFilteredRecords,
+  });
+
   const dateItems = React.useMemo(() => {
     const dateCounts: Record<string, number> = {};
     const dates = new Map<string, string>();
 
-    globalFilteredRecords.forEach(record => {
+    funnel.filteredRows.forEach(record => {
       if (record.staggered_date) {
         const formatted = new Date(record.staggered_date).toLocaleDateString('en-US', {
           year: 'numeric',
@@ -231,10 +235,10 @@ const StaggeredPayment: React.FC = () => {
       }));
 
     return {
-      all: globalFilteredRecords.length,
+      all: funnel.filteredRows.length,
       dates: sortedDates
     };
-  }, [globalFilteredRecords]);
+  }, [funnel.filteredRows]);
 
   useEffect(() => {
     const checkDarkMode = () => {
@@ -582,8 +586,9 @@ const StaggeredPayment: React.FC = () => {
     }
   };
 
+
   const filteredRecords = React.useMemo(() => {
-    let filtered = globalFilteredRecords.filter(record => {
+    let filtered = funnel.filteredRows.filter(record => {
       if (selectedDate === 'All') return true;
       if (!record.staggered_date) return false;
       const recordDateFormatted = new Date(record.staggered_date).toLocaleDateString('en-US', {
@@ -631,7 +636,7 @@ const StaggeredPayment: React.FC = () => {
     }
 
     return filtered;
-  }, [globalFilteredRecords, selectedDate, sortColumn, sortDirection]);
+  }, [funnel.filteredRows, selectedDate, sortColumn, sortDirection]);
 
   const currentStaggeredIndex = React.useMemo(() => {
     if (!selectedStaggered || !filteredRecords) return -1;
@@ -843,9 +848,9 @@ const StaggeredPayment: React.FC = () => {
         case 'staggered_date':
           return formatDate(record.staggered_date);
         case 'staggered_balance':
-          return formatCurrency(record.staggered_balance);
+          return Number(record.staggered_balance ?? 0).toFixed(2);
         case 'monthly_payment':
-          return formatCurrency(record.monthly_payment);
+          return Number(record.monthly_payment ?? 0).toFixed(2);
         case 'months_to_pay':
           return record.months_to_pay;
         case 'status':
@@ -1103,6 +1108,24 @@ const StaggeredPayment: React.FC = () => {
                     colorPalette={colorPalette}
                     placeholder="Search Staggered records..."
                   />
+                  <button
+                    className={`flex-shrink-0 px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                      ? 'text-white'
+                      : isDarkMode
+                        ? 'hover:bg-gray-700 text-white bg-gray-800 border-gray-700'
+                        : 'hover:bg-gray-200 text-gray-900 bg-white border border-gray-300'
+                      }`}
+                    style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                    onClick={funnel.open}
+                    title={funnel.activeCount > 0
+                      ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                      : 'Column Filters'}
+                  >
+                    <Filter className="h-5 w-5" />
+                    {funnel.activeCount > 0 && (
+                      <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                    )}
+                  </button>
                   <div className="relative" ref={filterDropdownRef}>
                     <button
                       className={`p-2 rounded-lg transition-colors flex items-center justify-center border shadow-sm ${isDarkMode
@@ -1544,6 +1567,12 @@ const StaggeredPayment: React.FC = () => {
           localStorage.removeItem('authData');
           window.location.reload();
         }} 
+      />
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Staggered Payment Filters"
+        subtitle="Refine your staggered payment results"
       />
     </div>
   );

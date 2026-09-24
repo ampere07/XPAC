@@ -25,7 +25,6 @@ import {
   Paperclip,
   Loader2,
   MapPin,
-  Coins,
 } from 'lucide-react-native';
 import { BillingDetailRecord } from '../types/billing';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -34,13 +33,8 @@ import { userService } from '../services/userService';
 import { relatedDataService } from '../services/relatedDataService';
 import { transformServiceOrder } from '../store/serviceOrderStore';
 import ServiceOrderDetails from './ServiceOrderDetails';
-import InvoiceDetails from './InvoiceDetails';
-import SOADetails from './SOADetails';
-import PaymentPortalDetails from './PaymentPortalDetails';
-import TransactionListDetails from './TransactionListDetails';
 import LcpNapLocationDetails from './LcpNapLocationDetails';
-import { relatedDataColumns, TableColumn } from '../config/relatedDataColumns';
-import { FieldCard } from './common';
+import { getOnlineStatusInfo, OnlineStatusInfo } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -94,7 +88,6 @@ interface BillingDetailsProps {
   onClose?: () => void;
   onRefresh?: () => Promise<void> | void;
   refreshKey?: number;
-  /** Rendered as Prev/Next quick actions when the host supplies them. */
   onPrevious?: () => void;
   onNext?: () => void;
   onExpandSection?: (
@@ -108,31 +101,68 @@ interface BillingDetailsProps {
 
 // ─── Status helpers ──────────────────────────────────────────────────────────
 
-interface StatusInfo {
-  label: string;
-  color: string;
-  dotColor: string;
+/**
+ * Delegated to the shared resolver so this panel cannot drift from the customer list
+ * again. The copy that lived here was missing three of its rules:
+ *
+ *  - no 'inactive' rule, so an account switched off in billing could read ONLINE off
+ *    a stale RADIUS session;
+ *  - no 'empty' guard, so "no session record" surfaced as a status called EMPTY
+ *    instead of OFFLINE;
+ *  - `record.status || 'disconnected'`, so an account whose billing status had not
+ *    loaded yet rendered DISCONNECTED rather than falling through to the session.
+ *
+ * The returned shape is unchanged — { label, color, dotColor } — so every caller here
+ * keeps working.
+ */
+type StatusInfo = OnlineStatusInfo;
+
+const getStatusInfo = (record: any): StatusInfo => getOnlineStatusInfo(record);
+
+// ─── Inline simple card for non-RN detail views ──────────────────────────────
+
+interface SimpleDetailCardProps {
+  title: string;
+  data: any;
+  fields: { label: string; key: string; format?: (v: any, row: any) => string }[];
+  onClose: () => void;
+  primaryColor: string;
 }
 
-const getStatusInfo = (record: any): StatusInfo => {
-  const accessStatus = record.status || 'disconnected';
-  const lowerStatus = accessStatus.toLowerCase();
-  const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-  let bucket = 'offline';
-  if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-  else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-  else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-  else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-  else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline') bucket = lowerOnlineStatus;
-
-  const lower = bucket.toLowerCase();
-  if (lower === 'online') return { label: 'ONLINE', color: '#22c55e', dotColor: '#22c55e' };
-  if (lower === 'offline') return { label: 'OFFLINE', color: '#facc15', dotColor: '#facc15' };
-  if (lower === 'not found') return { label: 'NOT FOUND', color: '#dc2626', dotColor: '#dc2626' };
-  if (lower === 'disconnected') return { label: 'DISCONNECTED', color: '#9ca3af', dotColor: '#9ca3af' };
-  if (lower === 'restricted') return { label: 'RESTRICTED', color: '#be6b33', dotColor: '#f97316' };
-  return { label: bucket.toUpperCase(), color: '#3b82f6', dotColor: '#3b82f6' };
+const SimpleDetailCard: React.FC<SimpleDetailCardProps> = ({
+  title,
+  data,
+  fields,
+  onClose,
+  primaryColor,
+}) => {
+  const isDarkMode = false;
+  return (
+    <View style={styles.detailCardOuter}>
+      {/* Header */}
+      <View style={[styles.header, { backgroundColor: '#f3f4f6', borderBottomColor: '#e5e7eb' }]}>
+        <Text style={[styles.headerTitle, { color: '#111827' }]} numberOfLines={1}>
+          {title}
+        </Text>
+        <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
+          <X size={20} color="#6b7280" />
+        </TouchableOpacity>
+      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+        {fields.map((f) => {
+          const raw = data?.[f.key];
+          const val = f.format ? f.format(raw, data) : (raw != null ? String(raw) : '-');
+          if (!val || val === '-' || val === 'null' || val === 'undefined') return null;
+          return (
+            <View key={f.key} style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>{f.label}</Text>
+              <Text style={styles.fieldValue} numberOfLines={3}>{val}</Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
 };
 
 // ─── Inline SO Confirm Modal ─────────────────────────────────────────────────
@@ -229,73 +259,20 @@ interface RelatedSectionProps {
   title: string;
   count: number;
   items: any[];
-  /** Column set from `relatedDataColumns` — the web table's columns, drawn as cards. */
-  columns?: TableColumn[];
-  renderRow?: (item: any, index: number) => React.ReactElement;
-  /** Opens the record's detail view, same as the web table's onRowClick. */
-  onRowPress?: (row: any) => void;
+  renderRow: (item: any, index: number) => React.ReactElement;
   primaryColor: string;
   onExpand?: () => void;
 }
-
-/**
- * A related record, drawn as a card instead of a table row.
- *
- * The column set still comes from `relatedDataColumns` — the same one the web
- * table uses — so nothing is lost: the first column becomes the card's heading
- * and the rest become labelled fields. What is gone is the sideways scroll,
- * which on a phone put most of the columns past the right edge of the screen.
- */
-const RelatedCards: React.FC<{
-  columns: TableColumn[];
-  rows: any[];
-  onRowPress?: (row: any) => void;
-}> = ({ columns, rows, onRowPress }) => {
-  const cellText = (column: TableColumn, row: any) => {
-    const raw = row?.[column.key];
-    const rendered = column.render ? column.render(raw, row) : raw;
-    return rendered === null || rendered === undefined || rendered === '' ? '-' : String(rendered);
-  };
-
-  const [head, ...rest] = columns;
-
-  return (
-    <View>
-      {rows.map((row, rowIndex) => (
-        <FieldCard
-          key={rowIndex}
-          title={head ? cellText(head, row) : undefined}
-          fields={rest.map((column) => ({ label: column.label, value: cellText(column, row) }))}
-          onPress={onRowPress ? () => onRowPress(row) : undefined}
-        />
-      ))}
-    </View>
-  );
-};
-
-const RELATED_PAGE_SIZE = 5;
 
 const RelatedSection: React.FC<RelatedSectionProps> = ({
   title,
   count,
   items,
-  columns,
   renderRow,
-  onRowPress,
   primaryColor,
   onExpand,
 }) => {
   const [expanded, setExpanded] = useState(false);
-  const [page, setPage] = useState(1);
-
-  const totalPages = Math.max(1, Math.ceil(items.length / RELATED_PAGE_SIZE));
-  const pageStart = (page - 1) * RELATED_PAGE_SIZE;
-  const pageItems = items.slice(pageStart, pageStart + RELATED_PAGE_SIZE);
-
-  // A refresh can shrink the list under the current page.
-  useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [totalPages, page]);
 
   return (
     <View style={styles.sectionContainer}>
@@ -330,36 +307,13 @@ const RelatedSection: React.FC<RelatedSectionProps> = ({
       </TouchableOpacity>
 
       {expanded && count > 0 && (
-        <View style={columns ? styles.sectionTableContent : styles.sectionContent}>
-          {columns
-            ? <RelatedCards columns={columns} rows={pageItems} onRowPress={onRowPress} />
-            : pageItems.map((item, idx) => renderRow?.(item, idx))}
-
-          {/* Pager sits where a 6th row would be */}
-          <View style={styles.pagerRow}>
-            <TouchableOpacity
-              onPress={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-              style={[styles.pagerBtn, page === 1 && styles.pagerBtnDisabled]}
-            >
-              <ChevronLeft size={16} color={page === 1 ? '#9ca3af' : primaryColor} />
-              <Text style={[styles.pagerBtnText, { color: page === 1 ? '#9ca3af' : primaryColor }]}>Prev</Text>
-            </TouchableOpacity>
-
-            <Text style={styles.pagerCount}>
-              {items.length === 0 ? 0 : pageStart + 1}–{Math.min(pageStart + RELATED_PAGE_SIZE, items.length)} of{' '}
-              {items.length || count}
+        <View style={styles.sectionContent}>
+          {items.slice(0, 5).map((item, idx) => renderRow(item, idx))}
+          {count > 5 && (
+            <Text style={[styles.moreText, { color: primaryColor }]}>
+              +{count - 5} more items
             </Text>
-
-            <TouchableOpacity
-              onPress={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
-              style={[styles.pagerBtn, page >= totalPages && styles.pagerBtnDisabled]}
-            >
-              <Text style={[styles.pagerBtnText, { color: page >= totalPages ? '#9ca3af' : primaryColor }]}>Next</Text>
-              <ChevronRightNav size={16} color={page >= totalPages ? '#9ca3af' : primaryColor} />
-            </TouchableOpacity>
-          </View>
+          )}
         </View>
       )}
       {expanded && count === 0 && (
@@ -372,6 +326,26 @@ const RelatedSection: React.FC<RelatedSectionProps> = ({
 };
 
 // ─── Generic card row renderer ────────────────────────────────────────────────
+
+const genericCardRow = (
+  item: any,
+  index: number,
+  labelKey: string,
+  subKeys: { label: string; key: string; format?: (v: any, r: any) => string }[]
+) => (
+  <View key={index} style={styles.cardRow}>
+    {subKeys.map((sk) => {
+      const raw = item[sk.key];
+      const val = sk.format ? sk.format(raw, item) : (raw != null ? String(raw) : '-');
+      return (
+        <View key={sk.key} style={styles.cardRowField}>
+          <Text style={styles.cardRowLabel}>{sk.label}</Text>
+          <Text style={styles.cardRowValue} numberOfLines={2}>{val || '-'}</Text>
+        </View>
+      );
+    })}
+  </View>
+);
 
 // ─── Field row component ──────────────────────────────────────────────────────
 
@@ -437,7 +411,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
 
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userEmailCache, setUserEmailCache] = useState<Record<string, string>>({});
 
   // Modal states
@@ -475,20 +448,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
           const userData = JSON.parse(authDataStr);
           setUserRole(userData.role || '');
           setRoleId(userData.role_id || null);
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch {
-                perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (err) {
         console.error('Error loading authData:', err);
@@ -497,9 +456,8 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     loadAuth();
   }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
   const { can: hasPermission } = usePermissions();
 
   // ── Color palette ─────────────────────────────────────────────────────────
@@ -534,8 +492,6 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
       { key: 'serviceChargeLogs', fn: relatedDataService.getRelatedServiceChargeLogs },
       { key: 'changeDueLogs', fn: relatedDataService.getRelatedChangeDueLogs },
       { key: 'securityDeposits', fn: relatedDataService.getRelatedSecurityDeposits },
-      { key: 'jobOrders', fn: relatedDataService.getRelatedJobOrdersByAccount },
-      { key: 'applications', fn: relatedDataService.getRelatedApplicationsByAccount },
     ];
 
     const results = await Promise.all(
@@ -728,97 +684,140 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     );
   }
 
-  // Same detail components the web opens from a related-table row click.
+  // Inline detail cards for still-web detail components
   if (selectedInvoice) {
     return (
-      <InvoiceDetails
-        invoiceRecord={selectedInvoice}
+      <SimpleDetailCard
+        title="Invoice Details"
+        data={selectedInvoice}
         onClose={() => setSelectedInvoice(null)}
-        onViewCustomer={() => setSelectedInvoice(null)}
+        primaryColor={primaryColor}
+        fields={[
+          { label: 'Invoice ID', key: 'id' },
+          { label: 'Amount', key: 'amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+          { label: 'Total Amount', key: 'total_amount', format: (v) => v ? `₱${Number(v).toFixed(2)}` : '-' },
+          { label: 'Status', key: 'status' },
+          { label: 'Account No', key: 'account_no' },
+          { label: 'Due Date', key: 'due_date', format: (v) => formatDate(v) },
+          { label: 'Date', key: 'created_at', format: (v) => formatDateTime(v) },
+          { label: 'Remarks', key: 'remarks' },
+        ]}
       />
     );
   }
 
   if (selectedSOARecord) {
     return (
-      <SOADetails
-        soaRecord={selectedSOARecord}
+      <SimpleDetailCard
+        title="Statement of Account"
+        data={selectedSOARecord}
         onClose={() => setSelectedSOARecord(null)}
-        onViewCustomer={() => setSelectedSOARecord(null)}
+        primaryColor={primaryColor}
+        fields={[
+          { label: 'SOA ID', key: 'id' },
+          { label: 'Account No', key: 'account_no' },
+          { label: 'Balance', key: 'balance', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+          { label: 'Total Paid', key: 'total_paid', format: (v) => v ? `₱${Number(v).toFixed(2)}` : '-' },
+          { label: 'Status', key: 'status' },
+          { label: 'Period', key: 'period' },
+          { label: 'Date', key: 'created_at', format: (v) => formatDateTime(v) },
+        ]}
       />
     );
   }
 
   if (selectedPaymentPortal) {
     return (
-      <PaymentPortalDetails
-        record={selectedPaymentPortal}
+      <SimpleDetailCard
+        title="Payment Portal Log"
+        data={selectedPaymentPortal}
         onClose={() => setSelectedPaymentPortal(null)}
-        onViewCustomer={() => setSelectedPaymentPortal(null)}
+        primaryColor={primaryColor}
+        fields={[
+          { label: 'Log ID', key: 'id' },
+          { label: 'Transaction ID', key: 'transaction_id' },
+          { label: 'Amount', key: 'amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+          { label: 'Status', key: 'status' },
+          { label: 'Payment Method', key: 'payment_method' },
+          { label: 'Date', key: 'created_at', format: (v) => formatDateTime(v) },
+        ]}
       />
     );
   }
 
   if (selectedTransaction) {
     return (
-      <TransactionListDetails
-        transaction={selectedTransaction}
+      <SimpleDetailCard
+        title="Transaction Details"
+        data={selectedTransaction}
         onClose={() => setSelectedTransaction(null)}
-        onViewCustomer={() => setSelectedTransaction(null)}
+        primaryColor={primaryColor}
+        fields={[
+          { label: 'Transaction ID', key: 'id' },
+          { label: 'Amount', key: 'amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+          { label: 'Type', key: 'type' },
+          { label: 'Payment Method', key: 'payment_method' },
+          { label: 'Status', key: 'status' },
+          { label: 'Remarks', key: 'remarks' },
+          { label: 'Date', key: 'created_at', format: (v) => formatDateTime(v) },
+        ]}
       />
     );
   }
 
   // ── Main render ───────────────────────────────────────────────────────────
 
-  // Header icons live here instead, as circle-and-label actions like ApplicationDetails.
-  const quickActions = [
-    ...(onPrevious ? [{ key: 'prev', label: 'Previous', Icon: ChevronLeft, onPress: onPrevious }] : []),
-    ...(onNext ? [{ key: 'next', label: 'Next', Icon: ChevronRightNav, onPress: onNext }] : []),
-    ...(hasPermission('customer.transact')
-      ? [{ key: 'transact', label: 'Transact', Icon: Coins, onPress: () => setShowTransactConfirm(true) }]
-      : []),
-    ...(hasPermission('customer.so-request')
-      ? [{ key: 'so-request', label: 'SO Request', Icon: Wrench, onPress: () => setShowSOConfirm(true) }]
-      : []),
-    ...(hasPermission('customer.details-edit')
-      ? [{ key: 'edit', label: 'Edit', Icon: Edit, onPress: handleEditPress }]
-      : []),
-  ];
-
   return (
     <View style={styles.container}>
-      {/* Header — back arrow, centred name, same shape as ApplicationDetails */}
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          {onClose && (
-            <TouchableOpacity onPress={onClose} style={styles.backBtn}>
-              <ChevronLeft size={28} color="#4b5563" />
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {billingRecord.applicationId} | {billingRecord.customerName}
+        </Text>
+        <View style={styles.headerActions}>
+          {(onPrevious || onNext) && (
+            <>
+              <TouchableOpacity
+                onPress={onPrevious}
+                disabled={!onPrevious}
+                style={[styles.iconBtn, !onPrevious && { opacity: 0.4 }]}
+              >
+                <ChevronLeft size={20} color="#6b7280" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onNext}
+                disabled={!onNext}
+                style={[styles.iconBtn, !onNext && { opacity: 0.4 }]}
+              >
+                <ChevronRightNav size={20} color="#6b7280" />
+              </TouchableOpacity>
+            </>
+          )}
+          {hasPermission('customer.so-request') && (
+            <TouchableOpacity style={styles.iconBtn} onPress={() => setShowSOConfirm(true)}>
+              <Wrench size={18} color="#6b7280" />
             </TouchableOpacity>
           )}
-          <View style={styles.headerNameContainer}>
-            <Text style={styles.headerName} numberOfLines={1}>
-              {billingRecord.customerName || billingRecord.applicationId}
-            </Text>
-          </View>
+          {hasPermission('customer.details-edit') && (
+            <TouchableOpacity style={styles.iconBtn} onPress={handleEditPress}>
+              <Edit size={18} color="#6b7280" />
+            </TouchableOpacity>
+          )}
+          {hasPermission('customer.transact') && (
+            <TouchableOpacity
+              style={[styles.transactBtn, { backgroundColor: primaryColor }]}
+              onPress={() => setShowTransactConfirm(true)}
+            >
+              <Text style={styles.transactBtnText}>Transact</Text>
+            </TouchableOpacity>
+          )}
+          {onClose && (
+            <TouchableOpacity style={styles.iconBtn} onPress={onClose}>
+              <X size={18} color="#6b7280" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
-
-      {/* Quick actions */}
-      {quickActions.length > 0 && (
-        <View style={styles.actionBar}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.actionBarInner}>
-            {quickActions.map(({ key, label, Icon, onPress }) => (
-              <TouchableOpacity key={key} style={styles.actionBtnWrap} onPress={onPress}>
-                <View style={[styles.actionIconCircle, { backgroundColor: primaryColor }]}>
-                  <Icon size={18} color="#ffffff" />
-                </View>
-                <Text style={styles.actionLabel}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
 
       {/* Scrollable content */}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent}>
@@ -1071,136 +1070,215 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
         {/* ── Related Data Sections ── */}
 
         <RelatedSection
-          title="Invoices"
+          title="Related Invoices"
           count={relatedDataCounts.invoices || 0}
-          items={fullRelatedData.invoices || []}
-          onRowPress={handleInvoiceRowClick}
+          items={relatedData.invoices || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.invoices}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'Invoice ID', key: 'id', format: (v, r) => String(r.id || r.invoice_id || '-') },
+              { label: 'Amount', key: 'amount', format: (v, r) => `₱${Number(r.amount || r.total_amount || 0).toFixed(2)}` },
+              { label: 'Status', key: 'status' },
+              { label: 'Date', key: 'created_at', format: (v, r) => formatDate(r.created_at || r.date) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Statement of Accounts"
           count={relatedDataCounts.statementOfAccounts || 0}
-          items={fullRelatedData.statementOfAccounts || []}
-          onRowPress={handleSOARowClick}
+          items={relatedData.statementOfAccounts || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.statementOfAccounts}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'SOA ID', key: 'id' },
+              { label: 'Balance', key: 'balance', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+              { label: 'Status', key: 'status' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Payment Portal Logs"
           count={relatedDataCounts.paymentPortalLogs || 0}
-          items={fullRelatedData.paymentPortalLogs || []}
-          onRowPress={handlePaymentPortalRowClick}
+          items={relatedData.paymentPortalLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.paymentPortalLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'Transaction ID', key: 'transaction_id', format: (v, r) => String(r.transaction_id || r.id || '-') },
+              { label: 'Amount', key: 'amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+              { label: 'Status', key: 'status' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
-          title="Transactions"
+          title="Related Transactions"
           count={relatedDataCounts.transactions || 0}
-          items={fullRelatedData.transactions || []}
-          onRowPress={handleTransactionRowClick}
+          items={relatedData.transactions || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.transactions}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Amount', key: 'amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+              { label: 'Type', key: 'type' },
+              { label: 'Method', key: 'payment_method' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
-          title="Staggered Payments"
+          title="Related Staggered"
           count={relatedDataCounts.staggered || 0}
-          items={fullRelatedData.staggered || []}
+          items={relatedData.staggered || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.staggered}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Monthly', key: 'monthly_amount', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+              { label: 'Months', key: 'total_months' },
+              { label: 'Remaining', key: 'remaining_balance', format: (v) => `₱${Number(v || 0).toFixed(2)}` },
+              { label: 'Status', key: 'status' },
+            ])
+          }
         />
 
         <RelatedSection
-          title="Discounts"
+          title="Related Discounts"
           count={relatedDataCounts.discounts || 0}
-          items={fullRelatedData.discounts || []}
+          items={relatedData.discounts || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.discounts}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Type', key: 'discount_type' },
+              { label: 'Amount', key: 'amount', format: (v, r) => `₱${Number(v || r.discount_amount || 0).toFixed(2)}` },
+              { label: 'Start', key: 'start_date', format: (v) => formatDate(v) },
+              { label: 'End', key: 'end_date', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
-          title="Service Orders"
+          title="Related Service Orders"
           count={relatedDataCounts.serviceOrders || 0}
-          items={fullRelatedData.serviceOrders || []}
-          onRowPress={handleServiceOrderRowClick}
+          items={relatedData.serviceOrders || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.serviceOrders}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'SO ID', key: 'id' },
+              { label: 'Type', key: 'type', format: (v, r) => String(r.type || r.service_type || '-') },
+              { label: 'Status', key: 'status' },
+              { label: 'Assigned To', key: 'assigned_to', format: (v) => v || 'Unassigned' },
+            ])
+          }
         />
 
         <RelatedSection
           title="Reconnection Logs"
           count={relatedDataCounts.reconnectionLogs || 0}
-          items={fullRelatedData.reconnectionLogs || []}
+          items={relatedData.reconnectionLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.reconnectionLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+              { label: 'Remarks', key: 'remarks' },
+            ])
+          }
         />
 
         <RelatedSection
           title="Disconnected Logs"
           count={relatedDataCounts.disconnectedLogs || 0}
-          items={fullRelatedData.disconnectedLogs || []}
+          items={relatedData.disconnectedLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.disconnectedLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+              { label: 'Reason', key: 'reason' },
+            ])
+          }
         />
 
         <RelatedSection
           title="Details Update Logs"
           count={relatedDataCounts.detailsUpdateLogs || 0}
-          items={fullRelatedData.detailsUpdateLogs || []}
+          items={relatedData.detailsUpdateLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.detailsUpdateLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Field', key: 'field_name' },
+              { label: 'Old Value', key: 'old_value' },
+              { label: 'New Value', key: 'new_value' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Plan Change Logs"
           count={relatedDataCounts.planChangeLogs || 0}
-          items={fullRelatedData.planChangeLogs || []}
+          items={relatedData.planChangeLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.planChangeLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Old Plan', key: 'old_plan' },
+              { label: 'New Plan', key: 'new_plan' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Service Charge Logs"
           count={relatedDataCounts.serviceChargeLogs || 0}
-          items={fullRelatedData.serviceChargeLogs || []}
+          items={relatedData.serviceChargeLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.serviceChargeLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Amount', key: 'amount', format: (v) => v ? `₱${Number(v).toFixed(2)}` : '-' },
+              { label: 'Type', key: 'type' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Change Due Logs"
           count={relatedDataCounts.changeDueLogs || 0}
-          items={fullRelatedData.changeDueLogs || []}
+          items={relatedData.changeDueLogs || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.changeDueLogs}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Old Due', key: 'old_due' },
+              { label: 'New Due', key: 'new_due' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         <RelatedSection
           title="Security Deposits"
           count={relatedDataCounts.securityDeposits || 0}
-          items={fullRelatedData.securityDeposits || []}
+          items={relatedData.securityDeposits || []}
           primaryColor={primaryColor}
-          columns={relatedDataColumns.securityDeposits}
-        />
-
-        <RelatedSection
-          title="Job Orders"
-          count={relatedDataCounts.jobOrders || 0}
-          items={fullRelatedData.jobOrders || []}
-          primaryColor={primaryColor}
-          columns={relatedDataColumns.customerJobOrders}
-        />
-
-        <RelatedSection
-          title="Applications"
-          count={relatedDataCounts.applications || 0}
-          items={fullRelatedData.applications || []}
-          primaryColor={primaryColor}
-          columns={relatedDataColumns.applications}
+          renderRow={(item, idx) =>
+            genericCardRow(item, idx, 'id', [
+              { label: 'ID', key: 'id' },
+              { label: 'Amount', key: 'amount', format: (v) => v ? `₱${Number(v).toFixed(2)}` : '-' },
+              { label: 'Status', key: 'status' },
+              { label: 'Date', key: 'created_at', format: (v) => formatDate(v) },
+            ])
+          }
         />
 
         {/* Bottom padding */}
@@ -1248,27 +1326,33 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     fontWeight: '500',
   },
+  detailCardOuter: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    backgroundColor: '#ffffff',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#f3f4f6',
     borderBottomWidth: 1,
     borderBottomColor: '#e5e7eb',
+    gap: 8,
   },
-  // Used by the nested detail-card overlays, which keep a plain title + close row.
-  headerTitle: { fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, position: 'relative' },
-  backBtn: { position: 'absolute', left: 0, zIndex: 10 },
-  // Padding keeps a long, centered name from running under the absolutely-placed back arrow.
-  headerNameContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36 },
-  headerName: { fontWeight: '500', textAlign: 'center', fontSize: 20, color: '#111827' },
-  actionBar: { paddingVertical: 12, borderBottomWidth: 1, backgroundColor: '#f3f4f6', borderBottomColor: '#e5e7eb' },
-  actionBarInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, flexGrow: 1 },
-  actionBtnWrap: { flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6, minWidth: 76 },
-  actionIconCircle: { padding: 8, borderRadius: 9999 },
-  actionLabel: { fontSize: 12, marginTop: 4, color: '#374151' },
+  headerTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+    flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 0,
+  },
   iconBtn: {
     padding: 8,
     borderRadius: 6,
@@ -1284,47 +1368,53 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   scrollContent: {
-    paddingBottom: 120,
+    paddingBottom: 24,
   },
-  // Flat field list, same as ApplicationDetails — no card container per group.
   infoSection: {
-    backgroundColor: '#f9fafb',
-    paddingTop: 8,
+    backgroundColor: '#ffffff',
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    gap: 10,
   },
   infoSectionTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    color: '#9ca3af',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+    color: '#111827',
+    marginBottom: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   fieldRow: {
-    flexDirection: 'column',
+    flexDirection: 'row',
     alignItems: 'flex-start',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    justifyContent: 'space-between',
     paddingVertical: 4,
-    paddingHorizontal: 16,
-    gap: 2,
+    gap: 12,
   },
   fieldLabel: {
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 13,
     color: '#6b7280',
+    flexShrink: 0,
+    maxWidth: '40%',
   },
   fieldValue: {
-    fontSize: 16,
+    fontSize: 13,
     color: '#111827',
-    width: '100%',
+    fontWeight: '500',
+    textAlign: 'right',
+    flex: 1,
   },
   linkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    width: '100%',
+    flex: 1,
+    justifyContent: 'flex-end',
   },
   linkText: {
     textDecorationLine: 'underline',
@@ -1389,29 +1479,41 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     gap: 8,
   },
-  // Card variant: the cards carry their own padding and dividers.
-  sectionTableContent: {
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    paddingBottom: 8,
-  },
-  pagerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#f9fafb',
-  },
-  pagerBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: 4, paddingHorizontal: 6 },
-  pagerBtnDisabled: { opacity: 0.5 },
-  pagerBtnText: { fontSize: 13, fontWeight: '600' },
-  pagerCount: { fontSize: 12, color: '#6b7280' },
   emptyText: {
     fontSize: 13,
     color: '#9ca3af',
     textAlign: 'center',
     paddingVertical: 12,
+  },
+  moreText: {
+    fontSize: 12,
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  cardRow: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 8,
+    padding: 10,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  cardRowField: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  cardRowLabel: {
+    fontSize: 12,
+    color: '#6b7280',
+    flexShrink: 0,
+  },
+  cardRowValue: {
+    fontSize: 12,
+    color: '#111827',
+    fontWeight: '500',
+    textAlign: 'right',
+    flex: 1,
   },
   // Modals
   modalOverlay: {

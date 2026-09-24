@@ -15,6 +15,7 @@ class TechnicalDetail extends Model
         'account_id',
         'account_no',
         'username',
+        'pppoe_password',
         'username_status',
         'connection_type',
         'router_model',

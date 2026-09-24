@@ -1,7 +1,7 @@
 {{--
     Weekly agent referral invoice — one invoice, one document.
 
-    Follows docs/ATSS-FIBER-INVOICE.pdf: the ATSS FIBER mark top left, the
+    Layout: the company mark top left (artwork or text fallback), the
     BOOTH - REFERRAL banner, the date and team/agent line in red, the navy
     table of referred customers, the navy totals block, the signature line and
     the footer bar with the company's contact details.

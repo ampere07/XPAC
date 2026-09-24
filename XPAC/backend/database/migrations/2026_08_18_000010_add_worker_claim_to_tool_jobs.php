@@ -2,6 +2,7 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -68,15 +69,26 @@ return new class extends Migration
     }
 
     /**
-     * Laravel 9 has no portable "does this index exist"; ask the schema manager.
+     * Laravel 9 has no portable "does this index exist".
+     *
+     * Asked of MySQL directly rather than through the Doctrine schema manager:
+     * `doctrine/dbal` is not a declared dependency of this application, so the
+     * schema-manager call throws where it is not installed and the catch would
+     * report "no such index" for an index that exists — which turns a re-run of
+     * this migration into a duplicate-key failure. INFORMATION_SCHEMA is always
+     * present on the MySQL connection this app runs on.
      */
     private function indexExists(string $name): bool
     {
         try {
-            return Schema::getConnection()
-                ->getDoctrineSchemaManager()
-                ->listTableDetails(self::TABLE)
-                ->hasIndex($name);
+            $rows = DB::select(
+                'SELECT 1 FROM information_schema.statistics
+                  WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+                  LIMIT 1',
+                [self::TABLE, $name]
+            );
+
+            return $rows !== [];
         } catch (\Throwable $e) {
             return false;
         }

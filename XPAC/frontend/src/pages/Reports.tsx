@@ -10,7 +10,6 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import AddReportModal from '../modals/AddReportModal';
 import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
 import { useFunnelFilter } from '../filter/useFunnelFilter';
-import { currentUserCan } from '../hooks/usePermissions';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,27 +184,42 @@ const getCellValue = (row: ReportData, key: string): string => {
     return String(raw);
 };
 
-// ─── Role guards ──────────────────────────────────────────────────────────────
-//
-// Both read the permission table (config/permissions.ts) rather than a list of
-// role ids. The pair they replaced compared against '1'/'7' and the role names
-// beside them, which meant a custom role granted the Reports page could open it
-// from the sidebar and then be told it had no access.
-//
-// Hiding a control is presentation only. Each route is gated server side by the
-// same key, so a user who edits their stored authData still gets a 403.
+// ─── Role Guard Helper ────────────────────────────────────────────────────────
 
-/** May open the Reports page at all. */
-const hasReportsAccess = (): boolean => currentUserCan('reports');
+const hasReportsAccess = (): boolean => {
+    try {
+        const authData = localStorage.getItem('authData');
+        if (!authData) return false;
+        const user = JSON.parse(authData);
+        const roleId = String(user.role_id ?? '');
+        const role = (user.role ?? '').toLowerCase().trim();
+        return roleId === '1' || roleId === '7' || role === 'administrator' || role === 'superadmin';
+    } catch {
+        return false;
+    }
+};
 
 /**
- * Deleting a report stays SuperAdmin's alone — matching the
- * `role:super_admin` middleware on DELETE /api/reports/{id}.
+ * Deleting a report is Super Admin only.
+ *
+ * The role name is compared lower-cased because the login endpoint sends it
+ * that way ("superadmin"); comparing against 'SuperAdmin' elsewhere in the app
+ * silently never matches and leaves only the role_id branch working.
+ *
+ * This hides the control. The route is separately gated server-side, so a user
+ * who forges authData still gets a 403.
  */
-const canDeleteReports = (): boolean => currentUserCan('reports.delete');
-
-/** May schedule a report, edit one, resend it or change the auto-send settings. */
-const canManageReports = (): boolean => currentUserCan('reports.manage');
+const isSuperAdmin = (): boolean => {
+    try {
+        const authData = localStorage.getItem('authData');
+        if (!authData) return false;
+        const user = JSON.parse(authData);
+        return String(user.role_id ?? '') === '7'
+            || (user.role ?? '').toLowerCase().trim() === 'superadmin';
+    } catch {
+        return false;
+    }
+};
 
 const errorMessage = (err: any): string => {
     const status = err?.response?.status;
@@ -222,7 +236,7 @@ const Reports: React.FC = () => {
     const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
     const [accessDenied] = useState<boolean>(!hasReportsAccess());
-    const [canDelete] = useState<boolean>(canDeleteReports());
+    const [canDelete] = useState<boolean>(isSuperAdmin());
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
     // Data

@@ -497,7 +497,7 @@ const InvoiceFunnelFilter: React.FC<InvoiceFunnelFilterProps> = ({
                                 >
                                     Invoice Details
                                 </Text>
-                                {allColumns.map(column => {
+                                {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map(column => {
                                     const isActive = !!filterValues[column.key];
                                     return (
                                         <TouchableOpacity

@@ -49,6 +49,13 @@ export const allColumns: Column[] = [
     { key: 'barangay', label: 'Barangay', dataType: 'checklist' },
     { key: 'city', label: 'City', dataType: 'checklist' },
     { key: 'region', label: 'Region', dataType: 'checklist' },
+    // The remaining columns the Payment Portal table can show. Keys match what the table renders
+    // the cell from — snake_case where the payload is snake_case — and the page resolves a filter
+    // value with `item[key]`.
+    { key: 'total_amount', label: 'Total Amount', dataType: 'decimal' },
+    { key: 'accountBalance', label: 'Account Balance', dataType: 'decimal' },
+    { key: 'contactNo', label: 'Contact Number', dataType: 'varchar' },
+    { key: 'updated_at', label: 'Modified Date', dataType: 'datetime' },
 ];
 
 const PaymentPortalFunnelFilter: React.FC<PaymentPortalFunnelFilterProps> = ({

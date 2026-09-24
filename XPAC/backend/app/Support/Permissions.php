@@ -10,18 +10,19 @@ use App\Models\Role;
  * There are two kinds of permission key:
  *
  *   page actions   — one per navigable section, named exactly as the section id
- *                    used by the sidebar and by Dashboard's renderContent
+ *                    used by the web sidebar and by Dashboard's renderContent
  *                    ("job-order", "transaction-list", ...). Holding the key
  *                    means "may open this page and use its ordinary endpoints".
  *
  *   sub actions    — "<page>.<verb>" for the individual buttons that are gated
  *                    separately ("job-order.approve", "customer.transact", ...).
- *                    A sub action always implies its parent page.
  *
  * Roles 1-8 are seeded and non-editable, so their keys live in ROLE_PERMISSIONS
  * below. Any role above 8 is a custom role created from Role Management and
  * carries its own list in roles.permissions — the same key strings, ticked in
- * the Role modal.
+ * the Role modal. For a custom role a sub action also implies its parent page
+ * (ticking an action ticks its page in the modal); a seeded role's list is
+ * explicit and taken as written — see forUser().
  *
  * A custom role may also name one of the eight in roles.base_role_id, making it
  * a *hybrid*: it holds everything that seeded role holds, resolved live from
@@ -30,10 +31,17 @@ use App\Models\Role;
  * changes. See Permissions::roleKeys().
  *
  * Kept deliberately in step with:
- *   ATSS2_0/frontend/src/config/permissions.ts
+ *   GOWISER/frontend/src/config/permissions.ts
  *   MOBILEAPP/frontend/src/config/permissions.ts
  * Those files are the same table for the two clients. Changing a key here means
  * changing it there; PermissionsParityTest guards the pair.
+ *
+ * ROLE_PERMISSIONS reproduces what each seeded role could reach before this
+ * table existed, on the web app AND the mobile app — the union of the two, so
+ * the server never refuses something either client already offered. Where the
+ * union holds a page or button one client did not show that role, that client
+ * keeps its old behaviour with its own rule (the cases are listed alongside the
+ * catalog in the Roles Module notes).
  */
 final class Permissions
 {
@@ -52,7 +60,8 @@ final class Permissions
     /**
      * Every page key in the system, grouped the way the sidebar groups them.
      * The Role modal renders this list, so a page missing here can never be
-     * granted to a custom role.
+     * granted to a custom role. Only pages that have a screen on the web or
+     * the mobile app are listed.
      */
     public const PAGES = [
         // Landing pages. One per audience; a user gets exactly the one their role implies.
@@ -69,6 +78,7 @@ final class Permissions
         'customer',
         'transaction-list',
         'transactions-revert',
+        'prepaid-override',
         'payment-portal',
         'soa',
         'invoice',
@@ -78,6 +88,7 @@ final class Permissions
         'mass-rebate',
         'staggered-payment',
         'discounts',
+        'soa-generation',
 
         // Operations
         'application-management',
@@ -87,9 +98,9 @@ final class Permissions
         'lcp-nap-location',
         'sms-blast',
         'reports',
-        'support',
 
         // Agent
+        'commission',
         'bonus-history',
         'agent-invoices',
         'agent-payout',
@@ -100,7 +111,12 @@ final class Permissions
         'inventory',
         'inventory-category-list',
 
-        // Configuration
+        // Expenses
+        'monthly-payables',
+        'expenses',
+        'expenses-category',
+
+        // Configurations
         'promo-list',
         'plan-list',
         'location-list',
@@ -139,23 +155,17 @@ final class Permissions
         'expenses-log',
         'smart-olt-logs',
         'radius-logs',
-        'radius-queue',
         'system-logs',
-        'modem-router-logs',
 
         // Tools. Each reconciles what the system believes against what a
         // downstream actually holds — SmartOLT's ONUs, the RADIUS server's
         // accounts, Xendit's settled payments, the billing run's coverage — and
-        // each can write the difference back. They had sidebar entries and
-        // front-end keys but no entry here, which left their endpoints falling
-        // through to "any signed-in user" and made the keys unavailable to a
-        // custom role, since RoleController validates against this list.
+        // each can write the difference back.
         'smartolt-tool',
         'mikrotik-radius-tool',
         'xendit-reconcile-tool',
         'billing-reconcile-tool',
 
-        'soa-generation',
         'settings',
     ];
 
@@ -173,20 +183,31 @@ final class Permissions
             'job-order.tech-edit',
             'job-order.admin-edit',
             'job-order.attachment',
-            // Recording a pre-installation visit: what lets a referral earn
-            // quota progress before the install itself is finished.
-            'job-order.pre-install',
         ],
         'customer' => [
             'customer.so-request',
             'customer.details-edit',
             'customer.attachment',
             'customer.transact',
+            // Raises a Prepaid Override request from the customer toolbar.
+            // Granting the days still needs prepaid-override.approve.
+            'customer.prepaid-override',
         ],
         'transaction-list' => [
             'transaction-list.batch-approve',
             'transaction-list.approve',
             'transaction-list.revert-request',
+            // Deleting a pending transaction. SuperAdmin's alone today.
+            'transaction-list.delete',
+        ],
+        // Approving (or rejecting) a revert request. SuperAdmin's alone today;
+        // an Administrator reads the queue but does not decide it.
+        'transactions-revert' => [
+            'transactions-revert.approve',
+        ],
+        // Approving or rejecting a Prepaid Override request. SuperAdmin only.
+        'prepaid-override' => [
+            'prepaid-override.approve',
         ],
         'mass-rebate' => [
             'mass-rebate.add',
@@ -197,6 +218,9 @@ final class Permissions
         'discounts' => [
             'discounts.add',
         ],
+        'soa-generation' => [
+            'soa-generation.manage',
+        ],
         'application-management' => [
             'application-management.move-to-jo',
             'application-management.quick-status',
@@ -205,55 +229,58 @@ final class Permissions
             'service-order.tech-edit',
             'service-order.admin-edit',
         ],
-        // Raising, reassigning or deleting a work order, as opposed to working
-        // the ones already assigned to you. An agent has the page but not this:
-        // their view is the jobs they referred, read only.
+        // Raising or deleting a work order, as opposed to working (editing) the
+        // ones already in front of you — which holding the page allows.
         'work-order' => [
             'work-order.manage',
         ],
-
-        // Scheduling and issuing reports, kept apart from deleting one: a
-        // report is a scheduled job other people rely on receiving, so removing
-        // it is the heavier act. Deleting was already SuperAdmin-only, but it
-        // was expressed as a role check on the route and, in the UI, by
-        // borrowing the Settings key — which meant granting a custom role
-        // Settings silently granted it report deletion too.
+        // Scheduling and issuing reports, kept apart from deleting one.
         'reports' => [
             'reports.manage',
             'reports.delete',
         ],
 
-        // Raising a payout, incentive or bonus, and signing one off. Both were
-        // previously inferred from "is this user not an agent".
+        // ── Agent ────────────────────────────────────────────────────────────
+        // Raising a payout from Pay Out/In ("New Commission Payout" / "Add
+        // Record"). Approving one there reuses agent-payout.approve (payout
+        // history) and bonus-history.payout (bonus history).
+        'commission' => [
+            'commission.create',
+        ],
+        // Adding, approving or rejecting a bonus.
         'bonus-history' => [
             'bonus-history.payout',
         ],
-
-        // Approving or rejecting on the Agent Payout page. This one had no
-        // front-end check at all — the buttons were wired straight to the
-        // handler for anyone who could open the page.
+        // Approving or rejecting a payout.
         'agent-payout' => [
             'agent-payout.approve',
         ],
-
-        // Issuing the weekly referral invoices, and marking one settled. An
-        // agent reads their own; neither of these is theirs.
+        // Issuing the weekly referral invoices, setting one's status, and
+        // raising the payout that settles one. An agent reads their own.
         'agent-invoices' => [
             'agent-invoices.generate',
             'agent-invoices.status',
-            // Raising the payout that settles an invoice — the money side,
-            // granted apart from merely setting a status by hand.
             'agent-invoices.payout',
         ],
 
-        'soa-generation' => [
-            'soa-generation.manage',
+        // ── Expenses ─────────────────────────────────────────────────────────
+        'monthly-payables' => [
+            'monthly-payables.create',
+            'monthly-payables.edit',
+            'monthly-payables.delete',
+            'monthly-payables.generate',
+            'monthly-payables.pay',
+        ],
+        'expenses' => [
+            'expenses.create', 'expenses.edit', 'expenses.delete',
+        ],
+        'expenses-category' => [
+            'expenses-category.create', 'expenses-category.edit', 'expenses-category.delete',
         ],
 
         // ── Configurations ───────────────────────────────────────────────────
         // Every page in this group is a list with Add, Edit and Delete
-        // controls, and until now holding the page granted all three. They
-        // follow the standard verbs described above CRUD_VERBS.
+        // controls, following the standard verbs described above CRUD_VERBS.
         'promo-list' => [
             'promo-list.create', 'promo-list.edit', 'promo-list.delete',
         ],
@@ -338,85 +365,65 @@ final class Permissions
      *
      * A page whose controls are the ordinary "Add / Edit / Delete" three
      * declares exactly these, named `<page>.<verb>`. Anything a page does that
-     * is not one of the three — approving, reverting, moving to a job order —
-     * keeps its own descriptive verb above, because a permission that reads
-     * `job-order.approve` says what it grants and `job-order.action3` does not.
-     *
-     * Adding a button to a page is therefore: add its key to ACTIONS here and to
-     * the two client catalogs, give it a label, gate the button with `can()`,
-     * and give the endpoint a rule in ApiPermissionMap. No part of the system
-     * has to learn about the key beyond those tables — the Role modal renders
-     * whatever ACTIONS holds, and both `allows()` and the middleware are
-     * agnostic about which keys exist.
+     * is not one of the three keeps its own descriptive verb above.
      */
     public const CRUD_VERBS = ['create', 'edit', 'delete'];
 
     /**
-     * What holding a page key used to carry with it, page by page.
+     * Mutually exclusive pairs: a role may hold one half or the other.
+     * Enforced by the Role modal; listed here so the three catalogs agree.
+     */
+    public const EXCLUSIVE_PAIRS = [
+        ['job-order.tech-edit', 'job-order.admin-edit'],
+        ['service-order.tech-edit', 'service-order.admin-edit'],
+    ];
+
+    /**
+     * Pages whose buttons every holder of the page saw before this table
+     * existed, so a custom role saved before then (permissions_version 0) is
+     * granted every action key the page has.
      *
-     * Before the verbs above existed, most of these pages drew their Add, Edit
-     * and Delete controls for anyone who could open them. A custom role saved in
-     * those days lists only the page, so reading it strictly would take those
-     * buttons away from roles that have always had them — silently, on deploy,
-     * with nothing in the UI to explain it. A role saved before the change
-     * (permissions_version 0) therefore still gets the verbs listed here for any
-     * of these pages it holds.
+     * Before the port a custom role's buttons on these pages were ungated —
+     * holding the page drew Add, Edit, Delete, Generate… — and its stored list
+     * names only the page. Reading it strictly would take the buttons away on
+     * deploy, silently.
      *
-     * This is a map rather than a list of pages because it has to reproduce what
-     * each page actually allowed, not what the common case allowed. Three
-     * entries differ, and granting them the full three would be widening access
-     * under cover of a compatibility rule:
-     *
-     *   status-remarks-list  Add was open to the page; Edit and Delete were
-     *                        already behind `status-remarks-list.manage`.
-     *   user-management      Add and Delete were open to the page; Edit was
-     *                        SuperAdmin's alone, checked in UserDetails.
-     *   ports, router-models Every control was already behind `.manage`, so the
-     *                        page on its own carried nothing. Roles holding the
-     *                        old key are served by RETIRED_ACTIONS instead.
+     * Deliberately NOT here, because a legacy role did not have their actions:
+     *   - job-order, customer, transaction-list, mass-rebate, staggered-payment,
+     *     discounts, application-management, service-order: legacy roles
+     *     already stored these sub-keys, each button showed only when ticked,
+     *     so the stored sub-keys stay authoritative.
+     *   - transactions-revert, prepaid-override, reports, bonus-history,
+     *     agent-payout, agent-invoices: their actions were role-gated to
+     *     Administrator/SuperAdmin (or SuperAdmin alone), never to a custom
+     *     role.
      *
      * Saving the role from Role Management stamps the current version and the
      * ticks become authoritative, which is the only way a role leaves this rule.
      *
      * @see roleKeys()
      */
-    private const GRANDFATHERED_ACTIONS = [
-        'promo-list'          => self::CRUD_VERBS,
-        'plan-list'           => self::CRUD_VERBS,
-        'location-list'       => self::CRUD_VERBS,
-        'lcp'                 => self::CRUD_VERBS,
-        'nap'                 => self::CRUD_VERBS,
-        'usage-type'          => self::CRUD_VERBS,
-        'vlan-config'         => self::CRUD_VERBS,
-        'payment-method'      => self::CRUD_VERBS,
-        'work-category'       => self::CRUD_VERBS,
-        'radius-config'       => self::CRUD_VERBS,
-        'smart-olt'           => self::CRUD_VERBS,
-        'sms-config'          => self::CRUD_VERBS,
-        'sms-template'        => self::CRUD_VERBS,
-        'email-templates'     => self::CRUD_VERBS,
-        'pppoe-setup'         => self::CRUD_VERBS,
-        'concern-config'      => self::CRUD_VERBS,
-        'billing-config'      => self::CRUD_VERBS,
-        'tech-users'          => self::CRUD_VERBS,
-        'organization'        => self::CRUD_VERBS,
-        'roles'               => self::CRUD_VERBS,
-        'group-management'    => self::CRUD_VERBS,
-
-        // The three that were already narrower than their page. See above.
-        'status-remarks-list' => ['create'],
-        'user-management'     => ['create', 'delete'],
+    private const LEGACY_GRANT_ALL_PAGES = [
+        // Configurations
+        'promo-list', 'plan-list', 'location-list', 'lcp', 'nap', 'ports',
+        'router-models', 'status-remarks-list', 'usage-type', 'vlan-config',
+        'payment-method', 'work-category', 'radius-config', 'smart-olt',
+        'sms-config', 'sms-template', 'email-templates', 'pppoe-setup',
+        'concern-config', 'billing-config',
+        // Users
+        'user-management', 'tech-users', 'organization', 'roles', 'group-management',
+        // Pay Out/In's Add controls were ungated; its approve/reject were not.
+        'commission',
+        // Expenses
+        'monthly-payables', 'expenses', 'expenses-category',
+        // Add Work Order showed for every role but the Agent.
+        'work-order',
+        'soa-generation',
     ];
 
     /**
-     * Keys that no longer exist, and what they now mean.
-     *
-     * Three pages already gated their controls behind a single `.manage` key.
-     * Splitting that into the standard three would have revoked the buttons
-     * from every role holding the old key, so the old key is still read — it
-     * simply grants all three — while only the new ones are offered in the Role
-     * modal. A role resaved from the modal writes the new keys and stops
-     * relying on this.
+     * Keys that no longer exist, and what they now mean. Still read, never
+     * offered; a role resaved from the modal writes the new keys.
      */
     private const RETIRED_ACTIONS = [
         'ports.manage'               => ['ports.create', 'ports.edit', 'ports.delete'],
@@ -427,25 +434,37 @@ final class Permissions
     /**
      * What each seeded role holds.
      *
-     * These lists reproduce the access the eight locked roles already had in the
-     * sidebar's allowedRoles tables — this is a consolidation of that behaviour,
-     * not a re-grant. Two deliberate additions are called out inline: the
-     * technician and head technician edit keys, which the old code never granted
-     * to anyone but an administrator, leaving the technician Done button inert.
+     * The union of what the web app and the mobile app gave the role before
+     * this table existed — pages from the web Sidebar (filterMenuByRole) and
+     * the mobile Sidebar/Menu, buttons from the hasPermission()/role checks
+     * behind each control. Not a re-grant: nothing here is new to the role on
+     * both clients at once.
      */
     public const ROLE_PERMISSIONS = [
         // Full system control, including everything added later.
         Role::SUPER_ADMIN => [self::WILDCARD],
 
+        // Web: every page under the Sidebar's "administrator" entries; every
+        // hasPermission() check short-circuits true for it. Mobile: the same
+        // plus the Administrator Menu block, which opens the Configurations,
+        // Users and Logs pages, Reports (whose page admits 1 and 7) and
+        // Settings (whose panels stay SuperAdmin-only inside the page) as
+        // well. The reports routes themselves still answer SuperAdmin alone
+        // (`role:superadmin` in routes/api.php), as they always have. Held
+        // back: vlan-config (on neither client), reports.delete, and the other
+        // SuperAdmin-only buttons — transaction delete, revert approval,
+        // prepaid-override approval.
         Role::ADMINISTRATOR => [
             'dashboard',
             'live-monitor',
             // Billing
             'customer',
             'customer.so-request', 'customer.details-edit', 'customer.attachment', 'customer.transact',
+            'customer.prepaid-override',
             'transaction-list',
             'transaction-list.batch-approve', 'transaction-list.approve', 'transaction-list.revert-request',
             'transactions-revert',
+            'prepaid-override',
             'payment-portal',
             'soa',
             'invoice',
@@ -455,28 +474,59 @@ final class Permissions
             'mass-rebate', 'mass-rebate.add',
             'staggered-payment', 'staggered-payment.add',
             'discounts', 'discounts.add',
+            'soa-generation', 'soa-generation.manage',
             // Operations
             'application-management',
             'application-management.move-to-jo', 'application-management.quick-status',
             'job-order',
             'job-order.approve', 'job-order.failed', 'job-order.admin-edit', 'job-order.attachment',
-            'job-order.pre-install',
             'service-order', 'service-order.admin-edit',
             'work-order', 'work-order.manage',
             'lcp-nap-location',
             'sms-blast',
             'reports', 'reports.manage',
-            'support',
             // Agent
+            'commission', 'commission.create',
             'bonus-history', 'bonus-history.payout',
-            'team-agent',
-            'agent-management',
+            'agent-invoices', 'agent-invoices.generate', 'agent-invoices.status', 'agent-invoices.payout',
             'agent-payout', 'agent-payout.approve',
-            'agent-invoices', 'agent-invoices.generate', 'agent-invoices.status',
-            'agent-invoices.payout',
+            'agent-management',
+            'team-agent',
             // Inventory
             'inventory',
             'inventory-category-list',
+            // Expenses
+            'monthly-payables',
+            'monthly-payables.create', 'monthly-payables.edit', 'monthly-payables.delete',
+            'monthly-payables.generate', 'monthly-payables.pay',
+            'expenses', 'expenses.create', 'expenses.edit', 'expenses.delete',
+            'expenses-category', 'expenses-category.create', 'expenses-category.edit', 'expenses-category.delete',
+            // Configurations (mobile Sidebar and Menu)
+            'promo-list', 'promo-list.create', 'promo-list.edit', 'promo-list.delete',
+            'plan-list', 'plan-list.create', 'plan-list.edit', 'plan-list.delete',
+            'location-list', 'location-list.create', 'location-list.edit', 'location-list.delete',
+            'lcp', 'lcp.create', 'lcp.edit', 'lcp.delete',
+            'nap', 'nap.create', 'nap.edit', 'nap.delete',
+            'ports', 'ports.create', 'ports.edit', 'ports.delete',
+            'router-models', 'router-models.create', 'router-models.edit', 'router-models.delete',
+            'status-remarks-list', 'status-remarks-list.create', 'status-remarks-list.edit', 'status-remarks-list.delete',
+            'usage-type', 'usage-type.create', 'usage-type.edit', 'usage-type.delete',
+            'payment-method', 'payment-method.create', 'payment-method.edit', 'payment-method.delete',
+            'work-category', 'work-category.create', 'work-category.edit', 'work-category.delete',
+            'radius-config', 'radius-config.create', 'radius-config.edit', 'radius-config.delete',
+            'smart-olt', 'smart-olt.create', 'smart-olt.edit', 'smart-olt.delete',
+            'sms-config', 'sms-config.create', 'sms-config.edit', 'sms-config.delete',
+            'sms-template', 'sms-template.create', 'sms-template.edit', 'sms-template.delete',
+            'email-templates', 'email-templates.create', 'email-templates.edit', 'email-templates.delete',
+            'pppoe-setup', 'pppoe-setup.create', 'pppoe-setup.edit', 'pppoe-setup.delete',
+            'concern-config', 'concern-config.create', 'concern-config.edit', 'concern-config.delete',
+            'billing-config', 'billing-config.create', 'billing-config.edit', 'billing-config.delete',
+            // Users (mobile Menu)
+            'user-management', 'user-management.create', 'user-management.edit', 'user-management.delete',
+            'tech-users', 'tech-users.create', 'tech-users.edit', 'tech-users.delete',
+            'organization', 'organization.create', 'organization.edit', 'organization.delete',
+            'roles', 'roles.create', 'roles.edit', 'roles.delete',
+            'group-management', 'group-management.create', 'group-management.edit', 'group-management.delete',
             // Logs
             'disconnected-logs',
             'reconnection-logs',
@@ -485,44 +535,31 @@ final class Permissions
             'email-logs',
             'data-logs',
             'expenses-log',
-            'modem-router-logs',
-            // The RADIUS retry queue. Read-only, and an operational screen
-            // rather than a configuration one, so it sits with the roles that
-            // chase failed disconnects rather than with Settings.
-            'radius-queue',
-            // Tools suite. Every one of these mutates live state — subscriber
-            // ONUs, RADIUS accounts, posted payments — so they are granted
-            // deliberately rather than inherited from a group. Billing
-            // Reconcile is not here: it decides whether a subscriber is
-            // invoiced at all, and stays with SuperAdmin.
+            'smart-olt-logs',
+            'radius-logs',
+            'system-logs',
+            // Tools
             'smartolt-tool',
             'mikrotik-radius-tool',
             'xendit-reconcile-tool',
+            'billing-reconcile-tool',
+            'settings',
         ],
 
-        // Field technician: their own job orders and service orders, plus the
-        // LCP/NAP map they need on site.
-        //
-        // The two edit keys are new. Sub-permissions were only ever read from a
-        // custom role's array, which a locked role does not have, so a
-        // technician's Done button resolved to "no permission" and did nothing.
-        // Granting them here restores the button the role has always been meant
-        // to have; the technician-only Done form is unchanged.
+        // Field technician. Web: Job Order, Service Order, LCP/NAP, and no
+        // sub-keys (the seeded role carried none, so every hasPermission() was
+        // false). Mobile adds Work Order, and its role-based Job Order "Edit"
+        // (the technician Done form), attachment upload and Service Order edit
+        // — which is why the technician keys are held here: the server must
+        // not refuse what the mobile app does. The web keeps those buttons
+        // hidden for this role with its own rule.
         Role::TECHNICIAN => [
             'job-order',
             'job-order.tech-edit',
             'job-order.attachment',
-            // The pre-installation visit is site work.
-            'job-order.pre-install',
             'service-order',
             'service-order.tech-edit',
-            // Work orders are a technician's work too. The web sidebar never
-            // listed the page for them, but the page itself has always had
-            // technician-specific behaviour — the queue ordering and the lock
-            // in technicianWorkOrderAccess.ts, enforced server side by
-            // WorkOrderApiController::isWorkOrderLockedForTechnician(). The
-            // mobile app did list it. The omission was the sidebar's.
-            'work-order', 'work-order.manage',
+            'work-order',
             'lcp-nap-location',
         ],
 
@@ -533,7 +570,8 @@ final class Permissions
             'customer-support',
         ],
 
-        // Sales agent: their own referrals, their own payout history.
+        // Sales agent: their own referrals, their own payout history and
+        // invoices (read-only, scoped server side), the application form.
         Role::AGENT => [
             'agent-dashboard',
             'agent-application',
@@ -546,51 +584,45 @@ final class Permissions
         Role::INVENTORY_STAFF => [
             'inventory',
             'inventory-category-list',
-            'modem-router-logs',
         ],
 
-        // Outside plant: work orders and the fibre map.
+        // Outside plant: work orders (web shows it Add Work Order) and the fibre map.
         Role::OSP => [
             'work-order', 'work-order.manage',
             'lcp-nap-location',
         ],
 
-        // Head technician: supervises the field roles and the parts of
-        // Configurations that describe the plant.
-        //
-        // As with the technician, the edit keys are new — the role could open
-        // the pages but no button was ever enabled for it.
+        // Head technician. Web: Application, Job Order, Service Order, Work
+        // Order (with Add), LCP/NAP, the three plant Configurations pages and
+        // the two network tools; every customer.* button in the customer pane
+        // it opens from a job order — but NOT the Customer page itself.
+        // Mobile adds the admin Done form, Edit bar and attachments on Job
+        // Order, admin-mode Service Order edit, and Application's Move to JO
+        // and status buttons, which the web hides from this role.
         Role::HEAD_TECH => [
             'application-management',
             'application-management.move-to-jo', 'application-management.quick-status',
             'job-order',
-            'job-order.approve', 'job-order.failed', 'job-order.admin-edit', 'job-order.attachment',
-            'job-order.pre-install',
+            'job-order.admin-edit', 'job-order.attachment',
             'service-order', 'service-order.admin-edit',
             'work-order', 'work-order.manage',
             'lcp-nap-location',
-            // The head technician maintains the outside-plant records, so the
-            // three verbs are spelled out rather than left to the
-            // grandfathering rule, which only covers stored custom roles.
+            'customer.so-request', 'customer.details-edit', 'customer.attachment', 'customer.transact',
+            'customer.prepaid-override',
             'location-list', 'location-list.create', 'location-list.edit', 'location-list.delete',
             'lcp', 'lcp.create', 'lcp.edit', 'lcp.delete',
             'nap', 'nap.create', 'nap.edit', 'nap.delete',
-            // The two network tools. Xendit Reconciliation is deliberately NOT
-            // here: it settles real money against real accounts, which is an
-            // Administrator and SuperAdmin concern rather than a
-            // field-operations one.
             'smartolt-tool',
             'mikrotik-radius-tool',
-            'modem-router-logs',
         ],
     ];
 
     /**
-     * Where each role lands after signing in.
+     * Where each role lands after signing in (the web app's landing).
      *
-     * Must be a key the role actually holds — Dashboard falls back to the first
-     * permission it finds when it is not, but that ordering is arbitrary and
-     * makes for a poor landing page.
+     * Must be a key the role actually holds. The Agent's web landing is the
+     * `dashboard` section rendered as the agent dashboard — the same screen as
+     * `agent-dashboard`, which is what the mobile app lands on.
      */
     public const ROLE_HOME = [
         Role::SUPER_ADMIN     => 'dashboard',
@@ -619,14 +651,50 @@ final class Permissions
     }
 
     /**
+     * Keys that are still read but no longer offered (see RETIRED_ACTIONS).
+     *
+     * @return string[]
+     */
+    public static function retiredKeys(): array
+    {
+        return array_keys(self::RETIRED_ACTIONS);
+    }
+
+    /**
+     * A list with every retired key replaced by the keys that took its place.
+     *
+     * @param  string[]  $keys
+     * @return string[]
+     */
+    public static function replaceRetired(array $keys): array
+    {
+        return self::expandRetiredActions($keys);
+    }
+
+    /**
+     * The keys stored on a role row, as read — no inheritance, no expansion.
+     *
+     * @param  \App\Models\Role|object|null  $role
+     * @return string[]
+     */
+    public static function storedKeys($role): array
+    {
+        return $role === null ? [] : self::parseKeys($role->permissions ?? null);
+    }
+
+    /**
      * The keys a user effectively holds.
      *
-     * A locked role reads from ROLE_PERMISSIONS; a custom role reads its own
-     * `permissions` column, plus — if it is a hybrid — everything its
-     * `base_role_id` role holds. Either way the result also contains the parent
-     * page of every sub action it holds, so a check for "job-order" succeeds for
-     * a role that was only given "job-order.approve" — which is how the Role
-     * modal presents it (ticking a sub action ticks its page).
+     * A locked role reads from ROLE_PERMISSIONS, exactly as written. A custom
+     * role reads its own `permissions` column, plus — if it is a hybrid —
+     * everything its `base_role_id` role holds; its own keys also bring the
+     * parent page of every sub action among them (see roleKeys()), so a check for "job-order"
+     * succeeds for a role that was only given "job-order.approve" — which is
+     * how the Role modal presents it (ticking a sub action ticks its page).
+     *
+     * The seeded lists are not widened that way because one of them holds a
+     * page's buttons without the page: the Head Technician works the customer
+     * pane opened from a job order, but has never had the Customer page.
      *
      * @param  \App\Models\User|object|null  $user
      * @return string[]
@@ -643,20 +711,18 @@ final class Permissions
             return [self::WILDCARD];
         }
 
-        $keys = Role::isLocked($roleId)
-            ? (self::ROLE_PERMISSIONS[$roleId] ?? [])
-            : self::customRoleKeys($user);
+        if (Role::isLocked($roleId)) {
+            return self::ROLE_PERMISSIONS[$roleId] ?? [];
+        }
 
-        return self::withImpliedPages($keys);
+        return self::customRoleKeys($user);
     }
 
     /**
      * Does this user hold the given key?
      *
      * `$permission` may be a single key or a list, in which case holding any one
-     * of them is enough — used by endpoints that serve two audiences, e.g. an
-     * invoice readable both from the admin Invoice page and from the customer's
-     * own Bills page.
+     * of them is enough — used by endpoints that serve two audiences.
      *
      * @param  \App\Models\User|object|null  $user
      * @param  string|string[]  $permission
@@ -685,8 +751,7 @@ final class Permissions
     /**
      * The keys a seeded role holds, or [] for anything that is not one.
      *
-     * This is what a hybrid role inherits. Read through here rather than from
-     * ROLE_PERMISSIONS directly so the "not a locked id" case has one answer.
+     * This is what a hybrid role inherits.
      *
      * @return string[]
      */
@@ -698,17 +763,47 @@ final class Permissions
     }
 
     /**
+     * Was this custom role last saved before per-action keys existed?
+     *
+     * Such a row's stored list names pages (and the sub-keys the old modal
+     * offered) rather than every button, so it is read through the legacy
+     * rules: LEGACY_GRANT_ALL_PAGES here, and the role-name checks in
+     * App\Support\AgentAccess. A missing column reads as 0.
+     *
+     * @param  \App\Models\Role|object|null  $role
+     */
+    public static function isLegacyRole($role): bool
+    {
+        if ($role === null || Role::isLocked($role->id ?? null)) {
+            return false;
+        }
+
+        return (int) ($role->permissions_version ?? 0) < self::CURRENT_VERSION;
+    }
+
+    /**
+     * Whether the user holds a legacy custom role (see isLegacyRole).
+     *
+     * Sent to the clients at sign-in and by GET /me/permissions so they can
+     * keep what such a role could open before the permission table existed —
+     * the bell's shortcuts — until the role is saved from the Roles screen.
+     */
+    public static function isLegacyUser($user): bool
+    {
+        // A seeded role never is, and needs no role lookup to say so.
+        if ($user === null || Role::isLocked((int) ($user->role_id ?? 0))) {
+            return false;
+        }
+
+        return self::isLegacyRole(self::roleOf($user));
+    }
+
+    /**
      * Everything a custom role holds: its base role's keys plus its own.
      *
      * The inherited half is resolved here, on every read, rather than copied
-     * into `roles.permissions` when the role is saved. That is the whole point
-     * of a hybrid: a key added to Role::TECHNICIAN reaches every role built on
-     * the technician, and one removed from it leaves them, without anybody
-     * reopening the Role modal.
-     *
-     * A base of SuperAdmin inherits WILDCARD, which subsumes everything else —
-     * returned on its own so callers do not have to reason about a list that
-     * both contains "*" and enumerates keys.
+     * into `roles.permissions` when the role is saved. A base of SuperAdmin
+     * inherits WILDCARD, which subsumes everything else.
      *
      * @param  \App\Models\Role|object|null  $role
      * @return string[]
@@ -734,44 +829,43 @@ final class Permissions
 
         $stored = self::parseKeys($role->permissions ?? null);
 
-        // A role last saved before the per-action keys existed listed only its
-        // pages, so its buttons are implied rather than ticked. Version 1 and
-        // above means the list is what the administrator actually chose.
-        if ((int) ($role->permissions_version ?? 0) < 1) {
-            $stored = self::withGrandfatheredActions($stored);
+        if (self::isLegacyRole($role)) {
+            $stored = self::withLegacyActions($stored);
         }
 
+        // The implied parent pages are added for the role's own keys only. The
+        // inherited half is taken exactly as the base role holds it, so a
+        // hybrid never gains a page its base does not have.
         return array_values(array_unique(array_merge(
             $inherited,
-            self::expandRetiredActions($stored)
+            self::withImpliedPages(self::expandRetiredActions($stored))
         )));
     }
 
     /**
-     * Add the verbs each page used to carry, for every page in the list.
+     * Add every action of each LEGACY_GRANT_ALL_PAGES page in the list.
+     *
+     * Appended after the stored keys, so the list keeps its original order —
+     * the web client lands a standalone custom role on its first key.
      *
      * @param  string[]  $keys
      * @return string[]
      */
-    private static function withGrandfatheredActions(array $keys): array
+    private static function withLegacyActions(array $keys): array
     {
         $result = $keys;
 
         foreach ($keys as $key) {
-            foreach (self::GRANDFATHERED_ACTIONS[$key] ?? [] as $verb) {
-                $result[] = "$key.$verb";
+            if (in_array($key, self::LEGACY_GRANT_ALL_PAGES, true)) {
+                array_push($result, ...(self::ACTIONS[$key] ?? []));
             }
         }
 
-        return $result;
+        return array_values(array_unique($result));
     }
 
     /**
      * Replace any retired key with the keys that took its place.
-     *
-     * The retired key itself is dropped: it is not in `all()` any more, so
-     * leaving it would put a value in the effective list that no check, on
-     * either side, ever asks for.
      *
      * @param  string[]  $keys
      * @return string[]
@@ -795,9 +889,6 @@ final class Permissions
     /**
      * The seeded role this user's role is built on, or null.
      *
-     * Null for a seeded role (its access is the table above, not an
-     * inheritance) and for a standalone custom role.
-     *
      * @param  \App\Models\User|object|null  $user
      */
     public static function baseRoleIdFor($user): ?int
@@ -820,8 +911,7 @@ final class Permissions
     /**
      * Where a user lands after signing in.
      *
-     * A seeded role has its own entry. A hybrid falls back to its base role's —
-     * a "Technician who also does Inventory" should still land on Job Order —
+     * A seeded role has its own entry. A hybrid falls back to its base role's,
      * and a standalone custom role has none, leaving the client to pick the
      * first page it was granted.
      *
@@ -844,26 +934,35 @@ final class Permissions
         return $base === null ? null : (self::ROLE_HOME[$base] ?? null);
     }
 
-    /**
-     * Read a custom role's effective permission list.
-     *
-     * @return string[]
-     */
+    /** @return string[] */
     private static function customRoleKeys($user): array
     {
         return self::roleKeys(self::roleOf($user));
     }
 
     /**
-     * The user's role row.
+     * The user's role row. Prefers an already-loaded relation.
      *
-     * Prefers an already-loaded relation so this does not fire a query per
-     * request; falls back to a lookup when the caller did not eager-load it.
+     * An Eloquent user's `role` relation is read only when it is already
+     * loaded; otherwise the row is fetched WITHOUT being attached to the
+     * model. `isset($user->role)` would lazy-load the relation onto the user,
+     * and since ApiAccessControl asks this about the request's own user on
+     * every request, that would quietly add a `role` object to every place the
+     * signed-in user is serialised (GET /user and friends) — a response change
+     * the gate must not make in `log` mode.
      *
      * @return \App\Models\Role|object|null
      */
     private static function roleOf($user)
     {
+        if ($user instanceof \Illuminate\Database\Eloquent\Model) {
+            if ($user->relationLoaded('role')) {
+                return $user->getRelation('role');
+            }
+
+            return empty($user->role_id) ? null : Role::find($user->role_id);
+        }
+
         if (isset($user->role) && $user->role !== null) {
             return $user->role;
         }
@@ -872,31 +971,35 @@ final class Permissions
     }
 
     /**
-     * Read a stored permissions value.
-     *
-     * The column is cast to an array by the Role model, but rows written before
-     * that cast existed hold a JSON string or a comma-separated list, so all
-     * three shapes are accepted — the frontend parses it the same three ways.
+     * Read a stored permissions value: an array (the model cast), a JSON
+     * string, or a comma-separated list, for rows written before the cast.
      *
      * @return string[]
      */
     private static function parseKeys($raw): array
     {
-        if (is_array($raw)) {
-            return array_values(array_filter(array_map('strval', $raw), 'strlen'));
-        }
-
         if (is_string($raw) && trim($raw) !== '') {
             $decoded = json_decode($raw, true);
 
-            if (is_array($decoded)) {
-                return array_values(array_filter(array_map('strval', $decoded), 'strlen'));
-            }
-
-            return array_values(array_filter(array_map('trim', explode(',', $raw)), 'strlen'));
+            $raw = is_array($decoded) ? $decoded : explode(',', $raw);
         }
 
-        return [];
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        // Only plain string entries are keys. A legacy row holding something
+        // else (a nested array, null, a boolean) must read as "no such key",
+        // not throw "Array to string conversion" out of sign-in or the gate.
+        $keys = [];
+
+        foreach ($raw as $entry) {
+            if (is_string($entry) && ($entry = trim($entry)) !== '') {
+                $keys[] = $entry;
+            }
+        }
+
+        return array_values(array_unique($keys));
     }
 
     /**

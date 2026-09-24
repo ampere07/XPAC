@@ -1,17 +1,12 @@
-import * as ExpoFileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import apiClient, { API_BASE_URL } from '../config/api';
+import apiClient from '../config/api';
 
 /**
  * Weekly agent referral invoices.
  *
  * The JSON half of this is the web portal's service unchanged — same endpoints,
- * same shapes — because both clients read the same API. The PDF half is not, and
- * could not be: the web version asks axios for a Blob, builds an object URL and
- * hands it to a new tab. React Native has no object URLs and axios cannot
- * reliably produce a Blob here, so the PDF is fetched with expo-file-system
- * instead and opened the way a phone opens things. See openPdf().
+ * same shapes — because both clients read the same API. The PDF half differs: the
+ * phone opens the invoice's Drive link in the device browser. See openPdf().
  */
 
 /** One referred customer billed on an agent invoice. */
@@ -86,20 +81,6 @@ export type PdfOutcome =
     | { kind: 'saved'; uri: string }
     | { kind: 'failed'; message: string };
 
-/** The headers the API expects, both spellings — see config/api.ts. */
-const authHeaders = async (): Promise<Record<string, string>> => {
-    const token = await AsyncStorage.getItem('authToken');
-    if (!token) return {};
-
-    // Authorization is stripped by part of the chain between the phone and PHP,
-    // which is why config/api.ts sends X-Auth-Token beside it. A download made
-    // outside axios has to carry both for the same reason.
-    return {
-        Authorization: `Bearer ${token}`,
-        'X-Auth-Token': token,
-    };
-};
-
 export const agentInvoiceService = {
     async list(params: AgentInvoiceListParams = {}) {
         const query = new URLSearchParams();
@@ -133,53 +114,28 @@ export const agentInvoiceService = {
     /**
      * Open one invoice's PDF.
      *
-     * The endpoint answers one of two ways. Normally the file is on Google
-     * Drive and it replies with JSON naming the link, which opens in the
-     * device browser. When Drive was unreachable the server renders the PDF
-     * itself and replies with bytes.
-     *
-     * Both arrive here as a downloaded file, because that is the one fetch that
-     * works for either: expo-file-system carries the auth headers and writes
-     * whatever comes back, and the Content-Type then says which it was. Asking
-     * axios for a blob — what the web client does — is what does not work on
-     * this platform.
+     * The GOWISER API answers with JSON naming the invoice's Google Drive link
+     * (rendering and uploading it first when needed), which opens in the device
+     * browser. It is fetched through apiClient so the session cookie goes with
+     * it: GOWISER authenticates by session, and a bare download carrying only a
+     * token header would be refused.
      */
     async openPdf(record: AgentInvoiceRecord): Promise<PdfOutcome> {
-        const target = `${ExpoFileSystem.cacheDirectory}invoice-${record.id}.pdf`;
-
         try {
-            const result = await ExpoFileSystem.downloadAsync(
-                `${API_BASE_URL}/agent-invoices/${record.id}/pdf`,
-                target,
-                { headers: await authHeaders() }
-            );
+            const response = await apiClient.get(`/agent-invoices/${record.id}/pdf`);
+            const url = response.data?.url as string | undefined;
 
-            const contentType = String(
-                result.headers?.['content-type'] ?? result.headers?.['Content-Type'] ?? ''
-            ).toLowerCase();
-
-            // A JSON body is either the Drive link or an error explaining why
-            // there is no file. Both are read out of the downloaded file rather
-            // than guessed at from the status code.
-            if (contentType.includes('application/json')) {
-                const body = await ExpoFileSystem.readAsStringAsync(result.uri);
-                const parsed = JSON.parse(body);
-
-                if (parsed?.url) {
-                    await WebBrowser.openBrowserAsync(parsed.url as string);
-                    return { kind: 'opened', url: parsed.url as string };
-                }
-
-                return { kind: 'failed', message: parsed?.message || 'The invoice PDF could not be opened.' };
+            if (url) {
+                await WebBrowser.openBrowserAsync(url);
+                return { kind: 'opened', url };
             }
 
-            if (result.status >= 400) {
-                return { kind: 'failed', message: `The invoice PDF could not be opened (HTTP ${result.status}).` };
-            }
-
-            return { kind: 'saved', uri: result.uri };
+            return { kind: 'failed', message: response.data?.message || 'The invoice PDF could not be opened.' };
         } catch (error: any) {
-            return { kind: 'failed', message: error?.message || 'The invoice PDF could not be opened.' };
+            return {
+                kind: 'failed',
+                message: error?.response?.data?.message || error?.message || 'The invoice PDF could not be opened.',
+            };
         }
     },
 

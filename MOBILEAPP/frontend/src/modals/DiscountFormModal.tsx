@@ -14,6 +14,7 @@ import { X, ChevronDown, Minus, Plus } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as discountService from '../services/discountService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { useBillingStore } from '../store/billingStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
@@ -24,12 +25,6 @@ interface DiscountFormModalProps {
   onClose: () => void;
   onSave: (formData: DiscountFormData) => void;
   customerData?: any;
-  /**
-   * Editing an existing discount rather than raising a new one. With this set
-   * the form loads that record and saves back onto it — creating instead would
-   * leave a second discount beside the one being edited.
-   */
-  discountId?: number | string | null;
 }
 
 interface DiscountFormData {
@@ -50,15 +45,10 @@ const getCurrentDateTime = () => {
 
 const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
   isOpen,
-  discountId,
   onClose,
   onSave,
   customerData,
 }) => {
-  /** Editing when an id was handed in; raising a new one otherwise. */
-  const isEditMode = discountId !== undefined && discountId !== null && discountId !== '';
-  const [loadingRecord, setLoadingRecord] = useState(false);
-
   const [formData, setFormData] = useState<DiscountFormData>({
     accountNo: null,
     discountAmount: '0.00',
@@ -127,42 +117,6 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
       fetchBillingRecords();
     }
   }, [isOpen]);
-
-  /**
-   * In edit mode the record is read back and the form filled from it, so the
-   * approver edits what is stored rather than a blank form that would overwrite
-   * the fields they did not touch.
-   */
-  useEffect(() => {
-    if (!isOpen || !isEditMode) return;
-
-    let cancelled = false;
-    (async () => {
-      setLoadingRecord(true);
-      try {
-        const response = await discountService.getById(Number(discountId));
-        const discount: any = (response as any)?.data;
-        if (cancelled || !discount) return;
-
-        setFormData({
-          accountNo: discount.account_no ?? null,
-          discountAmount: String(discount.discount_amount ?? '0.00'),
-          remaining: String(discount.remaining ?? '0'),
-          status: discount.status || 'Pending',
-          processedDate: discount.processed_date || getCurrentDateTime(),
-          processedByUserId: discount.processed_by_user_id ?? null,
-          approvedByUserId: discount.approved_by_user_id ?? null,
-          remarks: discount.remarks || '',
-        });
-      } catch {
-        if (!cancelled) Alert.alert('Error', 'Could not load this discount.');
-      } finally {
-        if (!cancelled) setLoadingRecord(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [isOpen, discountId, isEditMode]);
 
   useEffect(() => {
     if (formData.status !== 'Monthly') {
@@ -240,20 +194,15 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
         processed_by_user_id: formData.processedByUserId!,
         approved_by_user_id: formData.approvedByUserId!,
         remarks: formData.remarks || '',
-        // The owning organization is fixed at creation; an edit must not move it.
-        ...(!isEditMode && currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {}),
+        ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {}),
       };
 
-      if (isEditMode) {
-        await discountService.update(Number(discountId), payload);
-      } else {
-        await discountService.create(payload);
-      }
+      await discountService.create(payload);
 
       clearInterval(progressInterval);
       setLoadingPercentage(100);
 
-      Alert.alert('Success', isEditMode ? 'Discount updated successfully!' : 'Discount created successfully!', [
+      Alert.alert('Success', 'Discount created successfully!', [
         {
           text: 'OK',
           onPress: () => {
@@ -645,7 +594,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   {users.map(user => (
                     <Picker.Item
                       key={user.id}
-                      label={user.email_address || user.username}
+                      label={getUserDisplayName(user, user?.email_address)}
                       value={user.id}
                     />
                   ))}
@@ -673,7 +622,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                   {approverUsers.map(user => (
                     <Picker.Item
                       key={user.id}
-                      label={user.email_address || user.username}
+                      label={getUserDisplayName(user, user?.email_address)}
                       value={user.id}
                     />
                   ))}

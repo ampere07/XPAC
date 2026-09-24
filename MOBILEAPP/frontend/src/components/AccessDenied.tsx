@@ -5,9 +5,9 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 /**
  * What a user sees when they reach a section their role does not hold.
  *
- * Reaching this is not a normal outcome — the tab bar does not list what the
- * role cannot open — so it is worded as a wrong turn rather than as an error,
- * and it offers the way back to the screen the role does land on.
+ * The tab bar does not list what the role cannot open, so reaching this is a
+ * wrong turn rather than an error, and it offers the way back to the screen the
+ * role does land on.
  */
 interface AccessDeniedProps {
   /** The section that was refused, shown so a support call has something to quote. */
@@ -17,16 +17,16 @@ interface AccessDeniedProps {
 }
 
 const AccessDenied: React.FC<AccessDeniedProps> = ({ section, onGoHome }) => (
-  <View className="flex-1 items-center justify-center px-8 bg-gray-50">
-    <View className="w-16 h-16 rounded-full items-center justify-center mb-5 bg-amber-50">
+  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, backgroundColor: '#f9fafb' }}>
+    <View style={{ width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 20, backgroundColor: '#fffbeb' }}>
       <MaterialCommunityIcons name="shield-alert-outline" size={30} color="#f59e0b" />
     </View>
 
-    <Text className="text-base font-semibold text-gray-800 mb-2 text-center">
+    <Text style={{ fontSize: 16, fontWeight: '600', color: '#1f2937', marginBottom: 8, textAlign: 'center' }}>
       You do not have access to this page
     </Text>
 
-    <Text className="text-sm text-gray-500 text-center">
+    <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center' }}>
       Your role does not include {section ? section : 'this section'}. If you think it
       should, ask an administrator to update your role.
     </Text>
@@ -34,9 +34,9 @@ const AccessDenied: React.FC<AccessDeniedProps> = ({ section, onGoHome }) => (
     {onGoHome && (
       <Pressable
         onPress={onGoHome}
-        className="mt-6 px-4 py-2 rounded-lg bg-white border border-gray-200"
+        style={{ marginTop: 24, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb' }}
       >
-        <Text className="text-sm font-medium text-gray-700">Back to my dashboard</Text>
+        <Text style={{ fontSize: 14, fontWeight: '500', color: '#374151' }}>Back to my dashboard</Text>
       </Pressable>
     )}
   </View>

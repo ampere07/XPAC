@@ -42,31 +42,6 @@ export interface BillingReconcileRow {
   last_invoice_date: string | null;
   dismissed_reason: string | null;
   dismissed_at: string | null;
-
-  /**
-   * The plan the subscriber was sold, as the application recorded it.
-   *
-   * Carries the price suffix the catalogue name does not - "SWIFT 1000" against a
-   * plan_list row named "SWIFT". Compared on the first word, exactly as Job Order
-   * account creation reduces it before choosing a RADIUS group, so a suffix is no
-   * longer reported as a plan discrepancy.
-   */
-  desired_plan: string | null;
-
-  /**
-   * How the linked plan relates to the sold one.
-   *
-   *  - `linked`     both name the same plan (or there is nothing to contradict it)
-   *  - `suggested`  no plan is linked, but the sold label resolves to exactly one
-   *  - `mismatch`   both are known and they name genuinely different plans
-   *  - `none`       nothing to compare
-   */
-  plan_match: 'linked' | 'suggested' | 'mismatch' | 'none';
-
-  /** The catalogue row the sold label points at, when one resolves unambiguously. */
-  suggested_plan_id: number | null;
-  suggested_plan_name: string | null;
-  suggested_plan_price: number | null;
 }
 
 /**
@@ -88,8 +63,6 @@ export interface BillingReconcileSummary {
   already_invoiced: number;
   open_job_order: number;
   dismissed: number;
-  /** Accounts whose linked plan and sold plan genuinely name different plans. */
-  plan_mismatch: number;
 }
 
 export interface BillingReconcileAudit {

@@ -118,10 +118,6 @@ export interface JobOrder {
   // Technicians
   technicians?: string[];
 
-  // Whether an administrator released this job order to the technician ahead of
-  // their oldest-first queue. Locked (false) until they do.
-  technician_enabled?: boolean | number | null;
-
   // Items
   job_order_items?: JobOrderItem[];
 

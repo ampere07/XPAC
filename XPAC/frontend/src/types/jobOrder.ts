@@ -68,6 +68,26 @@ export interface JobOrder {
   Preferred_Day?: string | null;
   Billing_Status?: string | null;
   billing_status?: string | null;
+  Generation_Type?: string | null;
+  generation_type?: string | null;
+  // Legacy free-text VAT mode. Kept in sync with vat_enabled for older readers; billing
+  // generation reads vat_enabled.
+  Vat_Type?: string | null;
+  vat_type?: string | null;
+  /** false = No VAT (bill the plan price). true = VAT Included (VAT added on top). */
+  vat_enabled?: boolean | null;
+  withholding_enabled?: boolean | null;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */
+  withholding_percentage?: number | null;
+  /** Approves the account into the VIP billing status. Excludes VAT and withholding. */
+  vip_enabled?: boolean | null;
+  /** Copied to billing_accounts.vip_expiration at approval — the existing VIP expiry. */
+  vip_expiration?: string | null;
+  /**
+   * Read from the linked billing account, not stored on job_orders. Present only once the
+   * job order has an approved account, and only meaningful when generation_type is Prepaid.
+   */
+  prepaid_expires_at?: string | null;
 
   // Technical Information
   Modem_Router_SN?: string | null;
@@ -90,9 +110,6 @@ export interface JobOrder {
 
   // Assignment and Tracking
   Assigned_Email?: string | null;
-  // Whether an administrator released this job order to the technician ahead of
-  // their oldest-first queue. Locked (false) until they do.
-  technician_enabled?: boolean | number | null;
   Visit_By?: string | null;
   Visit_With?: string | null;
   Visit_With_Other?: string | null;
@@ -106,15 +123,6 @@ export interface JobOrder {
   JO_Remarks?: string | null;
   Status_Remarks?: string | null;
   Onsite_Remarks?: string | null;
-
-  // Pre-installation visit. `pre_installed` holds the marker "preinstalled"
-  // once recorded and is null before that, so it doubles as the "has this been
-  // done?" test the button reads.
-  pre_installed?: string | null;
-  pre_remarks?: string | null;
-  pre_installed_datetime?: string | null;
-  /** Email of whoever recorded it. Stamped server-side, never sent by the client. */
-  preinstalled_updated_by?: string | null;
 
   // Images and Documents
   Setup_Image?: string | null;
@@ -153,17 +161,6 @@ export interface JobOrderDetailsProps {
   onClose: () => void;
   onRefresh?: () => void;
   isMobile?: boolean;
-  /**
-   * Is the viewer a technician who may not act on this record yet?
-   *
-   * The list owns the queue — it needs the whole assigned set to know whose turn
-   * it is — so it passes the answer down rather than having this view guess from
-   * the one record it holds. Reading is never restricted; editing is. Absent
-   * means "not restricted", which is the right answer for every non-technician
-   * viewer and for the places this view is opened from outside the queue.
-   */
-  isTechnicianLocked?: boolean;
-
   onPrevious?: () => void;
   onNext?: () => void;
   onExpandSection?: (sectionKey: string, title: string, data: any[], columns: any[], count: number) => void;

@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Dimensions,
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
+import { RefreshCw, Download } from 'lucide-react-native';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { StandardPage, RecordCard } from '../components/common';
 import { useSOChargeStore, SOChargeRecord } from '../store/soChargeStore';
 import { exportToCSV } from '../utils/exportUtils';
 
@@ -37,10 +46,9 @@ const SOChargePage: React.FC = () => {
 
   const { chargeRecords, totalCount, isLoading, error, fetchChargeRecords, refreshChargeRecords, silentRefresh } = useSOChargeStore();
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(25);
-
   const primaryColor = colorPalette?.primary || '#7c3aed';
+  const { width } = Dimensions.get('window');
+  const isTablet = width >= 768;
 
   useEffect(() => {
     const fetchColorPalette = async () => {
@@ -185,90 +193,56 @@ const SOChargePage: React.FC = () => {
     exportToCSV('so_charge_export', allColumns, filteredRecords, renderCellValue);
   };
 
-  // A narrowed list can be shorter than the page the reader is on.
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, selectedDate]);
+  const renderItem = ({ item }: { item: SOChargeRecord }) => (
+    <View style={{ backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingHorizontal: 16, paddingVertical: 14 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 }} numberOfLines={1}>
+          {item.type || 'Charge'}
+        </Text>
+        <Text style={{ fontSize: 15, fontWeight: '700', color: primaryColor }}>
+          {renderCellValue(item, 'amount')}
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 6 }}>
+        <Field label="ID" value={String(item.display_id)} />
+        {!!item.account_no && <Field label="Acct" value={String(item.account_no)} />}
+        {!!item.date && <Field label="Date" value={formatDate(item.date)} />}
+        {!!item.source && <Field label="Source" value={String(item.source)} />}
+      </View>
+      {!!item.remarks && (
+        <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }} numberOfLines={2}>
+          {item.remarks}
+        </Text>
+      )}
+    </View>
+  );
 
   return (
-    <StandardPage<SOChargeRecord>
-      data={filteredRecords}
-      keyExtractor={(item, idx) => String(item.id ?? idx)}
-      renderItem={(item) => (
-        <RecordCard
-          title={item.type || 'Charge'}
-          normalizeTitle={false}
-          subtitle={[
-            `ID: ${item.display_id}`,
-            item.account_no ? `Acct: ${item.account_no}` : null,
-            item.date ? `Date: ${formatDate(item.date)}` : null,
-            item.source ? `Source: ${item.source}` : null,
-          ].filter(Boolean).join('  |  ')}
-          showStatus={false}
-          right={
-            <Text style={{ fontSize: 15, fontWeight: '700', color: primaryColor }}>
-              {renderCellValue(item, 'amount')}
-            </Text>
-          }
-        >
-          {!!item.remarks && (
-            <Text style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }} numberOfLines={2}>
-              {item.remarks}
-            </Text>
-          )}
-        </RecordCard>
-      )}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search SO charges..."
-      onExport={handleExport}
-      exportDisabled={filteredRecords.length === 0}
-      onRefresh={() => fetchChargeRecords(true)}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && chargeRecords.length === 0}
-      loadingText="Loading records..."
-      error={error}
-      onRetry={() => fetchChargeRecords(true)}
-      emptyText="No charge records found."
-      progressText={isLoading && chargeRecords.length > 0 ? `Loading more records... (${chargeRecords.length}${totalCount ? `/${totalCount}` : ''})` : null}
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={setItemsPerPage}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      header={
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            backgroundColor: '#ffffff',
-            borderBottomWidth: 1,
-            borderBottomColor: '#e5e7eb',
-          }}
-        >
-          <View
-            style={{
-              borderWidth: 1,
-              borderColor: '#d1d5db',
-              borderRadius: 6,
-              overflow: 'hidden',
-              flex: 1,
-              marginRight: 12,
-              height: 40,
-              justifyContent: 'center',
-            }}
-          >
-            <Picker
-              selectedValue={selectedDate}
-              onValueChange={(v) => setSelectedDate(v)}
-              style={{ color: '#111827' }}
-              dropdownIconColor="#6b7280"
-            >
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: isTablet ? 16 : 60,
+          paddingBottom: 12,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          gap: 10,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <GlobalSearch searchQuery={searchQuery} setSearchQuery={setSearchQuery} isDarkMode={isDarkMode} colorPalette={colorPalette} placeholder="Search SO charges..." />
+          <TouchableOpacity onPress={handleExport} disabled={filteredRecords.length === 0} style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor, alignItems: 'center', justifyContent: 'center', opacity: filteredRecords.length === 0 ? 0.5 : 1 }}>
+            <Download size={16} color="#ffffff" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => fetchChargeRecords(true)} style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor, alignItems: 'center', justifyContent: 'center' }}>
+            {isLoading ? <ActivityIndicator size="small" color="#ffffff" /> : <RefreshCw size={16} color="#ffffff" />}
+          </TouchableOpacity>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6, overflow: 'hidden', flex: 1, marginRight: 12, height: 40, justifyContent: 'center' }}>
+            <Picker selectedValue={selectedDate} onValueChange={(v) => setSelectedDate(v)} style={{ color: '#111827' }} dropdownIconColor="#6b7280">
               <Picker.Item label="All Records" value="All" />
               {dateItems.map((item) => (
                 <Picker.Item key={item.date} label={`${item.date} (${item.count})`} value={item.date} />
@@ -276,13 +250,47 @@ const SOChargePage: React.FC = () => {
             </Picker>
           </View>
           <Text style={{ fontSize: 12, color: '#6b7280' }}>
-            {filteredRecords.length}
-            {totalCount ? ` / ${totalCount}` : ''}
+            {filteredRecords.length}{totalCount ? ` / ${totalCount}` : ''}
           </Text>
         </View>
-      }
-    />
+      </View>
+
+      {/* Body */}
+      {isLoading && chargeRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ color: '#6b7280', marginTop: 12 }}>Loading records...</Text>
+        </View>
+      ) : error && chargeRecords.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80, gap: 12 }}>
+          <Text style={{ fontSize: 16, fontWeight: '600', color: '#ef4444', textAlign: 'center', paddingHorizontal: 24 }}>{error}</Text>
+          <TouchableOpacity onPress={() => fetchChargeRecords(true)} style={{ paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, backgroundColor: primaryColor }}>
+            <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredRecords}
+          keyExtractor={(item, idx) => String(item.id ?? idx)}
+          renderItem={renderItem}
+          initialNumToRender={20}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />}
+          ListEmptyComponent={
+            <View style={{ paddingVertical: 80, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280' }}>No charge records found.</Text>
+            </View>
+          }
+        />
+      )}
+    </View>
   );
 };
+
+const Field: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <Text style={{ fontSize: 11, color: '#6b7280' }}>
+    <Text style={{ fontWeight: '600' }}>{label}: </Text>
+    {value}
+  </Text>
+);
 
 export default SOChargePage;

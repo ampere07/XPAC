@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Search, Eye, X } from 'lucide-react';
 import ExpensesLogDetails from '../components/ExpensesLogDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { authFetch } from '../config/api';
 
 interface ExpenseRecord {
   id: string;
@@ -72,7 +71,7 @@ const ExpensesLog: React.FC = () => {
         setIsLoading(true);
         setError(null);
 
-        const response = await authFetch(`${API_BASE_URL}/expenses-logs`);
+        const response = await fetch(`${API_BASE_URL}/expenses-logs`);
         const result = await response.json();
 
         if (result.status === 'success') {

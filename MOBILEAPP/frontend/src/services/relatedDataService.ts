@@ -446,44 +446,6 @@ export const relatedDataService = {
     }
   },
 
-  // Fetch related job orders by account number
-  getRelatedJobOrdersByAccount: async (accountNo: string): Promise<ApiResponse> => {
-    try {
-      const response = await apiClient.get<ApiResponse>(`/job-orders/by-account/${accountNo}`);
-      return {
-        success: true,
-        data: response.data.data || [],
-        count: response.data.count || 0
-      };
-    } catch (error: any) {
-      console.error('Error fetching job orders:', error);
-      return {
-        success: false,
-        data: [],
-        message: error.response?.data?.message || 'Failed to fetch job orders'
-      };
-    }
-  },
-
-  // Fetch related applications by account number
-  getRelatedApplicationsByAccount: async (accountNo: string): Promise<ApiResponse> => {
-    try {
-      const response = await apiClient.get<ApiResponse>(`/applications/by-account/${accountNo}`);
-      return {
-        success: true,
-        data: response.data.data || [],
-        count: response.data.count || 0
-      };
-    } catch (error: any) {
-      console.error('Error fetching applications:', error);
-      return {
-        success: false,
-        data: [],
-        message: error.response?.data?.message || 'Failed to fetch applications'
-      };
-    }
-  },
-
   // Fetch transaction by ID
   getTransactionById: async (id: string | number): Promise<ApiResponse> => {
     try {

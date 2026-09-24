@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_BASE_URL, authFetch } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 import ModalUITemplate, { useModalTheme } from './ui-modal/ModalUITemplate';
 
 interface AddUsageTypeModalProps {
@@ -144,7 +144,7 @@ const AddUsageTypeModal: React.FC<AddUsageTypeModalProps> = ({
 
       const method = editingUsageType ? 'PUT' : 'POST';
 
-      const response = await authFetch(url, {
+      const response = await fetch(url, {
         method,
         headers: {
           'Accept': 'application/json',

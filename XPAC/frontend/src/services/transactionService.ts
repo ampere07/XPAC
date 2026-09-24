@@ -39,6 +39,36 @@ interface CreateTransactionResponse {
   error?: string;
 }
 
+/**
+ * The print-ready projection of a transaction, as resolved by the backend
+ * TransactionReceiptFormatter.
+ *
+ * Every field is already coalesced server side, which is the point: a transaction migrated
+ * from the old database can have a NULL OR number, a payment_method holding a row ID rather
+ * than a name, and an account_no that no longer matches any billing_accounts row. Resolving
+ * that needs queries the client cannot make.
+ */
+export interface TransactionReceipt {
+  transaction_id: number | string;
+  receipt_no: string;
+  or_no: string | null;
+  reference_no: string | null;
+  /** ISO-8601, or null when the row carries no usable date at all. */
+  paid_at: string | null;
+  account_no: string;
+  customer_name: string;
+  contact: string;
+  address: string;
+  plan: string | null;
+  description: string;
+  amount: number;
+  payment_method: string;
+  processed_by: string | null;
+  remarks: string | null;
+  status: string | null;
+  is_printable: boolean;
+}
+
 export const transactionService = {
   approveTransaction: async (transactionId: string, approvedBy?: string): Promise<ApproveTransactionResponse> => {
     try {
@@ -163,6 +193,36 @@ export const transactionService = {
         success: false,
         message: error.response?.data?.message || error.message || 'Failed to fetch transactions',
         data: []
+      };
+    }
+  },
+
+  /**
+   * The print-ready projection of one transaction.
+   *
+   * Enrichment, not a dependency: the caller already holds the transaction and can build a
+   * slip from it, so a failure here returns `data: null` and the caller falls back to its own
+   * derivation rather than blocking the print. That matters at a counter — a receipt the
+   * cashier cannot produce because an endpoint was slow is a worse outcome than a receipt
+   * missing the address of a customer whose account was closed years ago.
+   */
+  getTransactionReceipt: async (
+    transactionId: string | number
+  ): Promise<{ success: boolean; data: TransactionReceipt | null; message?: string }> => {
+    try {
+      const response = await apiClient.get<ApiResponse<TransactionReceipt>>(
+        `/transactions/${transactionId}/receipt`
+      );
+      return {
+        success: true,
+        data: response.data.data ?? null
+      };
+    } catch (error: any) {
+      console.error('Error fetching transaction receipt:', error);
+      return {
+        success: false,
+        data: null,
+        message: error.response?.data?.message || error.message || 'Failed to fetch receipt'
       };
     }
   },

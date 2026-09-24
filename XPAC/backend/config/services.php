@@ -35,6 +35,13 @@ return [
         'api_key' => env('RESEND_API_KEY'),
     ],
 
+    'xendit' => [
+        'api_key' => env('XENDIT_API_KEY'),
+        'callback_token' => env('XENDIT_CALLBACK_TOKEN'),
+        'base_url' => env('XENDIT_BASE_URL', 'https://api.xendit.co'),
+        'api_version' => env('XENDIT_API_VERSION', '2024-11-11'),
+    ],
+
     'google' => [
         'drive' => [
             'folder_id' => env('GOOGLE_DRIVE_FOLDER_ID'),

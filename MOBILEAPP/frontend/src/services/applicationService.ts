@@ -90,23 +90,3 @@ export const updateApplication = async (id: string, application: Partial<Applica
 export const deleteApplication = async (id: string): Promise<void> => {
   await apiClient.delete<ApplicationResponse>(`/applications/${id}`);
 };
-
-/** Audit-trail entries for one application — powers the Related Details Update Logs section. */
-export const getRelatedDetailsUpdateLogs = async (id: string): Promise<any> => {
-  try {
-    const response = await apiClient.get<any>(`/audit-trail-logs/by-application/${id}`);
-    return {
-      success: response.data.success ?? true,
-      data: response.data.data || [],
-      count: response.data.count || 0
-    };
-  } catch (error: any) {
-    console.error('Error fetching related details update logs:', error);
-    return {
-      success: false,
-      data: [],
-      count: 0,
-      message: error.response?.data?.message || 'Failed to fetch related details update logs'
-    };
-  }
-};

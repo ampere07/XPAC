@@ -3,7 +3,7 @@ import {
   X, ExternalLink, Edit, Settings, CircleArrowRight, Loader
 } from 'lucide-react';
 import ServiceOrderEditModal from '../modals/ServiceOrderEditModal';
-import { getRelatedDetailsUpdateLogs, enableServiceOrderForTechnician } from '../services/serviceOrderService';
+import { getRelatedDetailsUpdateLogs } from '../services/serviceOrderService';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -11,10 +11,12 @@ import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
 import { planService, Plan } from '../services/planService';
 import { userService } from '../services/userService';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import { User as UserType } from '../types/api';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
-import { isClosedForTechnicianQueue, isTechnicianEnabled, TECHNICIAN_LOCKED_MESSAGE } from '../utils/technicianServiceOrderAccess';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
@@ -58,6 +60,8 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate: string;
     username: string;
+    /** From technical_details, falling back to the account's install job order. */
+    pppoePassword: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -67,8 +71,6 @@ interface ServiceOrderDetailsProps {
     concern: string;
     concernRemarks: string;
     visitStatus: string;
-    /** The day a technician last moved visitStatus, "YYYY-MM-DD", or ''. */
-    visitStatusDate?: string;
     visitBy: string;
     visitWith: string;
     visitWithOther: string;
@@ -94,19 +96,13 @@ interface ServiceOrderDetailsProps {
   onClose: () => void;
   onRefresh?: () => void;
   isMobile?: boolean;
-  /**
-   * Is the viewer a technician who may not act on this record yet?
-   *
-   * The list owns the queue — it needs the whole assigned set to know whose turn
-   * it is — so it passes the answer down rather than having this view guess from
-   * the one record it holds. Reading is never restricted; editing is. Absent
-   * means "not restricted", which is the right answer for every non-technician
-   * viewer and for the places this view is opened from outside the queue.
-   */
-  isTechnicianLocked?: boolean;
 }
 
-const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder, onClose, onRefresh, isMobile = false, isTechnicianLocked = false }) => {
+const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder, onClose, onRefresh, isMobile = false }) => {
+  // service_orders stores the actor as an email string, so names come from the shared
+  // (cached) user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const [localIsMobile, setLocalIsMobile] = useState<boolean>(window.innerWidth < 768);
   useEffect(() => {
     const handleResize = () => {
@@ -126,21 +122,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
   const [isTechEditMode, setIsTechEditMode] = useState<boolean>(false);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [showCustomerDetails, setShowCustomerDetails] = useState(false);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
-  const [isEnablingTechnician, setIsEnablingTechnician] = useState(false);
-  const [enableTechnicianError, setEnableTechnicianError] = useState<string | null>(null);
-  const [enableTechnicianNotice, setEnableTechnicianNotice] = useState<string | null>(null);
-  /**
-   * Local echo of technician_enabled after a successful enable.
-   *
-   * The list refresh is what makes the change permanent everywhere; this only
-   * keeps the button honest in the moment between the two. Cleared whenever a
-   * different service order is opened so it can never leak across records.
-   */
-  const [technicianEnabledOverride, setTechnicianEnabledOverride] = useState<boolean | null>(null);
   const startXRef = useRef<number>(0);
   const startWidthRef = useRef<number>(0);
 
@@ -205,6 +186,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     'plan',
     'affiliate',
     'username',
+    'pppoePassword',
     'connectionType',
     'routerModemSN',
     'lcp',
@@ -214,7 +196,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     'concern',
     'concernRemarks',
     'visitStatus',
-    'visitStatusDate',
     'visitBy',
     'visitWith',
     'visitWithOther',
@@ -253,13 +234,40 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     return initialVisibility;
   });
 
+  /**
+   * Folds fields added to defaultFields since the user last reordered back into their saved order.
+   *
+   * Each missing field is spliced in after its nearest preceding default neighbour that survived
+   * in the saved order, rather than appended — so PPPOE Password lands right after Username where
+   * the default layout puts it, instead of alone at the bottom of the panel. Saved entries are
+   * never dropped, so a user's own ordering is preserved as-is.
+   */
+  const mergeFieldOrder = (saved: string[]): string[] => {
+    const result = [...saved];
+
+    defaultFields.forEach((field, index) => {
+      if (result.includes(field)) return;
+
+      let insertAt = result.length;
+      for (let i = index - 1; i >= 0; i--) {
+        const anchor = result.indexOf(defaultFields[i]);
+        if (anchor !== -1) {
+          insertAt = anchor + 1;
+          break;
+        }
+      }
+      result.splice(insertAt, 0, field);
+    });
+
+    return result;
+  };
+
   const [fieldOrder, setFieldOrder] = useState<string[]>(() => {
     const saved = localStorage.getItem(FIELD_ORDER_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const missingFields = defaultFields.filter(f => !parsed.includes(f));
-        return [...parsed, ...missingFields];
+        return Array.isArray(parsed) ? mergeFieldOrder(parsed) : defaultFields;
       } catch (e) {
         return defaultFields;
       }
@@ -295,101 +303,12 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     fetchColorPalette();
   }, []);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in ServiceOrderDetails:', error);
-      }
-    }
-  }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  const { can } = usePermissions();
 
-  // ── Technician queue release ────────────────────────────────────────────────
-  // Technicians work their service orders In Progress first and oldest first
-  // within that: everything else active is greyed out until either the work
-  // ahead of it moves forward or an administrator releases one early. This is
-  // that release.
-
-  const isAdminUser = (): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    return lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7;
-  };
-
-  const technicianEnabled = technicianEnabledOverride ?? isTechnicianEnabled(serviceOrder);
-
-  // Offered for administrators on any service order still in a technician's
-  // queue. One the queue already skips is not blocking anything, so there is
-  // nothing to release.
-  // Offered for administrators on any record a technician still owes work on,
-  // including one that is deferred — that is precisely the case where they cannot
-  // pick it back up on their own. Only work that is finished, failed or cancelled
-  // has nothing left to release.
-  const shouldShowEnableTechnicianButton = () =>
-    isAdminUser() && !isClosedForTechnicianQueue(serviceOrder);
-
-  const handleEnableTechnicianClick = async () => {
-    if (isEnablingTechnician || technicianEnabled) return;
-
-    if (!serviceOrder.id) {
-      setEnableTechnicianError('Cannot enable service order: Missing ID');
-      return;
-    }
-
-    setEnableTechnicianError(null);
-    setEnableTechnicianNotice(null);
-    setIsEnablingTechnician(true);
-
-    try {
-      const response = await enableServiceOrderForTechnician(serviceOrder.id);
-
-      if (response?.success) {
-        setTechnicianEnabledOverride(true);
-        setEnableTechnicianNotice('Service order enabled. The technician can now start it.');
-        if (onRefresh) {
-          onRefresh();
-        }
-      } else {
-        setEnableTechnicianError((response as any)?.message || 'Failed to enable service order for the technician');
-      }
-    } catch (err: any) {
-      setEnableTechnicianError(
-        err.response?.data?.message || err.message || 'Failed to enable service order for the technician'
-      );
-    } finally {
-      setIsEnablingTechnician(false);
-    }
-  };
-
-  // A different record is a different lock state.
-  useEffect(() => {
-    setTechnicianEnabledOverride(null);
-    setEnableTechnicianError(null);
-    setEnableTechnicianNotice(null);
-  }, [serviceOrder.id]);
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -424,13 +343,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
   };
 
   const handleEditClick = () => {
-    // A locked service order opens for reading, but not for editing: this form is
-    // how the visit gets recorded, and the API refuses the update anyway.
-    if (isTechnicianLocked) {
-      setEnableTechnicianError(TECHNICIAN_LOCKED_MESSAGE);
-      return;
-    }
-
     if (hasPermission('service-order.admin-edit')) {
       setIsTechEditMode(false);
       setIsEditModalOpen(true);
@@ -469,6 +381,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
       plan: 'Plan',
       affiliate: 'Affiliate',
       username: 'Username',
+      pppoePassword: 'PPPOE Password',
       connectionType: 'Connection Type',
       routerModemSN: 'Router/Modem SN',
       lcp: 'LCP',
@@ -478,7 +391,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
       concern: 'Concern',
       concernRemarks: 'Concern Remarks',
       visitStatus: 'Visit Status',
-      visitStatusDate: 'Visit Status Date',
       visitBy: 'Visit By',
       visitWith: 'Visit With',
       visitWithOther: 'Visit With Other',
@@ -774,6 +686,20 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
         return renderField('Affiliate', serviceOrder.affiliate);
       case 'username':
         return renderField('Username', serviceOrder.username);
+      // Rendered directly instead of through renderField, which drops empty values: an account
+      // with no PPPoE password on record needs to show that, not silently omit the row.
+      case 'pppoePassword':
+        return (
+          <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'
+            }`}>
+            <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>PPPOE Password</div>
+            <div className={`flex-1 font-mono ${isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+              {serviceOrder.pppoePassword || '-'}
+            </div>
+          </div>
+        );
       case 'connectionType':
         return renderField('Connection Type', serviceOrder.connectionType);
       case 'routerModemSN':
@@ -848,11 +774,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
             </div>
           </div>
         );
-      case 'visitStatusDate':
-        // Stamped by the API the day a technician moves the Visit Status, and
-        // only then. renderField drops the row when it is absent, which is
-        // every ticket no technician has touched.
-        return renderField('Visit Status Date', serviceOrder.visitStatusDate);
       case 'visitBy':
       case 'visitWith':
       case 'visitWithOther':
@@ -903,11 +824,11 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
       case 'visitRemarks':
         return renderField('Visit Remarks', serviceOrder.visitRemarks);
       case 'modifiedBy':
-        return renderField('Modified By', serviceOrder.modifiedBy);
+        return renderField('Modified By', resolveUserDisplayName(serviceOrder.modifiedBy, userDirectory, serviceOrder.modifiedBy));
       case 'modifiedDate':
         return renderField('Modified Date', formatDate(serviceOrder.modifiedDate));
       case 'requestedBy':
-        return renderField('Requested by', serviceOrder.requestedBy);
+        return renderField('Requested by', resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, serviceOrder.requestedBy));
       case 'assignedEmail':
         const assignedEmail = serviceOrder.assignedEmail;
         if (!assignedEmail || assignedEmail === '-' || assignedEmail === 'Not set' || assignedEmail === 'Not specified') return null;
@@ -1080,33 +1001,13 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
     }
   };
 
-  if (showCustomerDetails) {
-    return (
-      <BillingDetails
-        billingRecord={{
-          id: serviceOrder.id,
-          applicationId: serviceOrder.accountNumber,
-          customerName: serviceOrder.fullName,
-          address: serviceOrder.fullAddress,
-          status: 'Unknown',
-          balance: 0,
-          onlineStatus: 'Unknown',
-          contactNumber: serviceOrder.contactNumber,
-          emailAddress: serviceOrder.emailAddress,
-          plan: serviceOrder.plan,
-          username: serviceOrder.username,
-          connectionType: serviceOrder.connectionType,
-          routerModemSN: serviceOrder.routerModemSN,
-          lcp: serviceOrder.lcp,
-          nap: serviceOrder.nap,
-          port: serviceOrder.port,
-          vlan: serviceOrder.vlan,
-          houseFrontPicture: serviceOrder.houseFrontPicture
-        } as BillingDetailRecord}
-        onClose={() => setShowCustomerDetails(false)}
-      />
-    );
-  }
+  // NOTE: there was a second render path here, gated on a `showCustomerDetails` flag that
+  // nothing ever set, which opened Customer Details on a record built from the service
+  // order alone — with status and onlineStatus hard-coded to 'Unknown' and balance to 0.
+  // It has been removed rather than left as a template for the next screen to copy: the
+  // "View Customer Details" arrow beside Account No. is the only way this panel opens, and
+  // it fetches the real account (see convertCustomerDataToBillingDetail above), so
+  // connectivity comes from RADIUS rather than from a placeholder.
 
   return (
     <div
@@ -1130,35 +1031,14 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
         ? 'bg-gray-800 border-gray-700'
         : 'bg-gray-100 border-gray-200'
         }`}>
-        {/* Account number and name only. The address used to be here too and was
-            long enough to push the action buttons — the close button included —
-            off the edge of the panel. min-w-0 lets the title shrink so truncate
-            can do its job instead of the flex row overflowing. */}
-        <div className="flex items-center min-w-0 flex-1 mr-2">
+        <div className="flex items-center">
           <h2 className={`font-medium truncate ${activeIsMobile ? 'max-w-[200px] text-sm' : 'max-w-md'} ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>{serviceOrder.accountNumber} | {serviceOrder.fullName}</h2>
+            }`}>{serviceOrder.accountNumber} | {serviceOrder.fullName} | {serviceOrder.contactAddress}</h2>
         </div>
 
-        <div className="flex items-center space-x-3 flex-shrink-0">
+        <div className="flex items-center space-x-3">
 
-          {shouldShowEnableTechnicianButton() && (
-            <button
-              className={`px-3 py-1 rounded-sm flex items-center text-sm font-medium whitespace-nowrap ${technicianEnabled
-                ? 'bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400'
-                : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                }`}
-              onClick={handleEnableTechnicianClick}
-              disabled={technicianEnabled || isEnablingTechnician}
-              title={technicianEnabled
-                ? 'The technician can already start this service order'
-                : 'Let the technician start this service order without finishing the work ahead of it first'}
-            >
-              {isEnablingTechnician && <Loader className="h-3 w-3 mr-1 animate-spin" />}
-              <span>{technicianEnabled ? 'Enabled' : (isEnablingTechnician ? 'Enabling...' : 'Enable')}</span>
-            </button>
-          )}
-
-          {serviceOrder.supportStatus?.toLowerCase() !== 'resolved' && !isTechnicianLocked && (hasPermission('service-order.admin-edit') || hasPermission('service-order.tech-edit')) && (
+          {serviceOrder.supportStatus?.toLowerCase() !== 'resolved' && (hasPermission('service-order.admin-edit') || hasPermission('service-order.tech-edit')) && (
             <button
               className="text-white px-3 py-1 rounded-sm flex items-center disabled:opacity-50"
               style={{
@@ -1267,24 +1147,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
           </button>
         </div>
       </div>
-
-      {enableTechnicianError && (
-        <div className={`p-3 m-3 rounded ${isDarkMode
-          ? 'bg-red-900 bg-opacity-20 border border-red-700 text-red-400'
-          : 'bg-red-100 border border-red-300 text-red-700'
-          }`}>
-          {enableTechnicianError}
-        </div>
-      )}
-
-      {enableTechnicianNotice && (
-        <div className={`p-3 m-3 rounded ${isDarkMode
-          ? 'bg-emerald-900 bg-opacity-20 border border-emerald-700 text-emerald-400'
-          : 'bg-emerald-50 border border-emerald-300 text-emerald-700'
-          }`}>
-          {enableTechnicianNotice}
-        </div>
-      )}
 
       <div className={`flex-1 overflow-y-auto w-full ${activeIsMobile ? 'pb-24' : ''}`}>
         <div className={`mx-auto py-1 px-4 ${isDarkMode ? 'bg-gray-950' : 'bg-white'

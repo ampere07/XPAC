@@ -13,6 +13,10 @@ interface BillingConfigData {
   disconnection_notice: number;
   disconnection_fee: number;
   pullout_day: number;
+  /** Stored as a percentage, not a decimal fraction: 2.5 means 2.5%. */
+  convenience_fee_percentage: number;
+  /** Days BEFORE a prepaid period expires that the customer is warned. 0 disables the warning. */
+  prepaid_pre_expiry_days: number;
   created_at?: string;
   updated_at?: string;
   updated_by?: string;
@@ -56,7 +60,11 @@ const BillingConfig: React.FC = () => {
     overdue_day: 0,
     disconnection_notice: 0,
     disconnection_fee: 0,
-    pullout_day: 0
+    pullout_day: 0,
+    convenience_fee_percentage: 0,
+    // Matches the column default, so the Create form opens on the standard 3-day window rather
+    // than on 0, which would mean "never warn".
+    prepaid_pre_expiry_days: 3
   });
   const [loadingBillingConfig, setLoadingBillingConfig] = useState<boolean>(false);
 
@@ -283,6 +291,13 @@ const BillingConfig: React.FC = () => {
       if (billingConfigInput.pullout_day !== undefined && billingConfigInput.pullout_day !== null) {
         payload.pullout_day = billingConfigInput.pullout_day;
       }
+      if (billingConfigInput.convenience_fee_percentage !== undefined && billingConfigInput.convenience_fee_percentage !== null) {
+        // Sent as a percentage, exactly as entered — the backend divides by 100.
+        payload.convenience_fee_percentage = billingConfigInput.convenience_fee_percentage;
+      }
+      if (billingConfigInput.prepaid_pre_expiry_days !== undefined && billingConfigInput.prepaid_pre_expiry_days !== null) {
+        payload.prepaid_pre_expiry_days = billingConfigInput.prepaid_pre_expiry_days;
+      }
 
       if (billingConfig) {
         await apiClient.put('/billing-config', payload);
@@ -344,7 +359,9 @@ const BillingConfig: React.FC = () => {
             overdue_day: 0,
             disconnection_notice: 0,
             disconnection_fee: 0,
-            pullout_day: 0
+            pullout_day: 0,
+            convenience_fee_percentage: 0,
+            prepaid_pre_expiry_days: 3
           });
           setIsEditingBillingConfig(false);
         } catch (error: any) {
@@ -376,7 +393,9 @@ const BillingConfig: React.FC = () => {
         overdue_day: 0,
         disconnection_notice: 0,
         disconnection_fee: 0,
-        pullout_day: 0
+        pullout_day: 0,
+        convenience_fee_percentage: 0,
+        prepaid_pre_expiry_days: 3
       });
     }
     setIsEditingBillingConfig(false);
@@ -394,6 +413,18 @@ const BillingConfig: React.FC = () => {
     if (field === 'disconnection_fee') {
       const floatValue = parseFloat(value);
       if (!isNaN(floatValue) && floatValue >= 0) {
+        setBillingConfigInput(prev => ({
+          ...prev,
+          [field]: floatValue
+        }));
+      }
+      return;
+    }
+
+    // A percentage, so decimals are allowed and the range is 0-100.
+    if (field === 'convenience_fee_percentage') {
+      const floatValue = parseFloat(value);
+      if (!isNaN(floatValue) && floatValue >= 0 && floatValue <= 100) {
         setBillingConfigInput(prev => ({
           ...prev,
           [field]: floatValue
@@ -465,39 +496,39 @@ const BillingConfig: React.FC = () => {
                   </div>
                 </div>
 
-                  <div className="flex flex-col gap-1 items-end mr-4">
-                    {customAccountNumber.updated_by && (
-                      <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                        Updated by: {customAccountNumber.updated_by}
-                      </p>
-                    )}
-                    {customAccountNumber.created_at && (
-                      <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                        Created: {new Date(customAccountNumber.created_at).toLocaleString('en-US', {
-                          month: '2-digit',
-                          day: '2-digit',
-                          year: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                          second: '2-digit',
-                          hour12: true
-                        }).replace(',', '')}
-                      </p>
-                    )}
-                    {customAccountNumber.updated_at && (
-                      <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                        Updated: {new Date(customAccountNumber.updated_at).toLocaleString('en-US', {
-                          month: '2-digit',
-                          day: '2-digit',
-                          year: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                          second: '2-digit',
-                          hour12: true
-                        }).replace(',', '')}
-                      </p>
-                    )}
-                  </div>
+                <div className="flex flex-col gap-1 items-end mr-4">
+                  {customAccountNumber.updated_by && (
+                    <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                      Updated by: {customAccountNumber.updated_by}
+                    </p>
+                  )}
+                  {customAccountNumber.created_at && (
+                    <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                      Created: {new Date(customAccountNumber.created_at).toLocaleString('en-US', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        year: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                      }).replace(',', '')}
+                    </p>
+                  )}
+                  {customAccountNumber.updated_at && (
+                    <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                      Updated: {new Date(customAccountNumber.updated_at).toLocaleString('en-US', {
+                        month: '2-digit',
+                        day: '2-digit',
+                        year: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                      }).replace(',', '')}
+                    </p>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-2">
                   {actions.canEdit && (
@@ -655,6 +686,20 @@ const BillingConfig: React.FC = () => {
                       }`}>Pullout Day</p>
                     <p className={`font-medium text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'
                       }`}>{billingConfig.pullout_day}</p>
+                  </div>
+                  <div className={`p-4 rounded ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'
+                    }`}>
+                    <p className={`text-xs mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                      }`}>Convenience Fee</p>
+                    <p className={`font-medium text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'
+                      }`}>{Number(billingConfig.convenience_fee_percentage ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%</p>
+                  </div>
+                  <div className={`p-4 rounded ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'
+                    }`}>
+                    <p className={`text-xs mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                      }`}>Prepaid Pre-Expiry Notice (Days)</p>
+                    <p className={`font-medium text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'
+                      }`}>{billingConfig.prepaid_pre_expiry_days ?? 0}</p>
                   </div>
                 </div>
 
@@ -888,6 +933,58 @@ const BillingConfig: React.FC = () => {
                     <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'
                       }`}>
                       Days after disconnection to pull out equipment (0-31, 0 = disabled)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Convenience Fee (%)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={billingConfigInput.convenience_fee_percentage}
+                        onChange={(e) => handleBillingConfigInputChange('convenience_fee_percentage', e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className={`w-full pl-4 pr-8 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
+                          ? 'bg-gray-800 border-gray-700 text-white'
+                          : 'bg-white border-gray-300 text-gray-900'
+                          }`}
+                        min="0"
+                        max="100"
+                        disabled={loadingBillingConfig}
+                      />
+                      <span className={`absolute right-3 top-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>%</span>
+                    </div>
+                    <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'
+                      }`}>
+                      Added on top of the amount at online checkout (0-100, decimals allowed, 0 = no fee)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
+                      Prepaid Pre-Expiry Notice (Days)
+                    </label>
+                    <input
+                      type="number"
+                      value={billingConfigInput.prepaid_pre_expiry_days}
+                      onChange={(e) => handleBillingConfigInputChange('prepaid_pre_expiry_days', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      className={`w-full px-4 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
+                        ? 'bg-gray-800 border-gray-700 text-white'
+                        : 'bg-white border-gray-300 text-gray-900'
+                        }`}
+                      min="0"
+                      max="31"
+                      disabled={loadingBillingConfig}
+                    />
+                    <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'
+                      }`}>
+                      Days before a prepaid plan expires to text the customer to renew (0-31, 0 = disabled)
                     </p>
                   </div>
                 </div>

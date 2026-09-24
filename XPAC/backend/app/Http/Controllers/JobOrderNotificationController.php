@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\JobOrderNotificationGuard;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -9,27 +10,63 @@ use Carbon\Carbon;
 
 class JobOrderNotificationController extends Controller
 {
+    /**
+     * How much wider than $limit this reads before suppression.
+     *
+     * The guard drops rows after the query returns, so reading exactly $limit
+     * would hand back a short page whenever anything was withheld. Capped so a
+     * backlog of pending job orders cannot turn a poll into a large scan.
+     */
+    private const SUPPRESSION_OVERFETCH = 3;
+    private const SUPPRESSION_OVERFETCH_CAP = 150;
+
     public function getRecentCompletions(Request $request)
     {
         try {
-            $limit = $request->get('limit', 10);
-            
-            // Fetch job orders where onsite_status is 'Done'
+            $limit = max(1, min(100, (int) $request->get('limit', 10)));
+
+            $guard = app(JobOrderNotificationGuard::class);
+
+            // Fetch job orders where onsite_status is 'Done'.
+            //
+            // 'Done' onsite is necessary but not sufficient to announce a JO
+            // number: the visit still has to have been confirmed and the job
+            // order still has to have been billed. Both statuses are selected
+            // alongside so JobOrderNotificationGuard can rule without a second
+            // query — see that class for why each one gates the notification.
             $jobOrders = DB::table('job_orders')
                 ->join('applications', 'job_orders.application_id', '=', 'applications.id')
                 ->where('job_orders.onsite_status', 'Done')
                 // We want recent updates
                 ->orderBy('job_orders.updated_at', 'desc')
-                ->limit($limit)
+                ->limit(min($limit * self::SUPPRESSION_OVERFETCH, self::SUPPRESSION_OVERFETCH_CAP))
                 ->select(
                     'job_orders.id',
                     'job_orders.updated_at',
+                    'job_orders.billing_status',
+                    'job_orders.onsite_status',
                     'applications.first_name',
                     'applications.last_name',
                     'applications.desired_plan',
                     'applications.desired_plan_id'
                 )
                 ->get()
+                ->filter(function ($jobOrder) use ($guard) {
+                    $reason = $guard->reasonFor($jobOrder->billing_status, $jobOrder->onsite_status);
+
+                    if ($reason === null) {
+                        return true;
+                    }
+
+                    $guard->logSuppressed($jobOrder->id, $reason, [
+                        'feed' => 'job_order_completions',
+                        'billing_status' => $jobOrder->billing_status,
+                        'onsite_status' => $jobOrder->onsite_status,
+                    ]);
+
+                    return false;
+                })
+                ->take($limit)
                 ->map(function ($jobOrder) {
                     try {
                         $updatedAt = Carbon::parse($jobOrder->updated_at)->setTimezone('Asia/Manila');

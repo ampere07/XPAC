@@ -12,7 +12,7 @@
 // id — the same agent, said ambiguously again. Giving that screen a picker is the
 // fix, and is the one difference left between mobile and the web portal.
 //
-// Kept byte-identical to ATSS2_0/frontend/src/utils/referredByField.ts apart from
+// Kept byte-identical to GOWISER/frontend/src/utils/referredByField.ts apart from
 // this note, so the two apps cannot disagree about what the column holds. The web
 // copy carries the test suite for both (referredByField.test.ts); this app is an
 // Expo project with no test runner, so a change made here has to be made there and

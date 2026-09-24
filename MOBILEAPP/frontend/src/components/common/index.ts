@@ -1,28 +1,24 @@
 /**
- * The app's standard page UI.
+ * Global standard page UI — the reusable version of JobOrder.tsx's layout.
  *
- * One shell (StandardPage) and one row (RecordCard), both taken from
- * ApplicationManagement.tsx, so every list screen looks and behaves the same.
- * Rows are cards — there is no table view: a phone cannot show a twelve-column
- * table without hiding eleven columns off the side of the screen.
+ * Usage:
+ *   import { StandardListPage, StatusText, StatusFilterModal } from '../components/common';
  *
- *   import { StandardPage, RecordCard } from '../components/common';
- *
- * See StandardPage.example.tsx for a complete, copy-pasteable page.
+ * See StandardListPage.example.tsx for a full, copy-pasteable reference page.
  */
-export { default as StandardPage } from './StandardPage';
-export type { StandardPageProps, FilterChip } from './StandardPage';
-
-export { default as RecordCard } from './RecordCard';
-export type { RecordCardProps } from './RecordCard';
-
-export { default as FieldCard } from './FieldCard';
-export type { FieldCardProps, FieldCardField } from './FieldCard';
-
-export { getStatusColor, getStatusLabel, EMPTY_STATUS_LABEL } from './statusColors';
-
+export { default as StandardListPage } from './StandardListPage';
+export type { StandardListPageProps } from './StandardListPage';
 export { default as StatusText } from './StatusText';
 export type { StatusTextProps } from './StatusText';
 export { default as StatusFilterModal } from './StatusFilterModal';
 export type { StatusOption } from './StatusFilterModal';
+export { default as ContactActions, toDialable } from './ContactActions';
+
+// Card-based page shell and row, used by the Agent module screens
+// (Commission, AgentPayout, AgentInvoice, teamAgent).
+export { default as StandardPage } from './StandardPage';
+export type { StandardPageProps, FilterChip } from './StandardPage';
+export { default as RecordCard } from './RecordCard';
+export type { RecordCardProps } from './RecordCard';
+export { getStatusColor, getStatusLabel, EMPTY_STATUS_LABEL } from './statusColors';
 export { standardPageStyles, STANDARD_COLORS } from './standardPageStyles';

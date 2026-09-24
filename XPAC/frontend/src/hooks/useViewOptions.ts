@@ -97,8 +97,8 @@ export function useViewOptions<Row>(moduleKey: string, columns: Array<GroupableC
   /**
    * The configured sort, as rules the data grid understands.
    *
-   * Handed to `useDataGrid` rather than applied here: the grid already sorts, and a
-   * second sort layered on top of it would fight the column headers an operator can
+   * Handed to `useDataGrid` or sort logic rather than applied here: the grid already sorts,
+   * and a second sort layered on top of it would fight the column headers an operator can
    * still click.
    */
   const sortRules = useMemo(

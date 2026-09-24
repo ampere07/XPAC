@@ -425,7 +425,7 @@ class GoogleDrivePdfGenerationService
             'Account_No' => $account->account_no,
             'Plan' => $customer->desired_plan,
             'Statement_Date' => now()->format('F d, Y'),
-            'Payment_Link' => config('app.payment_link', 'https://pay.example.com')
+            'Payment_Link' => config('app.payment_link', 'https://sync.gowiser.ph')
         ];
 
         if ($soa) {
@@ -549,7 +549,7 @@ class GoogleDrivePdfGenerationService
             'Total_Due' => number_format($invoice->total_amount, 2),
             'Due_Date' => $invoice->due_date->format('F d, Y'),
             'Invoice_No' => $invoice->id,
-            'Payment_Link' => config('app.payment_link', 'https://pay.example.com')
+            'Payment_Link' => config('app.payment_link', 'https://sync.gowiser.ph')
         ];
     }
 
@@ -575,7 +575,7 @@ class GoogleDrivePdfGenerationService
             'Total_Due' => number_format($invoice->total_amount, 2),
             'Due_Date' => $invoice->due_date->format('F d, Y'),
             'DC_Date' => $dcDate->format('F d, Y'),
-            'Payment_Link' => config('app.payment_link', 'https://pay.example.com')
+            'Payment_Link' => config('app.payment_link', 'https://sync.gowiser.ph')
         ];
     }
 

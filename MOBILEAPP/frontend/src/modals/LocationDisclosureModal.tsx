@@ -4,21 +4,24 @@ import { MapPin, Radio, Clock, ShieldCheck, Settings as SettingsIcon } from 'luc
 import { ColorPalette, settingsColorPaletteService } from '../services/settingsColorPaletteService';
 
 /**
- * Prominent disclosure for location collection, required by Google Play's User Data
- * policy before any location runtime permission is requested.
+ * Prominent disclosure for location collection, required by Google Play's User Data policy before
+ * any location runtime permission is requested.
  *
  * Rules this screen has to satisfy, and why it is built the way it is:
- *  - It must appear IMMEDIATELY BEFORE the runtime permission prompt, in the app itself.
- *    A privacy policy or a store listing does not count.
- *  - It must name the data collected, say it is collected in the background even when the
- *    app is closed, and say what it is used for.
+ *  - It must appear IMMEDIATELY BEFORE the runtime permission prompt, in the app itself. A privacy
+ *    policy or a store listing does not count.
+ *  - It must name the data collected, say that it is collected in the background even when the app
+ *    is closed, and say what it is used for.
  *  - It must require an affirmative action to proceed. So there is no close button, no
- *    tap-outside-to-dismiss, and the Android back button does not dismiss it — the user
- *    has to choose "Allow" or "Not now".
+ *    tap-outside-to-dismiss, and the Android back button does not dismiss it — the user has to
+ *    choose "Allow" or "Not now".
  *
- * Stage 1 is the disclosure. Stage 2 is shown only when the OS is about to ask for the
- * "Allow all the time" background choice on its own screen, so the user knows what to
- * pick when they get there.
+ * The notice covers BOTH ways GOWISER reads location — the one-off "use my current location" pin
+ * drop that any role can trigger, and the continuous technician tracking — because a single honest
+ * superset is safer than a notice tailored per caller that could under-disclose the background use.
+ *
+ * Stage 1 is the disclosure. Stage 2 is shown only when the OS is about to ask for the "Allow all
+ * the time" background choice on its own screen, so the user knows what to pick when they arrive.
  */
 
 interface LocationDisclosureModalProps {
@@ -60,22 +63,23 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
         {
             icon: Radio,
             title: 'Collected in the background',
-            body: 'Your location is collected and sent roughly every 10 seconds while you are on '
-                + 'duty. This continues in the background, even when the app is minimised, the '
-                + 'screen is off, or the app has been closed.',
+            body: 'On technician accounts, your location is collected and sent roughly every 10 '
+                + 'seconds while you are on duty. This continues in the background, even when the '
+                + 'app is minimised, the screen is off, or the app has been closed.',
         },
         {
             icon: ShieldCheck,
             title: 'What it is used for',
-            body: 'Only so your dispatch team can see where you are on the live monitor, assign '
-                + 'you to nearby job orders, and confirm site visits. It is sent to the XPAC '
-                + 'server and is not sold or shared for advertising.',
+            body: 'Only so your dispatch team can see where you are on the live monitoring map, '
+                + 'assign you to nearby job orders, and confirm site visits — and so you can drop '
+                + 'an accurate pin when recording an LCP/NAP or a customer address. It is sent to '
+                + 'the GOWISER server and is not sold or shared for advertising.',
         },
         {
             icon: Clock,
             title: 'When it stops',
-            body: 'Collection applies to technician accounts only, and stops as soon as you sign '
-                + 'out. You can withdraw permission at any time in your device settings.',
+            body: 'Continuous tracking applies to technician accounts only, and stops as soon as '
+                + 'you sign out. You can withdraw permission at any time in your device settings.',
         },
     ];
 
@@ -85,8 +89,8 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
             transparent
             animationType="fade"
             statusBarTranslucent
-            // The disclosure must not be dismissible without a choice, so the hardware
-            // back button is deliberately a no-op here.
+            // The disclosure must not be dismissible without a choice, so the hardware back button
+            // is deliberately a no-op here.
             onRequestClose={() => { }}
         >
             <View style={styles.backdrop}>
@@ -100,7 +104,7 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
                     <Text style={styles.title}>
                         {isBackgroundStage
                             ? 'One more step'
-                            : 'XPAC collects your location'}
+                            : 'GOWISER collects your location'}
                     </Text>
 
                     {isBackgroundStage ? (
@@ -112,17 +116,17 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
                             </Text>
                             <Text style={styles.lead}>
                                 If you choose “Only while using the app”, your location is shared
-                                only while XPAC is open on screen. Everything else in the app keeps
-                                working either way.
+                                only while GOWISER is open on screen. Everything else in the app
+                                keeps working either way.
                             </Text>
                         </>
                     ) : (
                         <>
                             {/* The policy-critical sentence lives here, outside the ScrollView
-                                below, so it can never be scrolled out of view on a small
-                                screen. Everything under it is elaboration. */}
+                                below, so it can never be scrolled out of view on a small screen.
+                                Everything under it is elaboration. */}
                             <Text style={styles.lead}>
-                                XPAC collects your <Text style={styles.strong}>precise location</Text>
+                                GOWISER collects your <Text style={styles.strong}>precise location</Text>
                                 {' '}and sends it to your dispatch team while you are on duty —
                                 {' '}<Text style={styles.strong}>including in the background, when the
                                 app is closed or not in use</Text>. Details below.

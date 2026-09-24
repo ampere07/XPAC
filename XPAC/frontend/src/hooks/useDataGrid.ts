@@ -471,7 +471,6 @@ export function useDataGrid<Row>(options: UseDataGridOptions<Row>) {
 
     // sorting
     sort,
-    setSort,
     toggleSort,
     clearSort,
     sortStateFor,

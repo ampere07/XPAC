@@ -8,10 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Events\WorkOrderUpdated;
 use App\Models\ActivityLog;
-use App\Models\AuditTrailLog;
-use App\Models\Role;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 
 class WorkOrderApiController extends Controller
 {
@@ -267,16 +264,6 @@ class WorkOrderApiController extends Controller
                 }
             }
             $workOrder = $query->findOrFail($id);
-
-            // Same queue rule as update(): a technician cannot attach work to a
-            // work order they are not allowed to open yet.
-            if ($this->isWorkOrderLockedForTechnician($workOrder, $this->resolveActingUser($request))) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This job order is locked. Finish the job order at the top of your list first, or ask an administrator to enable this one.',
-                ], 403);
-            }
-
             $folderName = $request->input('folder_name');
 
             $driveService = new \App\Services\GoogleDriveService();
@@ -413,26 +400,11 @@ class WorkOrderApiController extends Controller
                 ], 404);
             }
             
-            // A technician works their queue from the top. Enforced here as well
-            // as in the UI so the lock cannot be stepped over by calling the API
-            // directly with another work order's id.
-            if ($this->isWorkOrderLockedForTechnician($workOrder, $this->resolveActingUser($request))) {
-                \Log::warning('Work order update blocked: locked for technician', [
-                    'id' => $id,
-                    'user_email' => optional($this->resolveActingUser($request))->email,
-                ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This job order is locked. Finish the job order at the top of your list first, or ask an administrator to enable this one.',
-                ], 403);
-            }
-
             $data = $request->only([
-                'instructions', 'report_to', 'assign_to', 'remarks',
+                'instructions', 'report_to', 'assign_to', 'remarks', 
                 'work_status', 'work_category', 'updated_by', 'start_time', 'end_time', 'organization_id'
             ]);
-
+            
             $workOrder->fill($data);
 
             $driveService = new \App\Services\GoogleDriveService();
@@ -515,256 +487,6 @@ class WorkOrderApiController extends Controller
                 'message' => 'Error updating work order: ' . $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Release a work order to its technician ahead of their queue.
-     *
-     * Technicians work In Progress first and oldest first within that: only the
-     * record at the top of their list is actionable, everything else active is
-     * greyed out. An administrator calls this to unlock one specific work order
-     * early. Restricted to administrators by the `role` middleware on the route —
-     * technician_enabled is not fillable, so this is the only way it can be set.
-     */
-    public function enableForTechnician(Request $request, $id)
-    {
-        try {
-            $currentUser = $this->resolveActingUser($request);
-
-            $query = WorkOrder::query();
-            if ($currentUser) {
-                if ($currentUser->organization_id) {
-                    $query->where('organization_id', $currentUser->organization_id);
-                } else {
-                    $query->whereNull('organization_id');
-                }
-            }
-
-            $workOrder = $query->find($id);
-
-            if (!$workOrder) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Work order not found'
-                ], 404);
-            }
-
-            // Already released — answer successfully with the current state rather
-            // than writing an audit entry for a no-op.
-            if ($workOrder->technician_enabled) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'This work order is already enabled for the technician.',
-                    'data' => [
-                        'id' => $workOrder->id,
-                        'technician_enabled' => true,
-                    ],
-                ]);
-            }
-
-            $performedBy = $request->input('updated_by')
-                ?? optional($currentUser)->email_address
-                ?? optional($currentUser)->email
-                ?? 'System';
-
-            $workOrder->technician_enabled = true;
-            $workOrder->updated_by = $performedBy;
-            $workOrder->save();
-
-            AuditTrailLog::create([
-                'old_details' => [
-                    'type' => 'workorders',
-                    'id' => $workOrder->id,
-                    'data' => ['technician_enabled' => false],
-                ],
-                'new_details' => [
-                    'type' => 'workorders',
-                    'id' => $workOrder->id,
-                    'data' => ['technician_enabled' => true],
-                ],
-                'created_by_user' => $performedBy,
-                'updated_by_user' => $performedBy,
-            ]);
-
-            ActivityLog::log(
-                'Work Order Enabled For Technician',
-                "Work Order #{$workOrder->id} unlocked for technician access by {$performedBy}",
-                'info',
-                [
-                    'user_email' => $performedBy,
-                    'resource_type' => 'WorkOrder',
-                    'resource_id' => $workOrder->id,
-                ]
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Work order enabled for technician access.',
-                'data' => [
-                    'id' => $workOrder->id,
-                    'technician_enabled' => true,
-                ],
-            ]);
-        } catch (\Exception $e) {
-            \Log::error('Failed to enable work order for technician', [
-                'work_order_id' => $id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to enable work order for technician',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
-     * The signed-in user, however this request authenticated.
-     *
-     * The work-orders routes sit outside the `auth:sanctum` group, so the default
-     * session guard resolves the web portal (cookie based) but NOT the mobile app,
-     * which sends a bearer token. Asking Sanctum's guard covers both, and it is
-     * asked only for the technician queue checks below — the rest of this
-     * controller keeps using Auth::user() exactly as it did.
-     */
-    private function resolveActingUser(Request $request)
-    {
-        if ($user = $request->user()) {
-            return $user;
-        }
-
-        try {
-            return $request->user('sanctum');
-        } catch (\Throwable $e) {
-            // No sanctum guard configured — treat as unidentified.
-            return null;
-        }
-    }
-
-    /**
-     * Every spelling of "assigned to me" a work order might carry.
-     *
-     * assign_to holds either the assignee's email or their full name, so both are
-     * offered — the same comparison the two Work Order pages make client-side.
-     */
-    private function assigneeAliases($user): array
-    {
-        $fullName = trim(implode(' ', array_filter([
-            $user->first_name ?? null,
-            $user->last_name ?? null,
-        ])));
-
-        return array_values(array_unique(array_filter(array_map(
-            fn ($alias) => strtolower(trim((string) $alias)),
-            [$user->email ?? null, $user->email_address ?? null, $fullName ?: null]
-        ))));
-    }
-
-    /**
-     * Is this work order locked for the signed-in user because it is not their
-     * next one in the queue?
-     *
-     * Only ever true for technicians. A work order is open when any of these hold:
-     *   • it heads the queue of work still assigned to them — the oldest In
-     *     Progress work order, or the oldest other active one when they have none
-     *     in progress, or the oldest on-hold one when that is all that is left. On
-     *     hold sorts last, so it reaches the head only when there is no active
-     *     work in front of it;
-     *   • an administrator enabled it (technician_enabled);
-     *   • they have already started it and not yet closed it — work in flight must
-     *     never become unreachable;
-     *   • it is done, failed or cancelled: nothing is left to act on.
-     *
-     * An on-hold work order is deliberately NOT open on its status alone. It stays
-     * out of the queue's way, so it never blocks the work behind it, but taking it
-     * off hold is an administrator's call.
-     *
-     * A work order that is not assigned to the technician is left alone: this
-     * restriction governs the order of their own work, and must not start blocking
-     * records reached some other way.
-     *
-     * Mirrors JobOrderController::isJobOrderLockedForTechnician() and the two
-     * clients' utils/technicianWorkOrderAccess.ts.
-     */
-    private function isWorkOrderLockedForTechnician($workOrder, $currentUser): bool
-    {
-        if (!$currentUser || (int) $currentUser->role_id !== Role::TECHNICIAN) {
-            return false;
-        }
-
-        if ($workOrder->technician_enabled) {
-            return false;
-        }
-
-        $workStatus = strtolower(trim((string) $workOrder->work_status));
-        if (in_array($workStatus, WorkOrder::TECHNICIAN_QUEUE_CLOSED_WORK_STATUSES, true)) {
-            return false;
-        }
-
-        // Already in flight for this technician. A zero date counts as unset, the
-        // same way the two clients read these columns.
-        $isTimeSet = static function ($value): bool {
-            $normalised = strtolower(trim((string) $value));
-            return !in_array($normalised, ['', '0000-00-00 00:00:00', 'not set', '-', 'none', 'null'], true);
-        };
-
-        if ($isTimeSet($workOrder->start_time) && !$isTimeSet($workOrder->end_time)) {
-            return false;
-        }
-
-        $aliases = $this->assigneeAliases($currentUser);
-        if (empty($aliases)) {
-            return false;
-        }
-
-        // The technician's open queue, in the order the two clients paint their
-        // list: In Progress first, then other active work, then work on hold last,
-        // oldest first within each band on requested_date — which IS this model's
-        // created-at column.
-        //
-        // Work on hold is ranked here rather than excluded with the finished work.
-        // Sorting last is what keeps it from taking the slot away from active work;
-        // excluding it made it neither next nor locked.
-        //
-        // Membership of THIS list is also what decides whether the work order is
-        // one of theirs to queue at all. Testing assignment separately would mean
-        // two comparisons of the same value that can disagree — and a disagreement
-        // fails open, because an empty queue never blocks.
-        $inProgressFirst = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(work_status, ''))) IN ('%s') THEN 0 ELSE 1 END",
-            implode("', '", WorkOrder::TECHNICIAN_IN_PROGRESS_WORK_STATUSES)
-        );
-
-        $deferredLast = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(work_status, ''))) IN ('%s') THEN 1 ELSE 0 END",
-            implode("', '", WorkOrder::TECHNICIAN_QUEUE_DEFERRED_WORK_STATUSES)
-        );
-
-        $queue = WorkOrder::query()
-            ->whereIn(DB::raw("LOWER(TRIM(COALESCE(assign_to, '')))"), $aliases)
-            ->whereNotIn(
-                DB::raw("LOWER(TRIM(COALESCE(work_status, '')))"),
-                WorkOrder::TECHNICIAN_QUEUE_CLOSED_WORK_STATUSES
-            )
-            ->when($currentUser->organization_id, function ($q) use ($currentUser) {
-                $q->where('organization_id', $currentUser->organization_id);
-            }, function ($q) {
-                $q->whereNull('organization_id');
-            })
-            ->orderBy(DB::raw($deferredLast))
-            ->orderBy(DB::raw($inProgressFirst))
-            ->orderBy('requested_date')
-            ->orderBy('id')
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id);
-
-        // Not part of their own queue — leave the existing behaviour alone.
-        if (!$queue->contains((int) $workOrder->id)) {
-            return false;
-        }
-
-        return $queue->first() !== (int) $workOrder->id;
     }
 
     public function destroy($id)

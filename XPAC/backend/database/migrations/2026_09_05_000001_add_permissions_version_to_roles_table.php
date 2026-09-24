@@ -7,15 +7,16 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Which generation of the permission model a custom role was saved under.
  *
- * Until now a page key carried its buttons with it: holding "plan-list" meant
- * Add, Edit and Delete on the plan list, because those controls had no keys of
- * their own. They do now — "plan-list.create" and friends — and reading an
+ * Until now a page key carried its buttons with it on most pages: holding
+ * "plan-list" meant Add, Edit and Delete on the plan list, because those
+ * controls had no keys of their own. They do now — "plan-list.create" and friends — and reading an
  * existing role strictly would revoke buttons from every role that has always
  * had them, on deploy, with nothing on screen to explain it.
  *
- * 0 — the row predates the per-action keys. App\Support\Permissions implies the
- *     standard verbs for any page in its GRANDFATHERED_PAGES list that the role
- *     holds, so nothing changes for it.
+ * 0 — the row predates the per-action keys. App\Support\Permissions grants it
+ *     every action key of each page in its LEGACY_GRANT_ALL_PAGES list that the
+ *     role holds (the pages whose buttons were ungated for custom roles), and
+ *     reads its stored sub-keys as written elsewhere, so nothing changes for it.
  * 1 — the row was saved from Role Management with the per-action checkboxes on
  *     screen, so its stored list is exactly what an administrator chose and is
  *     read as written.

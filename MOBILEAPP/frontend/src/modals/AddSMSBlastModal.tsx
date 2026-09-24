@@ -212,15 +212,15 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({ isOpen, onClose, on
   const selectedLcp = lcpList.find((i) => i.id === formData.selectedId);
   const selectedBarangay = barangayList.find((i) => i.id === formData.selectedId);
 
-  const filteredLcpnap = lcpnapList
-    .filter((i) => i.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase()))
-    .sort((a, b) => a.lcpnap_name.localeCompare(b.lcpnap_name, undefined, { numeric: true, sensitivity: 'base' }));
-  const filteredLcp = lcpList
-    .filter((i) => i.lcp_name.toLowerCase().includes(lcpSearch.toLowerCase()))
-    .sort((a, b) => a.lcp_name.localeCompare(b.lcp_name, undefined, { numeric: true, sensitivity: 'base' }));
-  const filteredBarangay = barangayList
-    .filter((i) => i.barangay.toLowerCase().includes(barangaySearch.toLowerCase()))
-    .sort((a, b) => a.barangay.localeCompare(b.barangay, undefined, { numeric: true, sensitivity: 'base' }));
+  const filteredLcpnap = lcpnapList.filter((i) =>
+    i.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase())
+  );
+  const filteredLcp = lcpList.filter((i) =>
+    i.lcp_name.toLowerCase().includes(lcpSearch.toLowerCase())
+  );
+  const filteredBarangay = barangayList.filter((i) =>
+    i.barangay.toLowerCase().includes(barangaySearch.toLowerCase())
+  );
 
   const targetTypeButtons: { key: TargetType; label: string }[] = [
     { key: 'lcpnap', label: 'LCPNAP' },

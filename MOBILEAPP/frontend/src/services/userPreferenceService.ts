@@ -1,4 +1,4 @@
-import { API_BASE_URL, authFetch } from '../config/api';
+import { API_BASE_URL } from '../config/api';
 
 const STORAGE_PREFIX = 'user_pref_';
 
@@ -42,7 +42,7 @@ export const getUserPreference = async (key: string, defaultValue: any = null): 
       url: `${API_BASE_URL}/user-preferences/${key}`
     });
 
-    const response = await authFetch(`${API_BASE_URL}/user-preferences/${key}`, {
+    const response = await fetch(`${API_BASE_URL}/user-preferences/${key}`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
@@ -88,7 +88,7 @@ export const setUserPreference = async (key: string, value: any): Promise<boolea
     const requestBody = { value };
     console.log('[UserPreferenceService] Request body:', requestBody);
 
-    const response = await authFetch(`${API_BASE_URL}/user-preferences/${key}`, {
+    const response = await fetch(`${API_BASE_URL}/user-preferences/${key}`, {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -145,7 +145,7 @@ export const setUserPreference = async (key: string, value: any): Promise<boolea
 
 export const deleteUserPreference = async (key: string): Promise<boolean> => {
   try {
-    const response = await authFetch(`${API_BASE_URL}/user-preferences/${key}`, {
+    const response = await fetch(`${API_BASE_URL}/user-preferences/${key}`, {
       method: 'DELETE',
       headers: {
         'Accept': 'application/json',
@@ -168,7 +168,7 @@ export const deleteUserPreference = async (key: string): Promise<boolean> => {
 
 export const getAllUserPreferences = async (): Promise<Record<string, any>> => {
   try {
-    const response = await authFetch(`${API_BASE_URL}/user-preferences/all`, {
+    const response = await fetch(`${API_BASE_URL}/user-preferences/all`, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',

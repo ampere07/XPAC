@@ -20,6 +20,7 @@ import TransactionFunnelFilter, { FilterValues, allColumns } from '../filter/Tra
 import SessionExpiredModal from '../components/SessionExpiredModal';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 const hexToRgba = (hex: string, opacity: number) => {
@@ -171,42 +172,13 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   // Data is managed by the store. 
   // Initialization happens in the first useEffect and polling handles updates.
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in TransactionList:', error);
-      }
-    }
-  }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -1367,7 +1339,9 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         case 'account_no':
           return transaction.account?.account_no || '-';
         case 'received_payment':
-          return formatCurrency(transaction.received_payment);
+          return Number(transaction.received_payment ?? 0).toFixed(2);
+        case 'account_balance':
+          return Number(transaction.account?.account_balance ?? 0).toFixed(2);
         case 'remarks':
           return transaction.remarks || 'No remarks';
         case 'status':

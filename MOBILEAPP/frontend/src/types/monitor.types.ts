@@ -86,7 +86,6 @@ export const DEFAULT_VISIBLE_WIDGETS: string[] = [
   'queue_jo',
   'queue_so',
   'expenses_mon',
-  'tech_live_location',
 ];
 
 // IMPORTANT: keys here are widget IDs used by your UI
@@ -286,19 +285,6 @@ export const WIDGETS: Record<string, WidgetConfig> = {
     param: '',
     w: 12,
     h: 10,
-    hasFilters: false,
-    filterType: 'none',
-  },
-  // Where the field technicians are right now. Served by MonitorController's
-  // 'tech_live_location' action and drawn by components/TechLiveLocationMap.
-  // Absent from this catalog until now, which is why the map the web portal has
-  // shown for months had no counterpart here: nothing ever requested it.
-  tech_live_location: {
-    title: 'Technician Live Location',
-    api: 'tech_live_location',
-    param: '',
-    w: 12,
-    h: 12,
     hasFilters: false,
     filterType: 'none',
   },

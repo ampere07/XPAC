@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, ChevronDown, Loader2 } from 'lucide-react';
 import { staggeredInstallationService } from '../services/staggeredInstallationService';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import { useBillingStore } from '../store/billingStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
@@ -103,7 +104,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
-  const [users, setUsers] = useState<Array<{ id: number; email: string }>>([]);
+  const [users, setUsers] = useState<Array<{ id: number; email: string; name: string }>>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
@@ -170,7 +171,9 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
         if (response.data) {
           const userList = response.data.map((user: any) => ({
             id: user.id,
-            email: user.email_address
+            email: user.email_address,
+            // Carried alongside the email so the dropdown can label by name without a second lookup.
+            name: getUserDisplayName(user, user?.email_address)
           }));
           setUsers(userList);
         }
@@ -645,7 +648,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
                   <option value="">Select user...</option>
                   {users.map((user) => (
                     <option key={user.id} value={user.email}>
-                      {user.email}
+                      {user?.name || user.email}
                     </option>
                   ))}
                 </select>

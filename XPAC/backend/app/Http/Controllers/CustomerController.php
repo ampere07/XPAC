@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\Customer;
 use App\Models\BillingAccount;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
@@ -25,7 +24,7 @@ class CustomerController extends Controller
             ]);
 
             $username = Auth::user()->username ?? Auth::user()->name ?? 'Unknown User';
-
+            
             \Log::info('[Presence] Customer broadcast:', [
                 'customer_id' => $validated['customer_id'],
                 'username' => $username,
@@ -71,9 +70,15 @@ class CustomerController extends Controller
                 ->get()
                 ->pluck('total', 'account_id');
 
-            $customers = Customer::with(['group', 'billingAccounts.onlineStatus'])
+            $customerRows = Customer::with(['group', 'billingAccounts.onlineStatus'])
                 ->orderBy('created_at', 'desc')
-                ->get()
+                ->get();
+
+            // One query for every agent-id referral in the list, rather than one
+            // per distinct id inside the map below.
+            \App\Support\AgentReferral::prime($customerRows->pluck('referred_by'));
+
+            $customers = $customerRows
                 ->map(function ($customer) use ($transactions, $portalLogs) {
                     $totalPaid = 0;
                     foreach ($customer->billingAccounts as $account) {
@@ -100,7 +105,7 @@ class CustomerController extends Controller
                         // Shown as a name; the id travels beside it so an edit form can
                         // write the same referral back instead of turning it into a name.
                         'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
-                        'referred_by_agent_id' => \App\Support\AgentReferral::agentId($customer->referred_by),
+                        'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                         'desired_plan' => $customer->desired_plan,
                         'house_front_picture_url' => $customer->house_front_picture_url,
                         'group_id' => $customer->group_id,
@@ -122,7 +127,7 @@ class CustomerController extends Controller
             ]);
         } catch (\Exception $e) {
             \Log::error('Error fetching customers: ' . $e->getMessage());
-
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch customers',
@@ -135,7 +140,7 @@ class CustomerController extends Controller
     {
         try {
             $customer = Customer::with(['group', 'billingAccounts.onlineStatus'])->findOrFail($id);
-
+            
             $data = [
                 'id' => $customer->id,
                 'first_name' => $customer->first_name,
@@ -155,7 +160,7 @@ class CustomerController extends Controller
                 // Shown as a name; the id travels beside it so an edit form can
                 // write the same referral back instead of turning it into a name.
                 'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
-                'referred_by_agent_id' => \App\Support\AgentReferral::agentId($customer->referred_by),
+                'referred_by_agent_id' => \App\Support\AgentReferral::agentIdIfAgent($customer->referred_by),
                 'desired_plan' => $customer->desired_plan,
                 'house_front_picture_url' => $customer->house_front_picture_url,
                 'group_id' => $customer->group_id,
@@ -182,7 +187,7 @@ class CustomerController extends Controller
             ]);
         } catch (\Exception $e) {
             \Log::error('Error fetching customer: ' . $e->getMessage());
-
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Customer not found',
@@ -231,7 +236,7 @@ class CustomerController extends Controller
             ], 201);
         } catch (\Exception $e) {
             \Log::error('Error creating customer: ' . $e->getMessage());
-
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create customer',
@@ -273,15 +278,18 @@ class CustomerController extends Controller
                 ], 422);
             }
 
-            $customer->update($request->all());
+            $payload = $request->all();
 
-            // Keep the portal login in step with the number.
-            //
-            // This endpoint used to write contact_number_primary and stop there,
-            // while the portal password is that number — so editing a customer
-            // here silently locked them out of the portal, with the stored hash
-            // still holding the previous number and nothing to indicate it.
-            \App\Support\PortalPassword::sync($customer);
+            // Responses show an agent-id referral as the agent's name; a form that
+            // echoes that name back must not overwrite the stored id with it.
+            if (array_key_exists('referred_by', $payload)) {
+                $payload['referred_by'] = \App\Support\AgentReferral::preserveOnWrite(
+                    $payload['referred_by'],
+                    $customer->referred_by
+                );
+            }
+
+            $customer->update($payload);
 
             // Broadcast customer-updated event
             $this->broadcastCustomerUpdated($customer);
@@ -293,7 +301,7 @@ class CustomerController extends Controller
             ]);
         } catch (\Exception $e) {
             \Log::error('Error updating customer: ' . $e->getMessage());
-
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update customer',
@@ -337,7 +345,7 @@ class CustomerController extends Controller
             ]);
         } catch (\Exception $e) {
             \Log::error('Error deleting customer: ' . $e->getMessage());
-
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete customer',
@@ -349,24 +357,7 @@ class CustomerController extends Controller
     public function uploadImages(Request $request, $id): JsonResponse
     {
         try {
-            $customer = Customer::find($id);
-
-            if (!$customer) {
-                $customer = Customer::where('account_no', $id)
-                    ->orWhereHas('billingAccounts', function ($q) use ($id) {
-                        $q->where('account_no', $id);
-                    })
-                    ->first();
-            }
-
-            if (!$customer) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to upload images',
-                    'error' => "No customer found with ID or account number: {$id}"
-                ], 404);
-            }
-
+            $customer = Customer::findOrFail($id);
             $driveService = resolve(\App\Services\GoogleDriveService::class);
 
             $folderName = $request->input('folder_name', "(customer) " . trim($customer->first_name . " " . $customer->last_name));
@@ -403,38 +394,36 @@ class CustomerController extends Controller
                     $newData[$dbColumn] = $newUrl;
                 }
 
-                \DB::transaction(function () use ($customer, $imageUrls, $oldData, $newData) {
-                    $customer->update($imageUrls);
+                $customer->update($imageUrls);
 
-                    // Audit Trail Log
-                    $userEmail = auth()->user()?->email ?? 'System';
-                    AuditTrailLog::create([
-                        'old_details' => [
-                            'type' => 'customers',
-                            'id' => $customer->id,
-                            'data' => $oldData
-                        ],
-                        'new_details' => [
-                            'type' => 'customers',
-                            'id' => $customer->id,
-                            'data' => $newData
-                        ],
-                        'created_by_user' => $userEmail,
-                        'updated_by_user' => $userEmail
-                    ]);
+                // Audit Trail Log
+                $userEmail = auth()->user()?->email ?? 'System';
+                AuditTrailLog::create([
+                    'old_details' => [
+                        'type' => 'customers',
+                        'id' => $customer->id,
+                        'data' => $oldData
+                    ],
+                    'new_details' => [
+                        'type' => 'customers',
+                        'id' => $customer->id,
+                        'data' => $newData
+                    ],
+                    'created_by_user' => $userEmail,
+                    'updated_by_user' => $userEmail
+                ]);
 
-                    // Log Activity
-                    ActivityLog::log(
-                        'Customer Attachments Uploaded',
-                        "Uploaded " . count($imageUrls) . " attachments for Customer #{$customer->id}",
-                        'info',
-                        [
-                            'resource_type' => 'Customer',
-                            'resource_id' => $customer->id,
-                            'additional_data' => array_keys($imageUrls)
-                        ]
-                    );
-                });
+                // Log Activity
+                ActivityLog::log(
+                    'Customer Attachments Uploaded',
+                    "Uploaded " . count($imageUrls) . " attachments for Customer #{$id}",
+                    'info',
+                    [
+                        'resource_type' => 'Customer',
+                        'resource_id' => $id,
+                        'additional_data' => array_keys($imageUrls)
+                    ]
+                );
             }
 
             return response()->json([

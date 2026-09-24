@@ -1,29 +1,29 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
+  FlatList,
   TouchableOpacity,
   TextInput,
   Modal,
   ScrollView,
+  RefreshControl,
   ActivityIndicator,
   Dimensions,
   Linking,
   StyleSheet,
 } from 'react-native';
-import { FileText } from 'lucide-react-native';
+import { RefreshCw, FileText, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import InvoiceDetails from '../components/InvoiceDetails';
 import BillingDetails from '../components/CustomerDetails';
-import { StandardPage, FieldCard } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { paymentService, PendingPayment } from '../services/paymentService';
 import { useInvoiceContext, InvoiceRecordUI } from '../contexts/InvoiceContext';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
-import InvoiceFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/InvoiceFunnelFilter';
-import { matchesFunnelFilters, activeFunnelKeys } from '../utils/funnelFilter';
-import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => {
   return {
@@ -31,9 +31,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -62,7 +62,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',
@@ -87,8 +86,6 @@ const Invoice: React.FC = () => {
   const { invoiceRecords, isLoading, error, silentRefresh } = useInvoiceContext();
   const [selectedDate, setSelectedDate] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
-  const [funnelFilters, setFunnelFilters] = useState<FilterValues>({});
   const [selectedRecord, setSelectedRecord] = useState<InvoiceRecordUI | null>(null);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [userRole, setUserRole] = useState<string>('');
@@ -108,7 +105,7 @@ const Invoice: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(50);
+  const itemsPerPage = 50;
 
   const primaryColor = colorPalette?.primary || '#7c3aed';
   const { width } = Dimensions.get('window');
@@ -156,53 +153,9 @@ const Invoice: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // InvoiceFunnelFilter names its columns the way InvoiceRecordUI spells its
-  // fields, so a plain lookup covers almost all of them. The two dates are the
-  // exception: the displayed value is already localised and Date() cannot be
-  // trusted to read it back, so the raw column wins when the store kept one.
-  const readFunnelValue = useCallback((record: any, key: string) => {
-    if (key === 'invoiceDate') return record.invoiceDateRaw ?? record.invoiceDate;
-    if (key === 'dueDate') return record.dueDateRaw ?? record.dueDate;
-    return record[key];
-  }, []);
-
-  const activeFilterKeys = useMemo(() => activeFunnelKeys(funnelFilters as any), [funnelFilters]);
-
-  // Same storage key as the web build's localStorage entry.
-  useEffect(() => {
-    AsyncStorage.getItem('invoiceFunnelFilters')
-      .then(saved => { if (saved) setFunnelFilters(JSON.parse(saved)); })
-      .catch(() => { });
-  }, []);
-
-  const persistFunnelFilters = useCallback(async (next: FilterValues) => {
-    setFunnelFilters(next);
-    try { await AsyncStorage.setItem('invoiceFunnelFilters', JSON.stringify(next)); } catch { /* ignore */ }
-  }, []);
-
-  const removeFunnelFilter = useCallback((key: string) => {
-    const next = { ...funnelFilters };
-    delete next[key];
-    persistFunnelFilters(next);
-  }, [funnelFilters, persistFunnelFilters]);
-
-  const describeFilter = (filter: any): string => {
-    if (!filter) return '';
-    if (filter.type === 'checklist') return `${(filter.value || []).length} selected`;
-    if (filter.type === 'text') return String(filter.value ?? '');
-    const from = filter.from ?? '';
-    const to = filter.to ?? '';
-    if (from && to) return `${from} - ${to}`;
-    return String(from || to || '');
-  };
-
   const filteredRecords = useMemo(() => {
     return invoiceRecords.filter((record) => {
       const matchesDate = selectedDate === 'All' || record.invoiceDate === selectedDate;
-      const matchesFunnel =
-        activeFilterKeys.length === 0 ||
-        matchesFunnelFilters(record, funnelFilters as any, readFunnelValue);
-      if (!matchesFunnel) return false;
       const q = searchQuery.toLowerCase();
       const matchesSearch =
         searchQuery === '' ||
@@ -214,43 +167,16 @@ const Invoice: React.FC = () => {
         (record.transactionId && record.transactionId.toLowerCase().includes(q));
       return matchesDate && matchesSearch;
     });
-  }, [invoiceRecords, selectedDate, searchQuery, funnelFilters, activeFilterKeys, readFunnelValue]);
-
-  const handleExport = useCallback(async () => {
-    if (filteredRecords.length === 0) return;
-
-    // The columns the web export writes, in the same order.
-    const cols = [
-      { key: 'accountNo', label: 'Account No.' },
-      { key: 'fullName', label: 'Full Name' },
-      { key: 'contactNumber', label: 'Contact Number' },
-      { key: 'emailAddress', label: 'Email Address' },
-      { key: 'address', label: 'Address' },
-      { key: 'plan', label: 'Plan' },
-      { key: 'invoiceDate', label: 'Invoice Date' },
-      { key: 'dueDate', label: 'Due Date' },
-      { key: 'invoiceBalance', label: 'Invoice Balance' },
-      { key: 'serviceCharge', label: 'Service Charge' },
-      { key: 'rebate', label: 'Rebate' },
-      { key: 'discounts', label: 'Discounts' },
-      { key: 'staggered', label: 'Staggered' },
-      { key: 'totalAmount', label: 'Total Amount' },
-      { key: 'receivedPayment', label: 'Received Payment' },
-      { key: 'status', label: 'Invoice Status' },
-      { key: 'paymentPortalLogRef', label: 'Reference No.' },
-      { key: 'transactionId', label: 'Transaction ID' },
-    ];
-
-    try {
-      await exportToCSV('invoices_export', cols, filteredRecords, (record: any, key: string) => record[key]);
-    } catch (err) {
-      console.error('Invoice export failed:', err);
-    }
-  }, [filteredRecords]);
+  }, [invoiceRecords, selectedDate, searchQuery]);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedDate, searchQuery]);
+
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredRecords.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredRecords, currentPage]);
 
   const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
 
@@ -359,72 +285,74 @@ const Invoice: React.FC = () => {
     setPendingPayment(null);
   };
 
+  const renderItem = ({ item }: { item: InvoiceRecordUI }) => {
+    const isCustomer = userRole === 'customer';
+    return (
+      <TouchableOpacity
+        activeOpacity={isCustomer ? 1 : 0.7}
+        onPress={() => handleRowPress(item)}
+        style={styles.card}
+      >
+        <View style={styles.cardHeaderRow}>
+          <Text style={styles.acctText}>{item.accountNo}</Text>
+          <View style={[styles.statusPill, { backgroundColor: `${statusColor(item.status)}20` }]}>
+            <Text style={[styles.statusText, { color: statusColor(item.status) }]}>{item.status}</Text>
+          </View>
+        </View>
+        {!isCustomer && item.fullName ? <Text style={styles.nameText}>{item.fullName}</Text> : null}
+        <View style={styles.metaRow}>
+          <MetaItem label="Invoice Date" value={item.invoiceDate || '-'} />
+          <MetaItem label="Due Date" value={item.dueDate || '-'} />
+        </View>
+        <View style={styles.metaRow}>
+          <MetaItem label="Total Amount" value={peso(item.totalAmount)} valueColor="#111827" />
+          <MetaItem label="Received" value={peso(item.receivedPayment)} />
+        </View>
+        {!isCustomer ? (
+          <View style={styles.metaRow}>
+            <MetaItem label="Invoice Balance" value={peso(item.invoiceBalance)} />
+            <MetaItem label="Transaction ID" value={item.transactionId || 'NULL'} />
+          </View>
+        ) : null}
+      </TouchableOpacity>
+    );
+  };
+
   return (
-    <StandardPage<InvoiceRecordUI>
-      data={filteredRecords}
-      keyExtractor={(item) => item.id}
-      renderItem={(item) => {
-        const isCustomer = userRole === 'customer';
-        return (
-          <FieldCard
-            title={[item.accountNo, !isCustomer && item.fullName ? item.fullName : null].filter(Boolean).join('  \u2014  ')}
-            status={item.status}
-            statusColor={statusColor(item.status)}
-            onPress={isCustomer ? undefined : () => handleRowPress(item)}
-            fields={[
-              { label: 'Invoice Date', value: item.invoiceDate || '-' },
-              { label: 'Due Date', value: item.dueDate || '-' },
-              { label: 'Total Amount', value: peso(item.totalAmount) },
-              { label: 'Received', value: peso(item.receivedPayment) },
-              ...(isCustomer
-                ? []
-                : [
-                    { label: 'Invoice Balance', value: peso(item.invoiceBalance) },
-                    { label: 'Transaction ID', value: item.transactionId || 'NULL' },
-                  ]),
-            ]}
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: isTablet ? 16 : 60 }]}>
+        <View style={styles.headerTitleRow}>
+          <Text style={styles.headerTitle}>Invoices</Text>
+          <View style={styles.countPill}>
+            <Text style={styles.countText}>{filteredRecords.length} records</Text>
+          </View>
+        </View>
+        <View style={styles.headerControlsRow}>
+          <GlobalSearch
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            isDarkMode={false}
+            colorPalette={colorPalette}
+            placeholder="Search invoice records..."
           />
-        );
-      }}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search invoice records..."
-      // A customer sees their own invoices and pays them; the admin filters and
-      // exports. Same page, same shell, different controls.
-      onOpenFunnel={userRole !== 'customer' ? () => setIsFunnelFilterOpen(true) : undefined}
-      activeFilterCount={activeFilterKeys.length}
-      chips={activeFilterKeys.map((filterKey) => ({
-        key: filterKey,
-        label: (filterColumns.find((c: any) => c.key === filterKey) as any)?.label || filterKey,
-        value: describeFilter((funnelFilters as any)[filterKey]),
-      }))}
-      onRemoveChip={removeFunnelFilter}
-      onClearChips={() => persistFunnelFilters({})}
-      onExport={userRole !== 'customer' ? handleExport : undefined}
-      exportDisabled={isLoading || filteredRecords.length === 0}
-      onRefresh={handleRefresh}
-      refreshDisabled={isLoading}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && invoiceRecords.length === 0}
-      loadingText="Loading invoice records..."
-      error={error}
-      onRetry={handleRefresh}
-      emptyText="No invoice records found matching your filters"
-      currentPage={currentPage}
-      onPageChange={handlePageChange}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      header={
-        userRole !== 'customer' ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={{ backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', flexGrow: 0 }}
-            contentContainerStyle={[styles.chipRow, { paddingHorizontal: 16, paddingVertical: 8 }]}
-          >
+          {userRole === 'customer' ? (
+            <TouchableOpacity
+              onPress={handlePayNow}
+              disabled={isPaymentProcessing}
+              style={[styles.iconBtn, { backgroundColor: isPaymentProcessing ? '#6b7280' : primaryColor, paddingHorizontal: 14 }]}
+            >
+              <Text style={styles.payNowText}>{isPaymentProcessing ? '...' : 'Pay Now'}</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={handleRefresh} disabled={isLoading} style={[styles.iconBtn, { backgroundColor: primaryColor }]}>
+            {isLoading ? <ActivityIndicator size="small" color="#fff" /> : <RefreshCw size={16} color="#fff" />}
+          </TouchableOpacity>
+        </View>
+
+        {/* Date filter chips (admin only) */}
+        {userRole !== 'customer' ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
             {dateItems.map((item, index) => {
               const active = selectedDate === item.date;
               return (
@@ -439,20 +367,53 @@ const Invoice: React.FC = () => {
               );
             })}
           </ScrollView>
-        ) : null
-      }
-      toolbarActions={
-        userRole === 'customer' ? (
-          <TouchableOpacity
-            onPress={handlePayNow}
-            disabled={isPaymentProcessing}
-            style={[styles.iconBtn, { height: 38, backgroundColor: isPaymentProcessing ? '#6b7280' : primaryColor, paddingHorizontal: 14 }]}
-          >
-            <Text style={styles.payNowText}>{isPaymentProcessing ? '...' : 'Pay Now'}</Text>
+        ) : null}
+      </View>
+
+      {/* Body */}
+      {isLoading && invoiceRecords.length === 0 ? (
+        <View style={styles.centerBox}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={styles.mutedText}>Loading invoice records...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.centerBox}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity onPress={handleRefresh} style={[styles.retryBtn, { backgroundColor: primaryColor }]}>
+            <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
-        ) : null
-      }
-    >
+        </View>
+      ) : (
+        <FlatList
+          data={paginatedRecords}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={{ padding: 12, paddingBottom: 24 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />}
+          ListEmptyComponent={
+            <View style={styles.centerBox}>
+              <Text style={styles.mutedText}>No invoice records found matching your filters</Text>
+            </View>
+          }
+          ListFooterComponent={
+            totalPages > 1 ? (
+              <View style={styles.pagination}>
+                <TouchableOpacity onPress={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1} style={styles.pageBtn}>
+                  <ChevronLeft size={20} color={currentPage === 1 ? '#d1d5db' : primaryColor} />
+                </TouchableOpacity>
+                <Text style={styles.pageText}>
+                  Page {currentPage} of {totalPages}
+                </Text>
+                <TouchableOpacity onPress={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages} style={styles.pageBtn}>
+                  <ChevronRight size={20} color={currentPage === totalPages ? '#d1d5db' : primaryColor} />
+                </TouchableOpacity>
+              </View>
+            ) : null
+          }
+        />
+      )}
+
+      {/* Invoice Detail Modal (admin) */}
       <Modal visible={!!selectedRecord && userRole !== 'customer'} animationType="slide" onRequestClose={() => setSelectedRecord(null)}>
         {selectedRecord ? (
           <InvoiceDetails
@@ -463,6 +424,7 @@ const Invoice: React.FC = () => {
         ) : null}
       </Modal>
 
+      {/* Customer Detail Modal */}
       <Modal visible={!!selectedCustomer || isLoadingDetails} animationType="slide" onRequestClose={() => setSelectedCustomer(null)}>
         {isLoadingDetails ? (
           <View style={styles.centerBox}>
@@ -478,6 +440,7 @@ const Invoice: React.FC = () => {
         ) : null}
       </Modal>
 
+      {/* Payment Verify Modal */}
       <Modal visible={showPaymentVerifyModal} transparent animationType="fade" onRequestClose={handleCloseVerifyModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -523,6 +486,7 @@ const Invoice: React.FC = () => {
         </View>
       </Modal>
 
+      {/* Pending Payment Modal */}
       <Modal visible={showPendingPaymentModal && !!pendingPayment} transparent animationType="fade" onRequestClose={handleCancelPendingPayment}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -548,6 +512,7 @@ const Invoice: React.FC = () => {
         </View>
       </Modal>
 
+      {/* Payment Link Modal */}
       <Modal visible={showPaymentLinkModal && !!paymentLinkData} transparent animationType="fade" onRequestClose={() => setShowPaymentLinkModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -568,18 +533,7 @@ const Invoice: React.FC = () => {
           </View>
         </View>
       </Modal>
-
-      <InvoiceFunnelFilter
-        isOpen={isFunnelFilterOpen}
-        onClose={() => setIsFunnelFilterOpen(false)}
-        onApplyFilters={(next) => {
-          persistFunnelFilters(next);
-          setIsFunnelFilterOpen(false);
-          setCurrentPage(1);
-        }}
-        currentFilters={funnelFilters}
-      />
-    </StandardPage>
+    </View>
   );
 };
 

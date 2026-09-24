@@ -4,6 +4,7 @@ import { UserData } from '../types/api';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { trackPixelEvent } from '../utils/metaPixel';
 
 interface LoginProps {
   onLogin: (userData: UserData) => void;
@@ -22,6 +23,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [cooldownTime, setCooldownTime] = useState<number>(0);
   const [showSuspendedModal, setShowSuspendedModal] = useState(false);
+  const [showForceLoginModal, setShowForceLoginModal] = useState(false);
+  const [forceLoginMessage, setForceLoginMessage] = useState('');
 
   useEffect(() => {
     const savedCooldown = sessionStorage.getItem('forgotPasswordCooldown');
@@ -85,25 +88,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     fetchColorPalette();
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    // Trimmed before anything looks at them. A mobile keyboard's autocomplete
-    // and a pasted account number both bring a trailing space along, and the
-    // server compares the password character for character - so an untrimmed
-    // space reads as a wrong password against a number that looks correct.
-    const account = accountNo.trim();
-    const mobile = mobileNo.trim();
-
-    if (!account || !mobile) {
-      setError('Please enter your account number and mobile number');
-      return;
-    }
-
+  /**
+   * Shared by the form submit and by the takeover confirmation, so the confirmed retry goes
+   * through exactly the same path as a first attempt — only force_login differs.
+   */
+  const submitLogin = async (forceLogin: boolean) => {
     setIsLoading(true);
     setError('');
 
     try {
-      const response = await login(account, mobile);
+      const response = await login(accountNo, mobileNo, forceLogin);
       if (response.status === 'success') {
         const userData: UserData = {
           id: response.data.user.id,
@@ -112,14 +106,36 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           full_name: response.data.user.full_name,
           role: response.data.user.role,
           role_id: response.data.user.role_id,
-          // The role's effective keys, as the server resolved them — a seeded
-          // role's included, not just a custom role's stored list.
+          // The role's effective keys, as the server resolved them.
           permissions: response.data.user.permissions || null,
-          // The section this role lands on. Kept so the client does not have to
-          // infer it from the first key in the list.
+          // The section this role lands on, so the client does not infer it
+          // from the first key in the list.
           home: response.data.user.home || null,
+          // Only a backend with the permission table sends `home` (null for a
+          // standalone custom role). An older one sends a custom role's raw
+          // stored row as `permissions`, which config/permissions.ts then
+          // resolves itself.
+          permissions_resolved: Object.prototype.hasOwnProperty.call(response.data.user, 'home'),
+          // A custom role saved before per-action keys existed (bell shortcuts).
+          permissions_legacy: response.data.user.permissions_legacy === true,
           organization: response.data.user.organization
         };
+        setShowForceLoginModal(false);
+
+        /*
+         * Meta Pixel — fired only where the server has actually authenticated the
+         * credentials: status 'success' carrying the user record. A 401, a 403
+         * suspension and the 409 force-login prompt all land in the catch below
+         * instead, so none of them report a login.
+         *
+         * Deliberately NOT in App.tsx's handleLogin or its session-restore branch:
+         * that path re-runs from cached authData on every page refresh, which would
+         * count each reload as a fresh sign-in.
+         */
+        trackPixelEvent('Login', {}, {
+          eventID: `login-${userData.id}-${Date.now()}`,
+        });
+
         onLogin(userData);
       } else {
         setError('Login failed. Please try again.');
@@ -127,12 +143,28 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     } catch (err: any) {
       if (err.response?.status === 403 && err.response?.data?.status === 'suspended') {
         setShowSuspendedModal(true);
+      } else if (err.response?.status === 409 && err.response?.data?.require_confirmation) {
+        // Technician already signed in elsewhere. Nothing has been authenticated yet — the
+        // login only completes if they confirm and it is re-sent with force_login.
+        setForceLoginMessage(err.response?.data?.message || '');
+        setShowForceLoginModal(true);
       } else {
+        setShowForceLoginModal(false);
         setError(err.response?.data?.message || 'Invalid credentials. Please try again.');
       }
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accountNo || !mobileNo) {
+      setError('Please enter your account number and mobile number');
+      return;
+    }
+
+    await submitLogin(false);
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -610,8 +642,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   alt="Logo"
                   style={{
                     height: '120px',
+                    // Tailwind Preflight makes <img> display:block, so the parent's
+                    // text-align:center does not centre it — auto margins do. Without this the
+                    // logo hugs the left edge on mobile, where the media query forces
+                    // .logo-section to width:100% instead of letting it shrink-wrap.
+                    display: 'block',
+                    maxWidth: '100%',
                     objectFit: 'contain',
-                    marginBottom: '10px'
+                    margin: '0 auto 10px'
                   }}
                   crossOrigin="anonymous"
                   referrerPolicy="no-referrer"
@@ -657,7 +695,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 type="button"
                 className="apply-button"
                 onClick={() => {
-                  window.open('https://apply.atssfiber.ph', '_blank');
+                  window.open('https://apply.gowiser.ph', '_blank');
                 }}
                 style={{
                   padding: '16px 48px',
@@ -756,6 +794,99 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             >
               CONFIRM
             </button>
+          </div>
+        </div>
+      )}
+
+      {showForceLoginModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '16px',
+            padding: '32px',
+            maxWidth: '420px',
+            width: '90%',
+            textAlign: 'center',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)'
+          }}>
+            <div style={{
+              width: '64px',
+              height: '64px',
+              backgroundColor: '#fef3c7',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 20px'
+            }}>
+              <svg style={{ width: '32px', height: '32px', color: '#d97706' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <h3 style={{
+              fontSize: '20px',
+              fontWeight: '700',
+              color: '#111827',
+              marginBottom: '12px'
+            }}>Account Active Elsewhere</h3>
+            <p style={{
+              fontSize: '16px',
+              color: '#4b5563',
+              marginBottom: '24px',
+              lineHeight: '1.5'
+            }}>
+              {forceLoginMessage || 'Account active on another device. Proceed and log out previous session?'}
+            </p>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => {
+                  setShowForceLoginModal(false);
+                  setForceLoginMessage('');
+                  setError('');
+                }}
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  backgroundColor: '#ffffff',
+                  color: '#4b5563',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '30px',
+                  fontSize: '15px',
+                  fontWeight: '700',
+                  cursor: isLoading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={() => submitLogin(true)}
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  backgroundColor: isLoading ? '#6b7280' : (colorPalette?.primary || '#7c3aed'),
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '30px',
+                  fontSize: '15px',
+                  fontWeight: '700',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+                }}
+              >
+                {isLoading ? 'LOGGING IN...' : 'PROCEED & LOG IN'}
+              </button>
+            </div>
           </div>
         </div>
       )}

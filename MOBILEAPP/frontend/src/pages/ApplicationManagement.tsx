@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Animated,
   View,
   Text,
   FlatList,
@@ -11,23 +10,8 @@ import {
   Modal,
   ScrollView,
   Linking,
-  AppState,
-  AppStateStatus,
-  Platform,
 } from 'react-native';
-import {
-  Filter,
-  Menu,
-  Download,
-  RefreshCw,
-  X,
-  ExternalLink,
-  ChevronDown,
-  LogOut,
-  Calendar,
-} from 'lucide-react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { Picker } from '@react-native-picker/picker';
+import { Filter, Download, RefreshCw, X, ExternalLink } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import ApplicationDetails from '../components/ApplicationDetails';
@@ -40,8 +24,6 @@ import { useApplicationStore } from '../store/applicationStore';
 import { Application } from '../types/application';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { exportToCSV } from '../utils/exportUtils';
-import pusher from '../services/pusherService';
-import apiClient from '../config/api';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -56,19 +38,6 @@ const formatDate = (dateString?: string): string => {
   } catch {
     return dateString;
   }
-};
-
-/** `YYYY-MM-DD`, matching the value shape of the web `<input type="date">`. */
-const toIsoDay = (date: Date): string => {
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  const dd = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${mm}-${dd}`;
-};
-
-const parseIsoDay = (value: string): Date => {
-  if (!value) return new Date();
-  const parsed = new Date(`${value}T00:00:00`);
-  return isNaN(parsed.getTime()) ? new Date() : parsed;
 };
 
 const getStatusColor = (status: string): string => {
@@ -93,64 +62,52 @@ const getStatusDotColor = (statusId: string): string => {
   return '#9ca3af';
 };
 
-
-/**
- * Same columns/labels/order as the web table. `width` is the pixel equivalent of the
- * web `min-w-*` Tailwind class (min-w-28 → 7rem → 112px, …) so the table view lines up
- * with the desktop one.
- */
-const allColumns: { key: string; label: string; width: number }[] = [
-  { key: 'timestamp', label: 'Timestamp', width: 160 },
-  { key: 'status', label: 'Status', width: 112 },
-  { key: 'customerName', label: 'Customer Name', width: 192 },
-  { key: 'firstName', label: 'First Name', width: 128 },
-  { key: 'middleInitial', label: 'Middle Initial', width: 112 },
-  { key: 'lastName', label: 'Last Name', width: 128 },
-  { key: 'emailAddress', label: 'Email Address', width: 192 },
-  { key: 'mobileNumber', label: 'Mobile Number', width: 144 },
-  { key: 'secondaryMobileNumber', label: 'Secondary Mobile Number', width: 160 },
-  { key: 'installationAddress', label: 'Installation Address', width: 224 },
-  { key: 'landmark', label: 'Landmark', width: 128 },
-  { key: 'region', label: 'Region', width: 112 },
-  { key: 'city', label: 'City', width: 112 },
-  { key: 'barangay', label: 'Barangay', width: 128 },
-  { key: 'desiredPlan', label: 'Desired Plan', width: 144 },
-  { key: 'promo', label: 'Promo', width: 112 },
-  { key: 'referredBy', label: 'Referred By', width: 128 },
-  { key: 'createDate', label: 'Create Date', width: 128 },
-  { key: 'createTime', label: 'Create Time', width: 112 },
+const allColumns = [
+  { key: 'timestamp', label: 'Timestamp' },
+  { key: 'status', label: 'Status' },
+  { key: 'customerName', label: 'Customer Name' },
+  { key: 'firstName', label: 'First Name' },
+  { key: 'middleInitial', label: 'M.I.' },
+  { key: 'lastName', label: 'Last Name' },
+  { key: 'emailAddress', label: 'Email Address' },
+  { key: 'mobileNumber', label: 'Mobile Number' },
+  { key: 'secondaryMobileNumber', label: 'Secondary Mobile' },
+  { key: 'installationAddress', label: 'Installation Address' },
+  { key: 'landmark', label: 'Landmark' },
+  { key: 'region', label: 'Region' },
+  { key: 'city', label: 'City' },
+  { key: 'barangay', label: 'Barangay' },
+  { key: 'desiredPlan', label: 'Desired Plan' },
+  { key: 'promo', label: 'Promo' },
+  { key: 'referredBy', label: 'Referred By' },
+  { key: 'createDate', label: 'Create Date' },
+  { key: 'createTime', label: 'Create Time' },
 ];
 
-const STORAGE_KEYS = {
-  itemsPerPage: 'applicationManagementItemsPerPage',
-  funnelFilters: 'applicationFunnelFilters',
-};
-
 const renderCellValue = (application: Application, columnKey: string): string => {
-  const app = application as any;
   switch (columnKey) {
     case 'timestamp':
-      return app.create_date && app.create_time
-        ? `${formatDate(app.create_date)} ${app.create_time}`
-        : formatDate(app.timestamp) || '-';
-    case 'status': return app.status || '-';
+      return (application as any).create_date && (application as any).create_time
+        ? `${formatDate((application as any).create_date)} ${(application as any).create_time}`
+        : formatDate((application as any).timestamp) || '-';
+    case 'status': return (application as any).status || '-';
     case 'customerName': return application.customer_name || '-';
-    case 'firstName': return app.first_name || '-';
-    case 'middleInitial': return app.middle_initial || '-';
-    case 'lastName': return app.last_name || '-';
-    case 'emailAddress': return app.email_address || '-';
-    case 'mobileNumber': return app.mobile_number || '-';
-    case 'secondaryMobileNumber': return app.secondary_mobile_number || '-';
-    case 'installationAddress': return app.installation_address || app.address || '-';
-    case 'landmark': return app.landmark || '-';
-    case 'region': return app.region || '-';
-    case 'city': return app.city || '-';
-    case 'barangay': return app.barangay || '-';
-    case 'desiredPlan': return app.desired_plan || '-';
-    case 'promo': return app.promo || '-';
-    case 'referredBy': return app.referred_by || '-';
-    case 'createDate': return formatDate(app.create_date) || '-';
-    case 'createTime': return app.create_time || '-';
+    case 'firstName': return (application as any).first_name || '-';
+    case 'middleInitial': return (application as any).middle_initial || '-';
+    case 'lastName': return (application as any).last_name || '-';
+    case 'emailAddress': return (application as any).email_address || '-';
+    case 'mobileNumber': return (application as any).mobile_number || '-';
+    case 'secondaryMobileNumber': return (application as any).secondary_mobile_number || '-';
+    case 'installationAddress': return (application as any).installation_address || (application as any).address || '-';
+    case 'landmark': return (application as any).landmark || '-';
+    case 'region': return (application as any).region || '-';
+    case 'city': return (application as any).city || '-';
+    case 'barangay': return (application as any).barangay || '-';
+    case 'desiredPlan': return (application as any).desired_plan || '-';
+    case 'promo': return (application as any).promo || '-';
+    case 'referredBy': return (application as any).referred_by || '-';
+    case 'createDate': return formatDate((application as any).create_date) || '-';
+    case 'createTime': return (application as any).create_time || '-';
     default: return '-';
   }
 };
@@ -159,12 +116,11 @@ const renderCellValue = (application: Application, columnKey: string): string =>
 
 interface ApplicationManagementProps {
   onNavigate?: (section: string, extra?: string) => void;
-  onLogout?: () => void;
 }
 
 // ─── component ────────────────────────────────────────────────────────────────
 
-const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate, onLogout }) => {
+const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigate }) => {
   const isDarkMode = false;
   const { width } = Dimensions.get('window');
   const isTablet = width >= 768;
@@ -180,30 +136,19 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
   const [funnelFilters, setFunnelFilters] = useState<FilterValues>({});
-  const [timestampFrom, setTimestampFrom] = useState('');
-  const [timestampTo, setTimestampTo] = useState('');
-  const [datePickerTarget, setDatePickerTarget] = useState<'from' | 'to' | null>(null);
-
+  const [timestampFrom] = useState('');
+  const [timestampTo] = useState('');
 
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
-  const [sidebarRendered, setSidebarRendered] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState(false);
   const [isRefreshingManual, setIsRefreshingManual] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [hasNewData, setHasNewData] = useState(false);
-  const [showSessionExpired, setShowSessionExpired] = useState(false);
-  const [viewers, setViewers] = useState<Record<string, string[]>>({});
 
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const itemsPerPage = 15;
 
   const selectedApplicationRef = useRef<Application | null>(null);
-  const knownCountRef = useRef<number>(0);
-  const hasCountBaselineRef = useRef<boolean>(false);
-  const cardListRef = useRef<FlatList<Application>>(null);
-  const sidebarSlideX = useRef(new Animated.Value(-width)).current;
-  const sidebarBackdrop = useRef(new Animated.Value(0)).current;
 
   const {
     applications,
@@ -212,8 +157,6 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     fetchApplications,
     refreshApplications,
     silentRefresh,
-    isFullyLoaded,
-    totalCount,
   } = useApplicationStore();
 
   const primary = colorPalette?.primary || '#7c3aed';
@@ -239,38 +182,32 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     });
   }, []);
 
-  // Hydrate persisted view preferences (AsyncStorage is async, unlike web localStorage).
   useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const [savedFilters, savedPerPage] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.funnelFilters),
-          AsyncStorage.getItem(STORAGE_KEYS.itemsPerPage),
-        ]);
-        if (!active) return;
-        if (savedFilters) setFunnelFilters(JSON.parse(savedFilters));
-        if (savedPerPage) {
-          const parsed = Number(savedPerPage);
-          if ([10, 25, 50, 100].includes(parsed)) setItemsPerPage(parsed);
-        }
-      } catch (err) {
-        console.error('[ApplicationManagement] Failed to load saved view preferences:', err);
+    AsyncStorage.getItem('applicationFunnelFilters').then((raw) => {
+      if (raw) {
+        try { setFunnelFilters(JSON.parse(raw)); } catch { /* ignore */ }
       }
-    })();
-    return () => { active = false; };
+    });
   }, []);
 
   useEffect(() => {
     if (applications.length === 0) fetchApplications();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 15-minute silent refresh
+  useEffect(() => {
+    const id = setInterval(() => {
+      silentRefresh().catch(() => { });
+    }, 15 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [silentRefresh]);
+
   // Keep ref in sync
   useEffect(() => {
     selectedApplicationRef.current = selectedApplication;
   }, [selectedApplication]);
 
-  // Auto-update selected app when store updates (from polling / real-time)
+  // Auto-update selected app when store updates
   useEffect(() => {
     if (selectedApplicationRef.current && applications.length > 0) {
       const updated = applications.find((r) => r.id === selectedApplicationRef.current?.id);
@@ -280,205 +217,15 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     }
   }, [applications]);
 
-  // Flag newly-arrived records so the refresh button can show the "new data" dot.
-  useEffect(() => {
-    if (!hasCountBaselineRef.current) {
-      hasCountBaselineRef.current = true;
-      knownCountRef.current = applications.length;
-      return;
-    }
-    if (applications.length > knownCountRef.current) setHasNewData(true);
-    knownCountRef.current = applications.length;
-  }, [applications.length]);
+  // ── pull-to-refresh ───────────────────────────────────────────────────────
 
-  // Session expiry — the store surfaces the auth failure through `error`.
-  useEffect(() => {
-    if (error && (error.includes('401') || error.toLowerCase().includes('unauthorized'))) {
-      setShowSessionExpired(true);
-    }
-  }, [error]);
-
-  // ── real-time (Soketi/Pusher) ─────────────────────────────────────────────
-  // `pusherService` is an RN-safe stub today, so these callbacks never fire and the
-  // polling below is what actually keeps the list fresh. The wiring matches the web
-  // screen so restoring `pusher-js` in the mobile app turns real-time back on with no
-  // change here.
-
-  useEffect(() => {
-    const channel = pusher.subscribe('applications');
-
-    channel.bind('new-application', async (data: any) => {
-      if (currentUserOrgId) {
-        if (data.organization_id !== currentUserOrgId) return;
-      } else if (data.organization_id) {
-        return;
-      }
-
-      setHasNewData(true);
-
-      const appId = data.id || (data.application && data.application.id);
-      if (appId) {
-        try {
-          const { getApplication } = await import('../services/applicationService');
-          const fullApp = await getApplication(String(appId));
-          useApplicationStore.getState().addNotificationRecord(fullApp);
-        } catch (err) {
-          console.warn('[ApplicationManagement] Failed to fetch new application, falling back to refresh:', err);
-        }
-      }
-
-      try {
-        await silentRefresh();
-      } catch (err) {
-        console.error('[ApplicationManagement] Silent refresh failed:', err);
-      }
-    });
-
-    return () => {
-      channel.unbind('new-application');
-      pusher.unsubscribe('applications');
-    };
-  }, [silentRefresh, currentUserOrgId]);
-
-  // Presence channel — who is viewing which application.
-  useEffect(() => {
-    const presenceChannel = pusher.subscribe('presence-applications-presence');
-
-    presenceChannel.bind('viewing-update', (data: { applicationId: string; username: string; action: string }) => {
-      setViewers((prev) => {
-        const current = prev[data.applicationId] || [];
-        if (data.action === 'started_viewing') {
-          if (!current.includes(data.username)) {
-            return { ...prev, [data.applicationId]: [...current, data.username] };
-          }
-        } else if (data.action === 'stopped_viewing') {
-          return { ...prev, [data.applicationId]: current.filter((n) => n !== data.username) };
-        }
-        return prev;
-      });
-    });
-
-    presenceChannel.bind('pusher:member_removed', (member: any) => {
-      const identifier = member?.info?.username || member?.info?.email;
-      if (!identifier) return;
-      setViewers((prev) => {
-        const next = { ...prev };
-        Object.keys(next).forEach((appId) => {
-          next[appId] = (next[appId] || []).filter((n) => n !== identifier);
-        });
-        return next;
-      });
-    });
-
-    presenceChannel.bind('pusher:member_added', () => {
-      // Re-announce what we are looking at so the joining member sees it.
-      if (selectedApplicationRef.current) {
-        apiClient
-          .post('/applications/broadcast-viewing', {
-            application_id: selectedApplicationRef.current.id,
-            action: 'started_viewing',
-          })
-          .catch((err) => console.error('[Presence] Failed to re-broadcast viewing state:', err));
-      }
-    });
-
-    return () => {
-      presenceChannel.unbind();
-      pusher.unsubscribe('presence-applications-presence');
-    };
-  }, []);
-
-  // ── polling + idle refresh ────────────────────────────────────────────────
-  // Web polls every 3s unconditionally. Here the timer is gated on AppState so a
-  // backgrounded phone is not polling the API on cellular data.
-
-  useEffect(() => {
-    const POLLING_INTERVAL = 3000;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    const start = () => {
-      if (intervalId) return;
-      intervalId = setInterval(() => {
-        silentRefresh().catch((err) => console.error('[ApplicationManagement] Polling failed:', err));
-      }, POLLING_INTERVAL);
-    };
-
-    const stop = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = null;
-    };
-
-    if (AppState.currentState === 'active') start();
-
-    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'active') {
-        silentRefresh().catch(() => { });
-        start();
-      } else {
-        stop();
-      }
-    });
-
-    return () => {
-      stop();
-      sub.remove();
-    };
-  }, [silentRefresh]);
-
-  // Idle auto-refresh — a full refresh every 15 minutes of no interaction.
-  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const resetIdleTimer = useCallback(() => {
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-    idleTimerRef.current = setTimeout(function tick() {
-      silentRefresh()
-        .catch((err) => console.error('[ApplicationManagement] Idle refresh failed:', err))
-        .finally(() => {
-          idleTimerRef.current = setTimeout(tick, 15 * 60 * 1000);
-        });
-    }, 15 * 60 * 1000);
-  }, [silentRefresh]);
-
-  useEffect(() => {
-    resetIdleTimer();
-    return () => {
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-    };
-  }, [resetIdleTimer]);
-
-  // Slide the status drawer in from the left, out to the left — same motion as
-  // ApplicationFunnelFilter, mirrored because this one is anchored to the left edge.
-  useEffect(() => {
-    if (isSidebarVisible) {
-      setSidebarRendered(true);
-      Animated.parallel([
-        Animated.timing(sidebarSlideX, { toValue: 0, duration: 260, useNativeDriver: true }),
-        Animated.timing(sidebarBackdrop, { toValue: 0.4, duration: 260, useNativeDriver: true }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.timing(sidebarSlideX, { toValue: -width, duration: 220, useNativeDriver: true }),
-        Animated.timing(sidebarBackdrop, { toValue: 0, duration: 220, useNativeDriver: true }),
-      ]).start(({ finished }) => {
-        if (finished) setSidebarRendered(false);
-      });
-    }
-  }, [isSidebarVisible]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── refresh ───────────────────────────────────────────────────────────────
-
-  // Pull-to-refresh pulls only what changed since the last sync. Re-downloading all
-  // ~10k records on every pull is what made this feel like a cold start; `silentRefresh`
-  // falls back to a full load on its own when there is nothing cached yet.
   const onRefresh = async () => {
     setRefreshing(true);
-    setHasNewData(false);
-    try { await silentRefresh(); } finally { setRefreshing(false); }
+    try { await refreshApplications(); } finally { setRefreshing(false); }
   };
 
   const handleManualRefresh = async () => {
     setIsRefreshingManual(true);
-    setHasNewData(false);
     try { await refreshApplications(); } finally { setIsRefreshingManual(false); }
   };
 
@@ -562,12 +309,12 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
         const dv = new Date(dateValueStr).getTime();
         if (isNaN(dv)) return false;
         if (timestampFrom) {
-          const fd = parseIsoDay(timestampFrom);
+          const fd = new Date(timestampFrom);
           fd.setHours(0, 0, 0, 0);
           if (dv < fd.getTime()) return false;
         }
         if (timestampTo) {
-          const td = parseIsoDay(timestampTo);
+          const td = new Date(timestampTo);
           td.setHours(23, 59, 59, 999);
           if (dv > td.getTime()) return false;
         }
@@ -629,21 +376,22 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     return filtered;
   }, [globalFilteredApplications, selectedLocation]);
 
-  const persist = (key: string, value: any) => {
-    AsyncStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value)).catch(() => { });
-  };
+  const currentApplicationIndex = useMemo(
+    () => (!selectedApplication ? -1 : filteredApplications.findIndex((r) => r.id === selectedApplication.id)),
+    [filteredApplications, selectedApplication]
+  );
 
   // ── pagination ──────────────────────────────────────────────────────────────
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(filteredApplications.length / itemsPerPage)),
-    [filteredApplications.length, itemsPerPage]
+    [filteredApplications.length]
   );
 
   const paginatedApplications = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     return filteredApplications.slice(startIndex, startIndex + itemsPerPage);
-  }, [filteredApplications, currentPage, itemsPerPage]);
+  }, [filteredApplications, currentPage]);
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) setCurrentPage(newPage);
@@ -652,12 +400,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
   // Reset to first page whenever the result set changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedLocation, funnelFilters, itemsPerPage, timestampFrom, timestampTo]);
-
-  // Scroll back to the top on page change
-  useEffect(() => {
-    cardListRef.current?.scrollToOffset({ offset: 0, animated: true });
-  }, [currentPage]);
+  }, [searchQuery, selectedLocation, funnelFilters]);
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -670,60 +413,26 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
 
   const handleApplyFilters = async (filters: FilterValues) => {
     setFunnelFilters(filters);
-    try { await AsyncStorage.setItem(STORAGE_KEYS.funnelFilters, JSON.stringify(filters)); } catch { /* ignore */ }
+    try { await AsyncStorage.setItem('applicationFunnelFilters', JSON.stringify(filters)); } catch { /* ignore */ }
   };
 
   const handleClearAllFilters = async () => {
     setFunnelFilters({});
-    try { await AsyncStorage.removeItem(STORAGE_KEYS.funnelFilters); } catch { /* ignore */ }
+    try { await AsyncStorage.removeItem('applicationFunnelFilters'); } catch { /* ignore */ }
   };
 
   const removeFilter = async (key: string) => {
     const next = { ...funnelFilters };
     delete next[key];
     setFunnelFilters(next);
-    try { await AsyncStorage.setItem(STORAGE_KEYS.funnelFilters, JSON.stringify(next)); } catch { /* ignore */ }
+    try { await AsyncStorage.setItem('applicationFunnelFilters', JSON.stringify(next)); } catch { /* ignore */ }
   };
 
   const openApplyForm = () => {
     const url = userEmail
-      ? `https://apply.atssfiber.ph?created_by_email=${encodeURIComponent(userEmail)}`
-      : 'https://apply.atssfiber.ph';
+      ? `https://apply.gowiser.ph?created_by_email=${encodeURIComponent(userEmail)}`
+      : 'https://apply.gowiser.ph';
     Linking.openURL(url).catch(() => { });
-  };
-
-  const broadcastViewing = (applicationId: string, action: 'started_viewing' | 'stopped_viewing') =>
-    apiClient
-      .post('/applications/broadcast-viewing', { application_id: applicationId, action })
-      .catch((err) => console.error(`[Viewing] Failed to broadcast ${action}:`, err));
-
-  const handleRowPress = async (application: Application) => {
-    const previous = selectedApplicationRef.current;
-    if (previous && previous.id !== application.id) {
-      await broadcastViewing(previous.id, 'stopped_viewing');
-    }
-    setSelectedApplication(application);
-    resetIdleTimer();
-    await broadcastViewing(application.id, 'started_viewing');
-  };
-
-  const handleDetailsClose = async () => {
-    const previous = selectedApplicationRef.current;
-    if (previous) await broadcastViewing(previous.id, 'stopped_viewing');
-    setSelectedApplication(null);
-  };
-
-  const handleRelogin = () => {
-    setShowSessionExpired(false);
-    AsyncStorage.removeItem('authData').catch(() => { });
-    if (onLogout) onLogout();
-  };
-
-  const handleDateChange = (target: 'from' | 'to', event: any, date?: Date) => {
-    setDatePickerTarget(null);
-    if (event?.type !== 'set' || !date) return;
-    if (target === 'from') setTimestampFrom(toIsoDay(date));
-    else setTimestampTo(toIsoDay(date));
   };
 
   // ── filter display helpers ────────────────────────────────────────────────
@@ -743,20 +452,19 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     return '';
   };
 
-  // ── sidebar ───────────────────────────────────────────────────────────────
+  // ── sidebar content ───────────────────────────────────────────────────────
 
-  const renderSidebarContent = () => (
+  const SidebarContent = () => (
     <View style={{ flex: 1 }}>
       <View
         style={{
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          paddingHorizontal: 16,
-          paddingBottom: 12,
-          paddingTop: 12,
+          padding: 16,
           borderBottomWidth: 1,
           borderBottomColor: '#e5e7eb',
+          paddingTop: isTablet ? 16 : 60,
         }}
       >
         <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>Applications</Text>
@@ -783,46 +491,6 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       </View>
 
       <ScrollView style={{ flex: 1 }}>
-        {/* Timestamp range */}
-        <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6', gap: 10 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={{ fontSize: 10, fontWeight: '700', letterSpacing: 1, color: '#9ca3af' }}>TIMESTAMP RANGE</Text>
-            {(timestampFrom || timestampTo) && (
-              <TouchableOpacity onPress={() => { setTimestampFrom(''); setTimestampTo(''); }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', letterSpacing: 1, color: primary }}>CLEAR</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {(['from', 'to'] as const).map((target) => {
-            const value = target === 'from' ? timestampFrom : timestampTo;
-            return (
-              <View key={target}>
-                <Text style={{ fontSize: 10, color: '#6b7280', marginBottom: 4 }}>
-                  {target === 'from' ? 'From' : 'To'}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => setDatePickerTarget(target)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    borderWidth: 1,
-                    borderColor: value ? primary : '#d1d5db',
-                    borderRadius: 6,
-                    paddingHorizontal: 10,
-                    paddingVertical: 8,
-                    backgroundColor: '#fff',
-                  }}
-                >
-                  <Text style={{ fontSize: 12, color: value ? '#111827' : '#9ca3af' }}>{value || 'Select date'}</Text>
-                  <Calendar size={14} color={value ? primary : '#9ca3af'} />
-                </TouchableOpacity>
-              </View>
-            );
-          })}
-        </View>
-
         {/* All Applications */}
         <TouchableOpacity
           onPress={() => { setSelectedLocation('all'); setIsSidebarVisible(false); }}
@@ -893,35 +561,8 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
           );
         })}
       </ScrollView>
-
-      <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
-        <TouchableOpacity
-          onPress={() => setIsSidebarVisible(false)}
-          style={{ backgroundColor: primary, borderRadius: 6, paddingVertical: 10, alignItems: 'center' }}
-        >
-          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>View Records</Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
-
-  // ── viewer badges ─────────────────────────────────────────────────────────
-
-  const renderViewerBadges = (applicationId: string) => {
-    const list = viewers[applicationId] || [];
-    if (list.length === 0) return null;
-    return (
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
-        {list.map((username) => (
-          <View key={username} style={{ backgroundColor: primary, borderRadius: 99, paddingHorizontal: 6, paddingVertical: 2 }}>
-            <Text style={{ fontSize: 10, fontWeight: '700', color: '#fff', textTransform: 'lowercase' }}>
-              {username} is viewing
-            </Text>
-          </View>
-        ))}
-      </View>
-    );
-  };
 
   // ── card renderer ─────────────────────────────────────────────────────────
 
@@ -933,7 +574,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
 
     return (
       <TouchableOpacity
-        onPress={() => handleRowPress(item)}
+        onPress={() => setSelectedApplication(item)}
         style={{
           paddingHorizontal: 16,
           paddingVertical: 12,
@@ -951,7 +592,6 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
             >
               {(item.customer_name || '').toLowerCase()}
             </Text>
-            {renderViewerBadges(item.id)}
             <Text style={{ fontSize: 12, color: '#4b5563' }} numberOfLines={2}>
               {(item as any).create_date && (item as any).create_time
                 ? `${(item as any).create_date} ${(item as any).create_time}`
@@ -977,19 +617,10 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
     );
   };
 
-  const listEmpty = (
-    <View style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 80 }}>
-      <Text style={{ color: '#6b7280', fontSize: 14 }}>No applications found matching your filters</Text>
-    </View>
-  );
-
   // ── main render ───────────────────────────────────────────────────────────
 
   return (
     <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
-      {/* List view — kept mounted (not unmounted) while the details screen is open so
-          scroll position and paging survive the round trip, same as JobOrder. */}
-      <View style={{ flex: 1, display: selectedApplication ? 'none' : 'flex' }}>
       {/* Top bar */}
       <View
         style={{
@@ -1012,14 +643,14 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
             height: 38,
             borderRadius: 8,
             borderWidth: 1,
-            borderColor: selectedLocation !== 'all' || timestampFrom || timestampTo ? primary : '#e5e7eb',
+            borderColor: selectedLocation !== 'all' ? primary : '#e5e7eb',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: selectedLocation !== 'all' || timestampFrom || timestampTo ? `${primary}12` : '#fff',
+            backgroundColor: selectedLocation !== 'all' ? `${primary}12` : '#fff',
             flexShrink: 0,
           }}
         >
-          <Menu size={18} color={selectedLocation !== 'all' || timestampFrom || timestampTo ? primary : '#374151'} />
+          <Filter size={18} color={selectedLocation !== 'all' ? primary : '#374151'} />
         </TouchableOpacity>
 
         {/* Search */}
@@ -1091,7 +722,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
         {/* Refresh */}
         <TouchableOpacity
           onPress={handleManualRefresh}
-          disabled={isLoading || isRefreshingManual || !isFullyLoaded}
+          disabled={isLoading || isRefreshingManual}
           style={{
             width: 38,
             height: 38,
@@ -1101,65 +732,17 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: '#fff',
-            opacity: isLoading || isRefreshingManual || !isFullyLoaded ? 0.4 : 1,
+            opacity: isLoading || isRefreshingManual ? 0.4 : 1,
             flexShrink: 0,
           }}
         >
-          {isRefreshingManual || !isFullyLoaded || (isLoading && applications.length === 0) ? (
+          {isRefreshingManual || (isLoading && applications.length === 0) ? (
             <ActivityIndicator size="small" color={primary} />
           ) : (
             <RefreshCw size={18} color={primary} />
           )}
-          {hasNewData && (
-            <View
-              style={{
-                position: 'absolute',
-                top: -3,
-                right: -3,
-                width: 12,
-                height: 12,
-                borderRadius: 6,
-                backgroundColor: '#ef4444',
-                borderWidth: 2,
-                borderColor: '#fff',
-              }}
-            />
-          )}
         </TouchableOpacity>
       </View>
-
-      {/* Loading progress, mirroring the web refresh tooltip */}
-      {!isFullyLoaded && applications.length > 0 && (
-        <View style={{ paddingHorizontal: 16, paddingVertical: 4, backgroundColor: '#fff' }}>
-          <Text style={{ fontSize: 10, color: '#9ca3af' }}>
-            Loading records… ({applications.length}/{totalCount})
-          </Text>
-        </View>
-      )}
-
-      {/* Timestamp range chips */}
-      {(timestampFrom || timestampTo) && (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 8,
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            backgroundColor: '#fff',
-            borderBottomWidth: 1,
-            borderBottomColor: '#e5e7eb',
-          }}
-        >
-          <Text style={{ fontSize: 10, fontWeight: '700', color: '#9ca3af', letterSpacing: 1 }}>TIMESTAMP:</Text>
-          <Text style={{ fontSize: 11, color: primary }}>
-            {timestampFrom || '…'} → {timestampTo || '…'}
-          </Text>
-          <TouchableOpacity onPress={() => { setTimestampFrom(''); setTimestampTo(''); }}>
-            <X size={12} color={primary} />
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* Active filter chips */}
       {activeFilterKeys.length > 0 && (
@@ -1215,7 +798,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
           <ActivityIndicator size="large" color={primary} />
           <Text style={{ marginTop: 12, color: '#6b7280', fontSize: 14 }}>Loading applications...</Text>
         </View>
-      ) : error && applications.length === 0 ? (
+      ) : error ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <Text style={{ color: '#dc2626', fontSize: 14, textAlign: 'center', marginBottom: 16 }}>{error}</Text>
           <TouchableOpacity
@@ -1228,13 +811,18 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       ) : (
         <>
           <FlatList
-            ref={cardListRef}
             style={{ flex: 1 }}
             data={paginatedApplications}
             keyExtractor={(item) => String(item.id)}
             renderItem={renderCard}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={primary} />}
-            ListEmptyComponent={listEmpty}
+            ListEmptyComponent={
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 }}>
+                <Text style={{ color: '#6b7280', fontSize: 14 }}>
+                  No applications found matching your filters
+                </Text>
+              </View>
+            }
             contentContainerStyle={{ flexGrow: 1 }}
           />
 
@@ -1248,170 +836,98 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                 paddingHorizontal: 16,
                 paddingTop: 12,
                 paddingBottom: isTablet ? 12 : 110,
-                gap: 10,
+                flexDirection: isTablet ? 'row' : 'column',
+                alignItems: 'center',
+                justifyContent: isTablet ? 'space-between' : 'center',
+                gap: isTablet ? 0 : 12,
               }}
             >
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: 8,
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={{ fontSize: 12, color: '#4b5563' }}>Show</Text>
-                  <View
-                    style={{
-                      borderWidth: 1,
-                      borderColor: '#d1d5db',
-                      borderRadius: 6,
-                      overflow: 'hidden',
-                      width: 92,
-                      height: 36,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Picker
-                      selectedValue={itemsPerPage}
-                      onValueChange={(v) => {
-                        const next = Number(v);
-                        setItemsPerPage(next);
-                        persist(STORAGE_KEYS.itemsPerPage, String(next));
-                      }}
-                      style={{ color: '#111827' }}
-                      dropdownIconColor="#6b7280"
-                    >
-                      {[10, 25, 50, 100].map((v) => (
-                        <Picker.Item key={v} label={String(v)} value={v} />
-                      ))}
-                    </Picker>
-                  </View>
-                  <Text style={{ fontSize: 12, color: '#4b5563' }}>entries</Text>
+              <Text style={{ fontSize: 12, color: '#4b5563' }}>
+                Showing <Text style={{ fontWeight: '500' }}>{(currentPage - 1) * itemsPerPage + 1}</Text> to{' '}
+                <Text style={{ fontWeight: '500' }}>{Math.min(currentPage * itemsPerPage, filteredApplications.length)}</Text> of{' '}
+                <Text style={{ fontWeight: '500' }}>{filteredApplications.length}</Text> results
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity
+                  onPress={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 4,
+                    minWidth: 40,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: currentPage === 1 ? '#f3f4f6' : '#fff',
+                    borderWidth: currentPage === 1 ? 0 : 1,
+                    borderColor: '#d1d5db',
+                  }}
+                >
+                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: currentPage === 1 ? '#9ca3af' : '#374151' }}>{'<'}</Text>
+                </TouchableOpacity>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={{ paddingHorizontal: 8, fontSize: 14, color: '#111827' }}>
+                    Page {currentPage} of {totalPages}
+                  </Text>
                 </View>
-                <Text style={{ fontSize: 12, color: '#4b5563' }}>
-                  Showing <Text style={{ fontWeight: '500' }}>{(currentPage - 1) * itemsPerPage + 1}</Text> to{' '}
-                  <Text style={{ fontWeight: '500' }}>{Math.min(currentPage * itemsPerPage, filteredApplications.length)}</Text> of{' '}
-                  <Text style={{ fontWeight: '500' }}>{filteredApplications.length}</Text> results
-                </Text>
-              </View>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {([
-                  { label: '«', page: 1, disabled: currentPage === 1 },
-                  { label: '‹', page: currentPage - 1, disabled: currentPage === 1 },
-                ] as const).map((btn) => (
-                  <TouchableOpacity
-                    key={btn.label}
-                    onPress={() => handlePageChange(btn.page)}
-                    disabled={btn.disabled}
-                    style={{
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                      borderRadius: 4,
-                      minWidth: 40,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: btn.disabled ? '#f3f4f6' : '#fff',
-                      borderWidth: btn.disabled ? 0 : 1,
-                      borderColor: '#d1d5db',
-                    }}
-                  >
-                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: btn.disabled ? '#9ca3af' : '#374151' }}>
-                      {btn.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-
-                <Text style={{ paddingHorizontal: 8, fontSize: 14, color: '#111827' }}>
-                  Page {currentPage} of {totalPages}
-                </Text>
-
-                {([
-                  { label: '›', page: currentPage + 1, disabled: currentPage === totalPages },
-                  { label: '»', page: totalPages, disabled: currentPage === totalPages },
-                ] as const).map((btn) => (
-                  <TouchableOpacity
-                    key={btn.label}
-                    onPress={() => handlePageChange(btn.page)}
-                    disabled={btn.disabled}
-                    style={{
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                      borderRadius: 4,
-                      minWidth: 40,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: btn.disabled ? '#f3f4f6' : '#fff',
-                      borderWidth: btn.disabled ? 0 : 1,
-                      borderColor: '#d1d5db',
-                    }}
-                  >
-                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: btn.disabled ? '#9ca3af' : '#374151' }}>
-                      {btn.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                  onPress={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    borderRadius: 4,
+                    minWidth: 40,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: currentPage === totalPages ? '#f3f4f6' : '#fff',
+                    borderWidth: currentPage === totalPages ? 0 : 1,
+                    borderColor: '#d1d5db',
+                  }}
+                >
+                  <Text style={{ fontSize: 18, fontWeight: 'bold', color: currentPage === totalPages ? '#9ca3af' : '#374151' }}>{'>'}</Text>
+                </TouchableOpacity>
               </View>
             </View>
           )}
         </>
       )}
-      </View>
-
-      {/* Application Details — a full-screen inline view, not a modal */}
-      {selectedApplication && (
-        <View style={{ flex: 1 }}>
-          <ApplicationDetails
-            application={selectedApplication as any}
-            onClose={handleDetailsClose}
-            onApplicationUpdate={handleApplicationUpdate}
-            isMobile={!isTablet}
-          />
-        </View>
-      )}
 
       {/* Sidebar Modal */}
       <Modal
-        visible={sidebarRendered}
-        animationType="none"
+        visible={isSidebarVisible}
+        animationType="slide"
         transparent
         onRequestClose={() => setIsSidebarVisible(false)}
       >
-        <View style={{ flex: 1, flexDirection: 'row' }}>
-          <Animated.View
-            pointerEvents="none"
-            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000', opacity: sidebarBackdrop }}
-          />
-          <Animated.View
-            style={{
-              width: '85%',
-              maxWidth: 520,
-              height: '100%',
-              backgroundColor: '#fff',
-              transform: [{ translateX: sidebarSlideX }],
-            }}
-          >
-            {renderSidebarContent()}
-          </Animated.View>
+        <View style={{ flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.4)' }}>
           <TouchableOpacity
             style={{ flex: 1 }}
             activeOpacity={1}
             onPress={() => setIsSidebarVisible(false)}
           />
-          {/* Rendered inside the sidebar Modal — an Android date dialog mounted outside it
-              would be covered by the modal window. */}
-          {datePickerTarget && (
-            <DateTimePicker
-              value={parseIsoDay(datePickerTarget === 'from' ? timestampFrom : timestampTo)}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(event, date) => handleDateChange(datePickerTarget, event, date)}
-            />
-          )}
+          <View style={{ width: '80%', maxWidth: 320, backgroundColor: '#fff', flex: 1 }}>
+            <SidebarContent />
+          </View>
         </View>
       </Modal>
+
+      {/* Application Details Modal */}
+      {selectedApplication && (
+        <Modal
+          visible
+          animationType="slide"
+          onRequestClose={() => setSelectedApplication(null)}
+        >
+          <ApplicationDetails
+            application={selectedApplication as any}
+            onClose={() => setSelectedApplication(null)}
+            onApplicationUpdate={handleApplicationUpdate}
+          />
+        </Modal>
+      )}
 
       {/* Add Application Modal */}
       <AddApplicationModal
@@ -1433,25 +949,6 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
         }}
         currentFilters={funnelFilters}
       />
-
-      {/* Session Expired Modal */}
-      <Modal visible={showSessionExpired} transparent animationType="fade" statusBarTranslucent>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', gap: 12 }}>
-            <LogOut size={44} color="#ef4444" />
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827' }}>Session Expired</Text>
-            <Text style={{ fontSize: 13, color: '#4b5563', textAlign: 'center' }}>
-              Please re-login to continue using the application.
-            </Text>
-            <TouchableOpacity
-              onPress={handleRelogin}
-              style={{ backgroundColor: primary, borderRadius: 8, paddingVertical: 12, width: '100%', alignItems: 'center', marginTop: 4 }}
-            >
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Re-login</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };

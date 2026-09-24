@@ -1,414 +1,500 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  RefreshControl,
-  ActivityIndicator,
-  Dimensions,
-} from 'react-native';
-import {
-  Wifi,
-  WifiOff,
-  Ban,
-  Lock,
-  Server,
-  Cpu,
-  AlertTriangle,
-  CheckCircle2,
-} from 'lucide-react-native';
-import { dashboardService, DashboardCounts } from '../services/dashboardService';
-import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-
-/**
- * The administrator and superadmin landing screen.
- *
- * Ported from the web portal's components/DashboardContent.tsx. What was here
- * before was a mock-up: six cards hardcoded to "0" and "₱0" with nothing behind
- * them, so the first screen an administrator saw after signing in reported
- * nothing about the system it was describing.
- *
- * Same sections as the web, in the same order, off the same endpoint:
- *   RADIUS session counts · RADIUS and SmartOLT integration health ·
- *   this month's support concerns and repair categories · today's support,
- *   visit, job order and application statuses.
- *
- * The charts are bar strips rather than chart.js, matching what LiveMonitor
- * already does on this platform — a horizontal bar per row, which reads better
- * on a narrow screen than a cramped axis anyway.
- */
+import { View, Text, ScrollView, Dimensions } from 'react-native';
+import { TrendingUp, Users, Globe, Wifi, Ticket, Receipt } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Svg, { Defs, LinearGradient, Stop, Polyline, Circle } from 'react-native-svg';
 
 const DashboardContent: React.FC = () => {
-  // App is forced light mode.
-  const isDarkMode = false;
+  const isDarkMode = false; // Forced light mode as per user request
 
-  const [counts, setCounts] = useState<DashboardCounts | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [error, setError] = useState<boolean>(false);
-  const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
-  const primaryColor = colorPalette?.primary || '#7c3aed';
-  const secondaryColor = colorPalette?.secondary || '#10b981';
+
+  const statsCards = [
+    {
+      title: "TODAY'S SALES",
+      value: "₱0",
+      subtitle: "0%",
+      icon: TrendingUp
+    },
+    {
+      title: "SUBSCRIPTIONS",
+      value: "0",
+      subtitle: "",
+      icon: Users
+    },
+    {
+      title: "IP ADDRESSES",
+      value: "0",
+      subtitle: "0 used IPs",
+      icon: Globe
+    },
+    {
+      title: "HOTSPOT USERS",
+      value: "0",
+      subtitle: "0 online",
+      icon: Wifi
+    },
+    {
+      title: "TOTAL TICKETS",
+      value: "0",
+      subtitle: "0 Open",
+      icon: Ticket
+    },
+    {
+      title: "INVOICES",
+      value: "0",
+      subtitle: "0 Unpaid",
+      icon: Receipt
+    }
+  ];
+
   const { width } = Dimensions.get('window');
   const isTablet = width >= 768;
-
-  const fetchCounts = async (silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      const response = await dashboardService.getCounts();
-      if (response.status === 'success') {
-        setCounts(response.data);
-        setError(false);
-      }
-    } catch (err) {
-      console.error('Failed to fetch dashboard counts:', err);
-      if (!silent) setError(true);
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    settingsColorPaletteService
-      .getActive()
-      .then(setColorPalette)
-      .catch((err) => console.error('Failed to fetch color palette:', err));
-
-    fetchCounts(false);
-
-    // Polled silently every 20 seconds, as on the web. Silent so a failed poll
-    // never replaces a screen full of figures with an error banner.
-    const interval = setInterval(() => fetchCounts(true), 20000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await fetchCounts(true);
-    setRefreshing(false);
-  };
-
-  /** Today, as the scope line under each of the daily panels reads it. */
-  const getTodayScope = () => {
-    const today = new Date();
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const month = pad(today.getMonth() + 1);
-    const date = pad(today.getDate());
-    const year = today.getFullYear();
-    return `${month}/${date}/${year} 00:00:00 - ${month}/${date}/${year} 23:59:59`;
-  };
-
-  const getMonthlyScope = () => {
-    const today = new Date();
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const startMonth = pad(today.getMonth() + 1);
-    const year = today.getFullYear();
-    const end = new Date(year, today.getMonth() + 1, 0);
-    const endMonth = pad(end.getMonth() + 1);
-    const endDate = pad(end.getDate());
-    return `${startMonth}/01/${year} 00:00:00 - ${endMonth}/${endDate}/${year} 23:59:59`;
-  };
-
-  /** A figure, or "..." while the first load is still in flight. */
-  const figure = (value: number | undefined) =>
-    loading && !counts ? '...' : (value ?? 0).toLocaleString();
-
-  const MetricCard: React.FC<{
-    title: string;
-    value?: number;
-    icon: React.ReactNode;
-  }> = ({ title, value, icon }) => (
-    <View
-      style={{
-        flex: 1,
-        minWidth: isTablet ? 160 : 140,
-        borderWidth: 1,
-        borderColor: '#d1d5db',
-        borderRadius: 12,
-        padding: 14,
-        backgroundColor: '#ffffff',
-      }}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <Text
-          style={{ fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, color: '#64748b', flexShrink: 1 }}
-          numberOfLines={1}
-        >
-          {title}
-        </Text>
-        {icon}
-      </View>
-      <Text style={{ fontSize: 26, fontWeight: '700', color: '#0f172a' }}>{figure(value)}</Text>
-    </View>
-  );
-
-  const StatusItem: React.FC<{ label: string; value?: number }> = ({ label, value }) => (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 11,
-        paddingHorizontal: 4,
-        borderBottomWidth: 1,
-        borderBottomColor: '#e5e7eb',
-      }}
-    >
-      <Text style={{ fontSize: 13, fontWeight: '500', color: '#475569' }}>{label}</Text>
-      <Text style={{ fontSize: 16, fontWeight: '700', color: '#0f172a' }}>{figure(value)}</Text>
-    </View>
-  );
-
-  const Panel: React.FC<{ title: string; scope: string; children: React.ReactNode }> = ({
-    title,
-    scope,
-    children,
-  }) => (
-    <View
-      style={{
-        borderWidth: 1,
-        borderColor: '#d1d5db',
-        borderRadius: 14,
-        padding: 16,
-        backgroundColor: '#ffffff',
-      }}
-    >
-      <Text style={{ fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1.2, color: '#334155' }}>
-        {title}
-      </Text>
-      <Text style={{ fontSize: 10, letterSpacing: 0.4, color: '#94a3b8', marginTop: 3, marginBottom: 10 }}>
-        {scope}
-      </Text>
-      {children}
-    </View>
-  );
-
-  /**
-   * One integration's health — RADIUS or SmartOLT.
-   *
-   * The web draws these as two cards side by side; stacked here, but carrying
-   * the same three things: whether it is reachable, the server's own error text
-   * when it is not, and when the check last ran.
-   */
-  const ServiceCard: React.FC<{
-    name: string;
-    subtitle: string;
-    icon: React.ReactNode;
-    service?: { status: 'online' | 'offline'; message: string | null; updated_at: string | null };
-    healthyText: string;
-  }> = ({ name, subtitle, icon, service, healthyText }) => {
-    const online = service?.status === 'online';
-
-    return (
-      <View
-        style={{
-          borderWidth: 1,
-          borderColor: '#d1d5db',
-          borderRadius: 14,
-          padding: 16,
-          backgroundColor: '#ffffff',
-          gap: 12,
-        }}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-          <View style={{ padding: 9, borderRadius: 10, backgroundColor: '#f1f5f9' }}>{icon}</View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{name}</Text>
-            <Text style={{ fontSize: 11, color: '#64748b' }}>{subtitle}</Text>
-          </View>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              paddingHorizontal: 10,
-              paddingVertical: 4,
-              borderRadius: 999,
-              borderWidth: 1,
-              backgroundColor: online ? '#ecfdf5' : '#fef2f2',
-              borderColor: online ? '#a7f3d0' : '#fecaca',
-            }}
-          >
-            <View style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: online ? '#10b981' : '#ef4444' }} />
-            <Text style={{ fontSize: 11, fontWeight: '700', color: online ? '#047857' : '#b91c1c' }}>
-              {online ? 'Online' : 'Offline'}
-            </Text>
-          </View>
-        </View>
-
-        {online ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <CheckCircle2 size={16} color="#10b981" />
-            <Text style={{ flex: 1, fontSize: 12, color: '#475569' }}>{healthyText}</Text>
-          </View>
-        ) : (
-          <View style={{ gap: 6 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-              <AlertTriangle size={16} color="#ef4444" />
-              <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: '#b91c1c' }}>
-                Connection failed. System is offline.
-              </Text>
-            </View>
-            {/* The server's own words. Monospaced and kept verbatim, because it
-                is the only description of what actually went wrong. */}
-            {!!service?.message && (
-              <View
-                style={{
-                  padding: 8,
-                  borderRadius: 6,
-                  borderWidth: 1,
-                  borderColor: '#fee2e2',
-                  backgroundColor: '#fef2f2',
-                  marginLeft: 24,
-                }}
-              >
-                <Text style={{ fontSize: 11, color: '#b91c1c', fontFamily: 'monospace' }}>{service.message}</Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {!!service?.updated_at && (
-          <View style={{ borderTopWidth: 1, borderTopColor: '#e5e7eb', paddingTop: 8, gap: 2 }}>
-            <Text style={{ fontSize: 10, color: '#94a3b8' }}>INTEGRATION TYPE: REST API</Text>
-            <Text style={{ fontSize: 10, color: '#94a3b8' }}>
-              LAST RUN: {new Date(service.updated_at).toLocaleString()}
-            </Text>
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  /**
-   * A labelled bar per row, scaled to the largest value.
-   *
-   * The same shape LiveMonitor's BarStrip uses, so the two screens read alike;
-   * chart.js has no place here and a vertical axis on a phone would be unreadable
-   * at these label lengths anyway.
-   */
-  const BarStrip: React.FC<{ data?: { label: string; count: number }[]; color: string }> = ({ data, color }) => {
-    if (!data || data.length === 0) {
-      return <Text style={{ fontSize: 12, color: '#94a3b8', paddingVertical: 12 }}>No data for this period.</Text>;
-    }
-
-    const max = Math.max(...data.map((d) => Number(d.count) || 0), 1);
-
-    return (
-      <View style={{ gap: 9 }}>
-        {data.map((row, idx) => {
-          const value = Number(row.count) || 0;
-          return (
-            <View key={`${row.label}-${idx}`}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
-                <Text style={{ fontSize: 11, color: '#475569', flex: 1 }} numberOfLines={1}>
-                  {row.label}
-                </Text>
-                <Text style={{ fontSize: 11, fontWeight: '700', color, marginLeft: 6 }}>
-                  {value.toLocaleString()}
-                </Text>
-              </View>
-              <View style={{ height: 6, backgroundColor: '#e5e7eb', borderRadius: 3 }}>
-                <View style={{ height: 6, width: `${(value / max) * 100}%`, backgroundColor: color, borderRadius: 3 }} />
-              </View>
-            </View>
-          );
-        })}
-      </View>
-    );
-  };
-
-  if (loading && !counts) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' }}>
-        <ActivityIndicator size="large" color={primaryColor} />
-        <Text style={{ marginTop: 12, color: '#64748b', fontSize: 13 }}>Loading dashboard...</Text>
-      </View>
-    );
-  }
+  const isLargeTablet = width >= 1024;
+  const isDesktop = width >= 1280;
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: '#f8fafc' }}
-      contentContainerStyle={{ padding: 16, paddingTop: isTablet ? 16 : 60, paddingBottom: 96, gap: 16 }}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />
-      }
-    >
-      {error && (
-        <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#fecaca', backgroundColor: '#fef2f2' }}>
-          <Text style={{ fontSize: 13, fontWeight: '600', color: '#dc2626' }}>
-            Unable to fetch dashboard metrics.
+    <ScrollView style={{
+      minHeight: '100%',
+      backgroundColor: isDarkMode ? '#030712' : '#f9fafb'
+    }}>
+      <View style={{ padding: 24 }}>
+        <View style={{ marginBottom: 32 }}>
+          <Text style={{
+            fontSize: 24,
+            fontWeight: '600',
+            marginBottom: 8,
+            color: isDarkMode ? '#ffffff' : '#111827'
+          }}>
+            Dashboard Overview
+          </Text>
+          <Text style={{
+            fontSize: 14,
+            color: isDarkMode ? '#9ca3af' : '#4b5563'
+          }}>
+            Your business management system overview and key metrics
           </Text>
         </View>
-      )}
 
-      {/* RADIUS session counts */}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        <MetricCard title="Online" value={counts?.radius_online} icon={<Wifi size={18} color="#10b981" />} />
-        <MetricCard title="Offline" value={counts?.radius_offline} icon={<WifiOff size={18} color="#64748b" />} />
+        {/* Statistics Cards */}
+        <View style={{
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          gap: 16,
+          marginBottom: 32
+        }}>
+          {statsCards.map((card, index) => {
+            const IconComponent = card.icon;
+            const cardWidth = isDesktop ? `${100 / 6 - 2.67}%` : isLargeTablet ? `${100 / 3 - 2.67}%` : isTablet ? `${100 / 2 - 2}%` : '100%';
+            return (
+              <View key={index} style={{
+                width: cardWidth,
+                padding: 16,
+                borderRadius: 4,
+                borderWidth: 1,
+                backgroundColor: isDarkMode ? '#111827' : '#f3f4f6',
+                borderColor: isDarkMode ? '#374151' : '#d1d5db'
+              }}>
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 8
+                }}>
+                  <IconComponent
+                    size={20}
+                    color={isDarkMode ? '#9ca3af' : '#4b5563'}
+                  />
+                </View>
+                <Text style={{
+                  fontSize: 12,
+                  fontWeight: '500',
+                  marginBottom: 8,
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>
+                  {card.title}
+                </Text>
+                <Text style={{
+                  fontSize: 24,
+                  fontWeight: 'bold',
+                  marginBottom: 4,
+                  color: isDarkMode ? '#ffffff' : '#111827'
+                }}>
+                  {card.value}
+                </Text>
+                {card.subtitle && (
+                  <Text style={{
+                    fontSize: 14,
+                    color: isDarkMode ? '#9ca3af' : '#4b5563'
+                  }}>
+                    {card.subtitle}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+        </View>
+
+        {/* System Statistics */}
+        <View style={{ marginBottom: 32 }}>
+          <Text style={{
+            fontSize: 18,
+            fontWeight: '600',
+            marginBottom: 16,
+            color: isDarkMode ? '#ffffff' : '#111827'
+          }}>
+            SYSTEM STATISTICS
+          </Text>
+          <View style={{
+            flexDirection: isTablet ? 'row' : 'column',
+            gap: 24
+          }}>
+            <View style={{ flex: 1 }}>
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                marginBottom: 8
+              }}>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#d1d5db' : '#374151'
+                }}>Memory</Text>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#ffffff' : '#111827'
+                }}>0%</Text>
+              </View>
+              <View style={{
+                width: '100%',
+                borderRadius: 9999,
+                height: 12,
+                backgroundColor: isDarkMode ? '#374151' : '#d1d5db'
+              }}>
+                <View style={{
+                  backgroundColor: '#3b82f6',
+                  height: 12,
+                  borderRadius: 9999,
+                  width: '0%'
+                }} />
+              </View>
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                marginBottom: 8
+              }}>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#d1d5db' : '#374151'
+                }}>Hard Disk Space</Text>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#ffffff' : '#111827'
+                }}>0%</Text>
+              </View>
+              <View style={{
+                width: '100%',
+                borderRadius: 9999,
+                height: 12,
+                backgroundColor: isDarkMode ? '#374151' : '#d1d5db'
+              }}>
+                <View style={{
+                  backgroundColor: '#3b82f6',
+                  height: 12,
+                  borderRadius: 9999,
+                  width: '0%'
+                }} />
+              </View>
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                marginBottom: 8
+              }}>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#d1d5db' : '#374151'
+                }}>CPU</Text>
+                <Text style={{
+                  fontSize: 14,
+                  color: isDarkMode ? '#ffffff' : '#111827'
+                }}>0%</Text>
+              </View>
+              <View style={{
+                width: '100%',
+                borderRadius: 9999,
+                height: 12,
+                backgroundColor: isDarkMode ? '#374151' : '#d1d5db'
+              }}>
+                <View style={{
+                  backgroundColor: '#3b82f6',
+                  height: 12,
+                  borderRadius: 9999,
+                  width: '0%'
+                }} />
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Charts Section */}
+        <View style={{
+          flexDirection: isLargeTablet ? 'row' : 'column',
+          gap: 24,
+          marginBottom: 32
+        }}>
+          <View style={{
+            flex: 1,
+            padding: 24,
+            borderRadius: 4,
+            borderWidth: 1,
+            backgroundColor: isDarkMode ? '#111827' : '#f3f4f6',
+            borderColor: isDarkMode ? '#374151' : '#d1d5db'
+          }}>
+            <Text style={{
+              fontSize: 18,
+              fontWeight: '600',
+              marginBottom: 16,
+              color: isDarkMode ? '#ffffff' : '#111827'
+            }}>
+              INVOICE SUMMARY
+            </Text>
+            <View style={{
+              height: 192,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <View style={{
+                position: 'relative',
+                width: '100%',
+                height: 128
+              }}>
+                <Svg width="100%" height="100%" viewBox="0 0 400 128">
+                  <Defs>
+                    <LinearGradient id="invoiceGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <Stop offset="0%" stopColor="#06b6d4" />
+                      <Stop offset="100%" stopColor="#3b82f6" />
+                    </LinearGradient>
+                  </Defs>
+                  <Polyline
+                    fill="none"
+                    stroke="url(#invoiceGradient)"
+                    strokeWidth="2"
+                    points="0,64 50,64 100,64 150,64 200,64 250,64 300,64 350,64 400,64"
+                  />
+                  {[0, 50, 100, 150, 200, 250, 300, 350, 400].map((x, i) => (
+                    <Circle key={i} cx={x} cy={64} r="3" fill="#06b6d4" />
+                  ))}
+                </Svg>
+              </View>
+            </View>
+            <View style={{ marginTop: 16 }}>
+              <Text style={{
+                fontSize: 14,
+                color: isDarkMode ? '#9ca3af' : '#4b5563'
+              }}>2025-09-17</Text>
+              <Text style={{
+                fontSize: 14,
+                color: '#4ade80'
+              }}>Grand Total: 0</Text>
+            </View>
+          </View>
+
+          <View style={{
+            flex: 1,
+            padding: 24,
+            borderRadius: 4,
+            borderWidth: 1,
+            backgroundColor: isDarkMode ? '#111827' : '#f3f4f6',
+            borderColor: isDarkMode ? '#374151' : '#d1d5db'
+          }}>
+            <Text style={{
+              fontSize: 18,
+              fontWeight: '600',
+              marginBottom: 16,
+              color: isDarkMode ? '#ffffff' : '#111827'
+            }}>
+              TRANSACTION SUMMARY
+            </Text>
+            <View style={{
+              height: 192,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <View style={{
+                position: 'relative',
+                width: '100%',
+                height: 128
+              }}>
+                <Svg width="100%" height="100%" viewBox="0 0 400 128">
+                  <Defs>
+                    <LinearGradient id="transactionGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <Stop offset="0%" stopColor="#10b981" />
+                      <Stop offset="100%" stopColor="#059669" />
+                    </LinearGradient>
+                  </Defs>
+                  <Polyline
+                    fill="none"
+                    stroke="url(#transactionGradient)"
+                    strokeWidth="2"
+                    points="0,64 50,64 100,64 150,64 200,64 250,64 300,64 350,64 400,64"
+                  />
+                  {[0, 50, 100, 150, 200, 250, 300, 350, 400].map((x, i) => (
+                    <Circle key={i} cx={x} cy={64} r="3" fill="#10b981" />
+                  ))}
+                </Svg>
+              </View>
+            </View>
+            <View style={{ marginTop: 16 }}>
+              <Text style={{
+                fontSize: 14,
+                color: isDarkMode ? '#9ca3af' : '#4b5563'
+              }}>2025-09-17</Text>
+              <Text style={{
+                fontSize: 14,
+                color: '#4ade80'
+              }}>Grand Total: 0</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Recent Tickets */}
+        <View style={{
+          borderRadius: 4,
+          borderWidth: 1,
+          backgroundColor: isDarkMode ? '#111827' : '#f3f4f6',
+          borderColor: isDarkMode ? '#374151' : '#d1d5db'
+        }}>
+          <View style={{
+            padding: 24,
+            borderBottomWidth: 1,
+            borderColor: isDarkMode ? '#374151' : '#d1d5db'
+          }}>
+            <View style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <Text style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: isDarkMode ? '#ffffff' : '#111827'
+              }}>
+                RECENT TICKETS
+              </Text>
+            </View>
+          </View>
+          <ScrollView horizontal style={{ overflow: 'scroll' }}>
+            <View style={{ minWidth: '100%' }}>
+              {/* Table Header */}
+              <View style={{
+                flexDirection: 'row',
+                borderBottomWidth: 1,
+                backgroundColor: isDarkMode ? '#1f2937' : '#e5e7eb',
+                borderColor: isDarkMode ? '#374151' : '#d1d5db'
+              }}>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>SUBJECT</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>CUSTOMER</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>CONTACT NUMBER</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>STATUS</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>LAST UPDATED</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>PRIORITY</Text>
+                <Text style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 12,
+                  flex: 1,
+                  textAlign: 'left',
+                  fontSize: 12,
+                  fontWeight: '500',
+                  textTransform: 'uppercase',
+                  letterSpacing: 1,
+                  color: isDarkMode ? '#9ca3af' : '#4b5563'
+                }}>CATEGORY</Text>
+              </View>
+              {/* Table Body */}
+              <View>
+                <View style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 48,
+                  alignItems: 'center'
+                }}>
+                  <Text style={{
+                    color: isDarkMode ? '#9ca3af' : '#4b5563'
+                  }}>
+                    You don't have any open tickets assigned to you.
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
       </View>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        <MetricCard title="Disconnected" value={counts?.radius_disconnected} icon={<Ban size={18} color="#ef4444" />} />
-        <MetricCard title="Restricted" value={counts?.radius_restricted} icon={<Lock size={18} color="#f97316" />} />
-      </View>
-
-      {/* Integration health */}
-      <ServiceCard
-        name="RADIUS API Connection"
-        subtitle="Mikrotik RouterOS Service"
-        icon={<Server size={20} color={counts?.services?.radius?.status === 'online' ? '#10b981' : '#ef4444'} />}
-        service={counts?.services?.radius}
-        healthyText="Syncing user accounts and active sessions normally."
-      />
-      <ServiceCard
-        name="SmartOLT API Connection"
-        subtitle="ONU Provisioning Service"
-        icon={<Cpu size={20} color={counts?.services?.smartolt?.status === 'online' ? '#10b981' : '#ef4444'} />}
-        service={counts?.services?.smartolt}
-        healthyText="Provisioning and ONU status checks responding normally."
-      />
-
-      {/* This month */}
-      <Panel title="Support Concern Analytics" scope={`Scope: ${getMonthlyScope()}`}>
-        <BarStrip data={counts?.monthly_support_concerns} color={primaryColor} />
-      </Panel>
-
-      <Panel title="Repair Category Distribution" scope={`Scope: ${getMonthlyScope()}`}>
-        <BarStrip data={counts?.monthly_repair_categories} color={secondaryColor} />
-      </Panel>
-
-      {/* Today */}
-      <Panel title="Support Status Today" scope={getTodayScope()}>
-        <StatusItem label="In Progress" value={counts?.support_status_in_progress} />
-        <StatusItem label="For Visit" value={counts?.support_status_for_visit} />
-        <StatusItem label="Resolved" value={counts?.support_status_resolved} />
-        <StatusItem label="Failed" value={counts?.support_status_failed} />
-      </Panel>
-
-      <Panel title="For Visit Today" scope={getTodayScope()}>
-        <StatusItem label="In Progress" value={counts?.visit_status_in_progress} />
-        <StatusItem label="Done" value={counts?.visit_status_done} />
-        <StatusItem label="Rescheduled" value={counts?.visit_status_rescheduled} />
-        <StatusItem label="Failed" value={counts?.visit_status_failed} />
-      </Panel>
-
-      <Panel title="Job Order Onsite Status" scope={getTodayScope()}>
-        <StatusItem label="Pending" value={counts?.jo_status_pending} />
-        <StatusItem label="In Progress" value={counts?.jo_status_in_progress} />
-        <StatusItem label="Done" value={counts?.jo_status_done} />
-        <StatusItem label="Failed" value={counts?.jo_status_failed} />
-      </Panel>
-
-      <Panel title="Application Status" scope={getTodayScope()}>
-        <StatusItem label="Scheduled" value={counts?.app_status_scheduled} />
-        <StatusItem label="In Progress" value={counts?.app_status_in_progress} />
-        <StatusItem label="No Facility" value={counts?.app_status_no_facility} />
-        <StatusItem label="Cancelled" value={counts?.app_status_cancelled} />
-        <StatusItem label="No Slot" value={counts?.app_status_no_slot} />
-        <StatusItem label="Duplicate" value={counts?.app_status_duplicate} />
-      </Panel>
     </ScrollView>
   );
 };

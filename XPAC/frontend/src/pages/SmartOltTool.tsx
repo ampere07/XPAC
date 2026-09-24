@@ -1,22 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertTriangle, ChevronDown, ChevronUp, Download, HardDrive, History, Loader2,
-  Network, PauseCircle, RefreshCw, Router, Trash2, Undo2, UserCog, XCircle
+  Activity, AlertTriangle, ChevronDown, ChevronUp, Download, Gauge, HardDrive, History, Loader2,
+  Network, PauseCircle, RefreshCw, Router, Trash2, Undo2, UserCog, X, XCircle
 } from 'lucide-react';
-import { useDataGrid, type DataGridColumn } from '../hooks/useDataGrid';
-import { useToolTheme } from '../hooks/useToolTheme';
-import { useStatusSlices } from '../hooks/useStatusSlices';
-import { useViewOptions } from '../hooks/useViewOptions';
-import { SelectAllHeaderCell, SelectionBar } from '../components/DataGridControls';
-import { ToolShell, ToolToolbar, ToolDataTable, type SidebarSlice, type ToolNotice } from '../components/tools';
-import TableFunnelFilter, {
-  applyFunnelFilters,
-  deriveOptionsByKey,
-  type FilterValues,
-  type FunnelColumn,
-} from '../filter/TableFunnelFilter';
-import type { SliceDefinition } from '../services/statusSliceService';
-import type { GroupableColumn } from '../services/viewOptionsService';
+import { useDataGrid, type DataGridColumn, type DataGridFilter } from '../hooks/useDataGrid';
+import {
+  ColumnMenu,
+  ExportButton,
+  GridFilterBar,
+  PageSizeSelector,
+  SelectAllHeaderCell,
+  SelectionBar,
+  SortableHeaderCell,
+} from '../components/DataGridControls';
 import {
   smartOltReconciliationService,
   DELETE_CONFIRMATION,
@@ -110,13 +106,8 @@ const TAB_COLUMNS: Record<TabId, Array<DataGridColumn<any>>> = {
       label: 'OLT / Board / Port / Zone',
       value: (row) => [row.olt_name, row.board, row.port, row.zone_name].filter(Boolean).join(' / '),
     },
-    // Inventory is read-only as a table, but it is also the only place that lists
-    // every provisioned ONU, which makes it where an operator goes after a modem
-    // swap. The one action offered here is that swap.
-    { key: 'actions', label: 'Actions', locked: true },
   ],
   mac_alignment: [
-    { key: 'select', label: '', locked: true },
     { key: 'state', label: 'State', value: (row) => MAC_STATE_BADGES[row.state as MacAlignState]?.label ?? row.state },
     { key: 'radius_username', label: 'RADIUS Username', value: (row) => row.radius_username },
     { key: 'calling_station_id', label: 'Calling-Station-Id (MAC)', value: (row) => row.calling_station_id },
@@ -128,7 +119,6 @@ const TAB_COLUMNS: Record<TabId, Array<DataGridColumn<any>>> = {
     { key: 'actions', label: 'Actions', locked: true },
   ],
   sn_alignment: [
-    { key: 'select', label: '', locked: true },
     { key: 'state', label: 'State', value: (row) => SN_STATE_BADGES[row.state as SnAlignState]?.label ?? row.state },
     { key: 'sn', label: 'SmartOLT Serial', value: (row) => row.sn },
     { key: 'billing_sn', label: 'Billing SN', value: (row) => row.billing_sn },
@@ -141,7 +131,6 @@ const TAB_COLUMNS: Record<TabId, Array<DataGridColumn<any>>> = {
     { key: 'actions', label: 'Actions', locked: true },
   ],
   profile: [
-    { key: 'select', label: '', locked: true },
     { key: 'sn', label: 'Serial / Account', value: (row) => [row.sn, row.account_no, row.customer_name].filter(Boolean).join(' ') },
     { key: 'address', label: 'Address', value: (row) => (row.address_changed ? row.new_address : row.old_address) },
     { key: 'contact', label: 'Contact', value: (row) => (row.contact_changed ? row.new_contact : row.old_contact) },
@@ -149,243 +138,134 @@ const TAB_COLUMNS: Record<TabId, Array<DataGridColumn<any>>> = {
     { key: 'vlan', label: 'VLAN', value: (row) => row.olt_vlan },
   ],
   cleanup: [
-    { key: 'select', label: '', locked: true },
     { key: 'sn', label: 'Serial', value: (row) => row.sn },
     { key: 'name', label: 'Name', value: (row) => row.name },
     { key: 'zone', label: 'Zone / OLT', value: (row) => [row.zone_name, row.olt_name].filter(Boolean).join(' / ') },
     { key: 'status', label: 'Status', value: (row) => row.status },
     { key: 'days_offline', label: 'Days Offline', value: (row) => (row.days_offline === null || row.days_offline === undefined ? null : Number(row.days_offline)) },
     { key: 'mac_address', label: 'MAC Address', value: (row) => row.mac_address },
-    // Shown by default. Most guards are advice the operator may act against, but the
-    // pullout guard is a hard gate - an ONU with no Done pullout Service Order cannot
-    // be selected or deleted - so the reason a row is held back has to be on screen,
-    // not one toggle away.
-    { key: 'safety', label: 'Reasons / Blockers', value: (row) => (row.eligible ? '' : (row.reasons ?? []).join(' - ')) },
+    // The old Verdict column is gone: cleanup runs on the operator's selection, not
+    // on an eligibility ruling. What the guards said is kept one toggle away rather
+    // than deleted, so an override can still be read back off the table it was made
+    // from — it starts hidden precisely so it cannot read as a gate.
+    { key: 'safety', label: 'Safety Notes', value: (row) => (row.eligible ? '' : (row.reasons ?? []).join(' - ')), defaultHidden: true },
   ],
   logs: [],
 };
 
-/** What the sidebar's "All" row is called on each tab. */
-const TAB_ALL_LABEL: Record<TabId, string> = {
-  inventory: 'ONUs',
-  mac_alignment: 'Matches',
-  sn_alignment: 'Matches',
-  profile: 'Profiles',
-  cleanup: 'Candidates',
-  logs: 'Operations',
-};
-
-/**
- * The status slices each tab opens with.
- *
- * These replace the dropdown narrowing bar the tool used to carry above the table. The
- * cuts are the same ones - MAC discovered or pending, named or not, which alignment
- * verdict, which kind of pending profile change - but they now live where every other
- * SYNC list screen keeps them, and the operator can reorder, recolor or hide any of
- * them for their own account.
- *
- * Keyed per tab because the six tables share no vocabulary: an "Aligned" ONU and a
- * "Fill" subscriber are answers to different questions.
- */
-const TAB_SLICES: Record<TabId, SliceDefinition[]> = {
+/** Dropdown narrowing per tab, cutting across what the free-text search can express. */
+const TAB_FILTERS: Record<TabId, Array<DataGridFilter<any>>> = {
   inventory: [
-    { id: 'online', label: 'Online', color: '#10b981' },
-    { id: 'offline', label: 'Not Online', color: '#64748b' },
-    { id: 'name_not_set', label: 'Name Not Set', color: '#f59e0b' },
-    { id: 'named', label: 'Named', color: '#3b82f6' },
-    { id: 'mac_cached', label: 'Bridge MAC Discovered', color: '#06b6d4' },
-    { id: 'mac_pending', label: 'Pending MAC Discovery', color: '#f97316' },
+    {
+      key: 'mac',
+      label: 'Bridge MAC',
+      options: [
+        { value: 'cached', label: 'Discovered' },
+        { value: 'pending', label: 'Pending discovery' },
+      ],
+      predicate: (row, value) => (value === 'cached' ? !!row.mac_address : !row.mac_address),
+    },
+    {
+      key: 'naming',
+      label: 'Naming',
+      options: [
+        { value: 'named', label: 'Named' },
+        { value: 'not_set', label: 'Name not set' },
+      ],
+      predicate: (row, value) => {
+        const notSet = !String(row.name || '').trim() || String(row.name).trim().toLowerCase() === 'not set';
+        return value === 'not_set' ? notSet : !notSet;
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      options: [
+        { value: 'online', label: 'Online' },
+        { value: 'offline', label: 'Not online' },
+      ],
+      predicate: (row, value) =>
+        value === 'online'
+          ? String(row.status).toLowerCase() === 'online'
+          : String(row.status).toLowerCase() !== 'online',
+    },
   ],
   mac_alignment: [
-    { id: 'rename_needed', label: 'Rename Needed', color: '#f59e0b' },
-    { id: 'aligned', label: 'Already Aligned', color: '#10b981' },
-    { id: 'unmatched', label: 'Unmatched', color: '#a855f7' },
-    { id: 'no_mac', label: 'Awaiting MAC Discovery', color: '#6b7280' },
+    {
+      key: 'state',
+      label: 'State',
+      options: (Object.keys(MAC_STATE_BADGES) as MacAlignState[]).map((state) => ({
+        value: state,
+        label: MAC_STATE_BADGES[state].label,
+      })),
+      predicate: (row, value) => row.state === value,
+    },
+    {
+      key: 'eligible',
+      label: 'Actionable',
+      options: [
+        { value: 'yes', label: 'Can be renamed' },
+        { value: 'no', label: 'Blocked' },
+      ],
+      predicate: (row, value) => (value === 'yes' ? !!row.eligible : !row.eligible),
+    },
   ],
   sn_alignment: [
-    { id: 'sn_missing', label: 'Fill (No SN Recorded)', color: '#f59e0b' },
-    { id: 'sn_mismatch', label: 'Replace (SN Differs)', color: '#f97316' },
-    { id: 'sn_aligned', label: 'Already Aligned', color: '#10b981' },
-    { id: 'sn_no_subscriber', label: 'No Billing Record', color: '#ef4444' },
-    { id: 'sn_unmatched', label: 'Unmatched', color: '#a855f7' },
-    { id: 'sn_no_mac', label: 'Awaiting MAC Discovery', color: '#6b7280' },
+    {
+      key: 'state',
+      label: 'State',
+      options: (Object.keys(SN_STATE_BADGES) as SnAlignState[]).map((state) => ({
+        value: state,
+        label: SN_STATE_BADGES[state].label,
+      })),
+      predicate: (row, value) => row.state === value,
+    },
+    {
+      key: 'eligible',
+      label: 'Actionable',
+      options: [
+        { value: 'yes', label: 'Can be written' },
+        { value: 'no', label: 'Blocked' },
+      ],
+      predicate: (row, value) => (value === 'yes' ? !!row.eligible : !row.eligible),
+    },
   ],
   profile: [
-    { id: 'address', label: 'Address Change', color: '#3b82f6' },
-    { id: 'contact', label: 'Contact Change', color: '#06b6d4' },
-    { id: 'coords', label: 'Coordinate Change', color: '#8b5cf6' },
-    { id: 'vlan', label: 'VLAN Drift', color: '#f59e0b' },
+    {
+      key: 'change',
+      label: 'Pending change',
+      options: [
+        { value: 'address', label: 'Address' },
+        { value: 'contact', label: 'Contact' },
+        { value: 'coords', label: 'Coordinates' },
+        { value: 'vlan', label: 'VLAN drift' },
+      ],
+      predicate: (row, value) => {
+        if (value === 'address') return !!row.address_changed;
+        if (value === 'contact') return !!row.contact_changed;
+        if (value === 'coords') return !!row.coords_changed;
+        return !!row.vlan_drift;
+      },
+    },
   ],
+  // No verdict dropdown. The Inactive ONU table is a worklist of what has been dark
+  // past the threshold, and the operator decides what comes off it; narrowing by an
+  // eligibility ruling was the gate this tool no longer applies. Whether a bridge MAC
+  // is known is the useful cut instead — an ONU nothing has ever authenticated behind
+  // is a different decommission decision from one that has a subscriber attached.
   cleanup: [
-    { id: 'mac_cached', label: 'Bridge MAC Known', color: '#06b6d4' },
-    { id: 'mac_pending', label: 'Never Crawled', color: '#6b7280' },
-    { id: 'blocked', label: 'Safety Objection', color: '#f59e0b' },
-    { id: 'clear', label: 'No Objection', color: '#10b981' },
-    { id: 'pullout_pending', label: 'No Done Pullout', color: '#ef4444' },
+    {
+      key: 'mac',
+      label: 'Bridge MAC',
+      options: [
+        { value: 'cached', label: 'Discovered' },
+        { value: 'pending', label: 'Never crawled' },
+      ],
+      predicate: (row, value) => (value === 'cached' ? !!row.mac_address : !row.mac_address),
+    },
   ],
   logs: [],
 };
-
-/**
- * Does a row belong to a slice?
- *
- * One predicate per tab rather than per slice, because on every tab the answer is a
- * single switch over the row's own state. Anything unrecognised falls through to true,
- * so a slice added ahead of its predicate shows everything rather than nothing.
- */
-const sliceMatches = (tab: TabId, row: any, sliceId: string): boolean => {
-  if (sliceId === 'all') return true;
-
-  switch (tab) {
-    case 'inventory': {
-      const notSet = !String(row.name || '').trim() || String(row.name).trim().toLowerCase() === 'not set';
-      switch (sliceId) {
-        case 'online': return String(row.status).toLowerCase() === 'online';
-        case 'offline': return String(row.status).toLowerCase() !== 'online';
-        case 'name_not_set': return notSet;
-        case 'named': return !notSet;
-        case 'mac_cached': return !!row.mac_address;
-        case 'mac_pending': return !row.mac_address;
-        default: return true;
-      }
-    }
-
-    case 'profile':
-      switch (sliceId) {
-        case 'address': return !!row.address_changed;
-        case 'contact': return !!row.contact_changed;
-        case 'coords': return !!row.coords_changed;
-        case 'vlan': return !!row.vlan_drift;
-        default: return true;
-      }
-
-    case 'cleanup':
-      switch (sliceId) {
-        case 'mac_cached': return !!row.mac_address;
-        case 'mac_pending': return !row.mac_address;
-        // Advisory, not a gate: cleanup runs on the operator's selection and an
-        // objection is recorded with the deletion rather than preventing it. This
-        // only lets them look at one group at a time.
-        case 'blocked': return !row.eligible;
-        case 'clear': return !!row.eligible;
-        // The exception to the above. No Done pullout Service Order is a hard block,
-        // enforced by the delete job, so these rows cannot be selected at all.
-        case 'pullout_pending': return row.pullout_cleared !== true;
-        default: return true;
-      }
-
-    case 'mac_alignment':
-    case 'sn_alignment':
-      return row.state === sliceId;
-
-    default:
-      return true;
-  }
-};
-
-/** Columns the funnel panel narrows on, per tab. */
-const TAB_FUNNEL_COLUMNS: Record<TabId, FunnelColumn[]> = {
-  inventory: [
-    { key: 'name', label: 'Smart OLT Name', dataType: 'varchar' },
-    { key: 'sn', label: 'Serial', dataType: 'varchar' },
-    { key: 'status', label: 'Status', dataType: 'checklist' },
-    { key: 'mac_address', label: 'MAC Address', dataType: 'varchar' },
-    { key: 'olt_name', label: 'OLT', dataType: 'checklist' },
-    { key: 'zone_name', label: 'Zone', dataType: 'checklist' },
-    { key: 'days_offline', label: 'Days Offline', dataType: 'int' },
-  ],
-  mac_alignment: [
-    { key: 'radius_username', label: 'RADIUS Username', dataType: 'varchar' },
-    { key: 'calling_station_id', label: 'Calling-Station-Id', dataType: 'varchar' },
-    { key: 'current_name', label: 'Current SmartOLT Name', dataType: 'varchar' },
-    { key: 'target_name', label: 'Target Name', dataType: 'varchar' },
-    { key: 'sn', label: 'Serial', dataType: 'varchar' },
-    { key: 'server_label', label: 'RADIUS Server', dataType: 'checklist' },
-    { key: 'status', label: 'ONU Status', dataType: 'checklist' },
-  ],
-  sn_alignment: [
-    { key: 'sn', label: 'SmartOLT Serial', dataType: 'varchar' },
-    { key: 'billing_sn', label: 'Billing SN', dataType: 'varchar' },
-    { key: 'account_no', label: 'Account No', dataType: 'varchar' },
-    { key: 'customer_name', label: 'Customer', dataType: 'varchar' },
-    { key: 'radius_username', label: 'RADIUS Username', dataType: 'varchar' },
-    { key: 'server_label', label: 'RADIUS Server', dataType: 'checklist' },
-    { key: 'status', label: 'ONU Status', dataType: 'checklist' },
-  ],
-  profile: [
-    { key: 'sn', label: 'Serial', dataType: 'varchar' },
-    { key: 'account_no', label: 'Account No', dataType: 'varchar' },
-    { key: 'customer_name', label: 'Customer', dataType: 'varchar' },
-    { key: 'olt_vlan', label: 'OLT VLAN', dataType: 'checklist' },
-    { key: 'billing_vlan', label: 'Billing VLAN', dataType: 'checklist' },
-  ],
-  cleanup: [
-    { key: 'sn', label: 'Serial', dataType: 'varchar' },
-    { key: 'name', label: 'Name', dataType: 'varchar' },
-    { key: 'zone_name', label: 'Zone', dataType: 'checklist' },
-    { key: 'olt_name', label: 'OLT', dataType: 'checklist' },
-    { key: 'status', label: 'Status', dataType: 'checklist' },
-    { key: 'days_offline', label: 'Days Offline', dataType: 'int' },
-    { key: 'mac_address', label: 'MAC Address', dataType: 'varchar' },
-  ],
-  logs: [],
-};
-
-/**
- * Columns each tab can be grouped, sorted and coloured by.
- *
- * Per tab for the same reason the slices are: the six tables share no vocabulary, and
- * offering "Billing SN" as a group level on the inventory tab would produce a tree
- * over a column that does not exist there.
- *
- * Deliberately narrower than the table's columns. Grouping is only useful over a value
- * with few enough distinct entries to read as a tree, so a serial and a MAC address are
- * not offered — the OLT, the zone and the verdict are.
- */
-const TAB_GROUPABLE: Record<TabId, Array<GroupableColumn<any>>> = {
-  inventory: [
-    { key: 'status', label: 'Status', value: (row) => row.status },
-    { key: 'olt_name', label: 'OLT', value: (row) => row.olt_name },
-    { key: 'zone_name', label: 'Zone', value: (row) => row.zone_name },
-    { key: 'board', label: 'Board', value: (row) => row.board },
-    { key: 'port', label: 'Port', value: (row) => row.port },
-    { key: 'odb_name', label: 'ODB', value: (row) => row.odb_name },
-    { key: 'mac_known', label: 'Bridge MAC', value: (row) => (row.mac_address ? 'Discovered' : 'Pending discovery') },
-  ],
-  mac_alignment: [
-    { key: 'state', label: 'Verdict', value: (row) => MAC_STATE_BADGES[row.state as MacAlignState]?.label ?? row.state },
-    { key: 'server_label', label: 'RADIUS Server', value: (row) => row.server_label },
-    { key: 'status', label: 'ONU Status', value: (row) => row.status },
-  ],
-  sn_alignment: [
-    { key: 'state', label: 'Verdict', value: (row) => SN_STATE_BADGES[row.state as SnAlignState]?.label ?? row.state },
-    { key: 'server_label', label: 'RADIUS Server', value: (row) => row.server_label },
-    { key: 'status', label: 'ONU Status', value: (row) => row.status },
-    { key: 'customer_name', label: 'Customer', value: (row) => row.customer_name },
-  ],
-  profile: [
-    { key: 'olt_vlan', label: 'OLT VLAN', value: (row) => row.olt_vlan },
-    { key: 'billing_vlan', label: 'Billing VLAN', value: (row) => row.billing_vlan },
-    { key: 'vlan_drift', label: 'VLAN Drift', value: (row) => (row.vlan_drift ? 'Drifted' : 'Matches') },
-    { key: 'customer_name', label: 'Customer', value: (row) => row.customer_name },
-  ],
-  cleanup: [
-    { key: 'status', label: 'Status', value: (row) => row.status },
-    { key: 'zone_name', label: 'Zone', value: (row) => row.zone_name },
-    { key: 'olt_name', label: 'OLT', value: (row) => row.olt_name },
-    { key: 'safety', label: 'Safety', value: (row) => (row.eligible ? 'No objection' : 'Objection recorded') },
-    { key: 'pullout', label: 'Pullout', value: (row) => (row.pullout_cleared === true ? 'Done' : 'Not done') },
-    { key: 'mac_known', label: 'Bridge MAC', value: (row) => (row.mac_address ? 'Known' : 'Never crawled') },
-  ],
-  logs: [],
-};
-
-/** One SN-alignment queue item, built the same way by every batch trigger. */
-const snItem = (row: any) => ({
-  external_id: row.external_id,
-  technical_detail_id: row.technical_detail_id,
-  new_sn: row.sn,
-});
 
 /** ONU rows are keyed by SmartOLT's own external id on every tab. */
 const onuRowKey = (row: any) => String(row.external_id);
@@ -406,20 +286,14 @@ const formatMetric = (value: number | null | undefined): string =>
  * profile tabs still gate on the backend's `eligible`, because there an ineligible row
  * is one with nothing to apply — selecting it would queue a no-op.
  *
- * Cleanup is not gated on `eligible`. That flag is a safety opinion about a real
+ * Cleanup is deliberately not gated. `eligible` there is a safety opinion about a real
  * candidate, not a statement that there is nothing to do, and this tool lets the
  * operator act against it: the objection is recorded with the deletion instead of
- * preventing it.
- *
- * The one exception is the pullout guard. An ONU with no Done pullout Service Order
- * for its serial or account is refused by the delete job whatever the operator
- * selected, so it is not offered for selection - a row that can only ever come back
- * "blocked" should not look deletable. The reason shows in the Reasons / Blockers
- * column.
+ * preventing it. Blocking selection is what the old verdict gate did.
  */
 const isRowSelectable = (tab: TabId) => (row: any) => {
   if (tab === 'inventory') return false;
-  if (tab === 'cleanup') return row.pullout_cleared === true;
+  if (tab === 'cleanup') return true;
   return !!row.eligible;
 };
 
@@ -450,29 +324,13 @@ const JOB_POLL_MS = 2_000;
 const PAUSED_POLL_MS = 30_000;
 
 const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp }) => {
-  const { isDarkMode, colorPalette, isMobile } = useToolTheme(isDarkModeProp);
-  const accent = colorPalette?.primary || '#7c3aed';
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    if (typeof isDarkModeProp === 'boolean') return isDarkModeProp;
+    const theme = localStorage.getItem('theme');
+    return theme === 'dark' || theme === null;
+  });
 
   const [tab, setTab] = useState<TabId>('inventory');
-
-  /** The sidebar selection, and the funnel panel, both scoped to the active tab. */
-  const [slice, setSlice] = useState('all');
-  const [funnelOpen, setFunnelOpen] = useState(false);
-  const [funnelFilters, setFunnelFilters] = useState<FilterValues>({});
-  const [showMetrics, setShowMetrics] = useState(true);
-
-  // Replace SN. Held here rather than inside the modal so a mis-typed serial survives
-  // a re-render, and so the row it belongs to cannot drift out from under the dialog.
-  const [replaceTarget, setReplaceTarget] = useState<any | null>(null);
-  const [replaceSn, setReplaceSn] = useState('');
-  const [replaceWriteBilling, setReplaceWriteBilling] = useState(true);
-  const [replacing, setReplacing] = useState(false);
-
-  const sliceDefinitions = useMemo(() => TAB_SLICES[tab], [tab]);
-  const { slices, visibleSlices, save: saveSlices, reset: resetSlices } = useStatusSlices(
-    `smartolt.${tab}`,
-    sliceDefinitions
-  );
   const [state, setState] = useState<SmartOltState | null>(null);
   const [macAlignment, setMacAlignment] = useState<MacAlignmentPreview | null>(null);
   const [snAlignment, setSnAlignment] = useState<SnAlignmentPreview | null>(null);
@@ -481,7 +339,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
   const [logs, setLogs] = useState<SmartOltLog[]>([]);
 
   const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState<ToolNotice | null>(null);
+  const [notice, setNotice] = useState<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   const [offlineDays, setOfflineDays] = useState(30);
 
@@ -508,16 +366,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
   const jobWatched = useRef(false);
   /** Last message written to the run log, so re-reads of the same step are not repeated. */
   const lastJobMessage = useRef<string | null>(null);
-  /**
-   * A bridge-MAC crawl queued behind the RADIUS status sync.
-   *
-   * "Sync RADIUS & discover MACs" is one button but two jobs, and only one job may
-   * hold the tool's single slot at a time. Rather than fire both and have the second
-   * refused, the crawl is parked here and started when the first finishes. A ref, not
-   * state: it is read inside the poll callback, where a state value would be the one
-   * captured by the render that scheduled it.
-   */
-  const pendingMacScan = useRef<{ rescan: boolean } | null>(null);
 
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -533,6 +381,21 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
       if (jobTimer.current) clearTimeout(jobTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof isDarkModeProp === 'boolean') {
+      setIsDarkMode(isDarkModeProp);
+      return;
+    }
+    const check = () => {
+      const theme = localStorage.getItem('theme');
+      setIsDarkMode(theme === 'dark' || theme === null);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, [isDarkModeProp]);
 
   // ---- Loaders -----------------------------------------------------------
 
@@ -642,20 +505,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
           text: result.job.message,
         });
 
-        // The second half of "Sync RADIUS & discover MACs". Only chained off a
-        // completed status sync: an aborted or failed one means the operator stopped
-        // the sweep or it broke, and neither is a reason to start spending the
-        // per-ONU quota the crawl costs. Cleared either way so it can never fire twice.
-        const queuedScan = pendingMacScan.current;
-        pendingMacScan.current = null;
-
-        if (queuedScan !== null && result.job.type === 'radius_scan' && result.job.status === 'completed') {
-          appendJobLog('Status sync finished — starting bridge MAC discovery.');
-          await loadState(true);
-          await startJobRef.current?.('optical_scan', { rescan: queuedScan.rescan });
-          return;
-        }
-
         // Refresh whatever the finished job just changed.
         await loadState(true);
         if (tab !== 'inventory') await loadTabData(tab);
@@ -700,16 +549,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * `startJob`, reachable from `pollJob`.
-   *
-   * The two are mutually recursive - a finished status sync starts the MAC crawl, and
-   * every started job installs a poll - and `startJob` is declared after `pollJob`.
-   * Routing one direction through a ref keeps both callbacks stable instead of
-   * rebuilding the poll on every render.
-   */
-  const startJobRef = useRef<((type: JobType, options?: Record<string, any>) => Promise<void>) | null>(null);
-
   const startJob = useCallback(
     async (type: JobType, options: Record<string, any> = {}) => {
       setJobLog([]);
@@ -731,10 +570,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
     },
     [appendJobLog, pollJob]
   );
-
-  useEffect(() => {
-    startJobRef.current = startJob;
-  }, [startJob]);
 
   /**
    * Stop watching. The job itself keeps running.
@@ -814,99 +649,30 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
   }, [state]);
 
   const gridColumns = useMemo(() => TAB_COLUMNS[tab], [tab]);
+  const gridFilters = useMemo(() => TAB_FILTERS[tab], [tab]);
   const selectable = useMemo(() => isRowSelectable(tab), [tab]);
 
-  /**
-   * Dynamic grouping, sorting and per-value colours, namespaced per tab.
-   *
-   * Built over the whole tab rather than the narrowed view, so a group count says how
-   * many ONUs sit under that value — not how many survived the search box.
-   */
-  const groupableColumns = useMemo(() => TAB_GROUPABLE[tab], [tab]);
-  const grouping = useViewOptions(`smartolt.${tab}`, groupableColumns, activeRows);
-
-  const funnelColumns = useMemo(() => TAB_FUNNEL_COLUMNS[tab], [tab]);
-  const funnelOptions = useMemo(
-    () => deriveOptionsByKey(activeRows, funnelColumns),
-    [activeRows, funnelColumns]
-  );
-
-  /** The sidebar selection narrows first, then the funnel panel; the grid does the rest. */
-  const sliceRows = useMemo(() => {
-    // Grouped, the sidebar selection is a path into the tree and it replaces the slice
-    // narrowing entirely — the two are competing answers to the same question.
-    let result = grouping.isGrouped
-      ? grouping.filterByGroup(activeRows, slice)
-      : slice === 'all'
-        ? activeRows
-        : activeRows.filter((row) => sliceMatches(tab, row, slice));
-
-    if (Object.keys(funnelFilters).length > 0) {
-      result = applyFunnelFilters(result, funnelFilters);
-    }
-
-    return result;
-  }, [activeRows, tab, slice, funnelFilters, grouping]);
-
-  /** Slice counts come from the whole tab, not the narrowed view — a count that moved
-      with the filter would make the sidebar useless for deciding where to look next. */
-  const sidebarSlices: SidebarSlice[] = useMemo(
-    () =>
-      visibleSlices.map((definition) => ({
-        ...definition,
-        count: activeRows.filter((row) => sliceMatches(tab, row, definition.id)).length,
-      })),
-    [visibleSlices, activeRows, tab]
-  );
-
   const grid = useDataGrid<any>({
-    rows: sliceRows,
+    rows: activeRows,
     columns: gridColumns,
     rowKey: onuRowKey,
     isSelectable: selectable,
+    filters: gridFilters,
     pageSize: PAGE_SIZE,
     // One namespace per tab — the four tables share no columns, so they must not
     // share a stored layout either.
     storageKey: `smartolt_tool.columns.${tab}`,
   });
 
-  const { selected } = grid;
+  const { pagedRows, selected, page, totalPages, visibleColumns } = grid;
+  const toggle = grid.toggleRow;
   const { clearSelection: clearGridSelection, setPage: setGridPage } = grid;
-
-  /**
-   * Adopt the configured sort once this tab's preferences have loaded.
-   *
-   * Applied to the grid rather than pre-sorting the rows, so a header click still wins
-   * for the rest of the session — the saved order is a starting point, not a lock.
-   */
-  const sortSignature = JSON.stringify(grouping.sortRules);
-  useEffect(() => {
-    if (!grouping.loaded || grouping.sortRules.length === 0) return;
-    grid.setSort(grouping.sortRules);
-    // sortSignature stands in for the rules array, whose identity changes every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouping.loaded, sortSignature]);
-
-  /**
-   * Changing the grouping invalidates the selection.
-   *
-   * A node path from the previous hierarchy names levels that no longer exist, so it
-   * would silently match nothing and the table would render empty.
-   */
-  const groupSignature = grouping.options.groupBy.join('|');
-  useEffect(() => {
-    setSlice('all');
-  }, [groupSignature]);
 
   // Switching tab swaps the dataset wholesale: ids from the previous tab must not carry
   // a selection over, and page 3 of the old table means nothing in the new one.
   useEffect(() => {
     clearGridSelection();
     setGridPage(1);
-    // A slice id from the previous tab means nothing on this one, and a funnel filter
-    // keyed on a column that no longer exists would silently empty the table.
-    setSlice('all');
-    setFunnelFilters({});
     if (tab !== 'inventory') loadTabData(tab);
   }, [tab, loadTabData, clearGridSelection, setGridPage]);
 
@@ -934,69 +700,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
     await loadState(true);
     setNotice({ tone: 'info', text: 'Re-matched against the live RADIUS sessions and the current billing records.' });
   }, [clearGridSelection, setGridPage, loadTabData, loadState]);
-
-  /**
-   * Sync RADIUS, then discover the bridge MACs.
-   *
-   * Two jobs, one operator intention: read who is authenticating, then find the MAC
-   * that binds a session to an ONU. Only one job may hold the slot at a time, so this
-   * starts the status sync and hands the crawl off to the completion path rather than
-   * firing both and having the second refused.
-   *
-   * `rescan` re-reads every ONU instead of only the ones never crawled. It is the
-   * expensive choice - one throttled call per ONU across the whole estate - so it is
-   * behind a shift-click rather than on the button itself.
-   */
-  const startReconcileSweep = useCallback(
-    async (rescan: boolean) => {
-      pendingMacScan.current = { rescan };
-      await startJob('radius_scan');
-    },
-    [startJob]
-  );
-
-  /**
-   * Apply a serial replacement, then put the screen back in step with it.
-   *
-   * The inventory is re-read rather than patched: the ONU's serial is what the MAC and
-   * SN alignment passes match on, so a stale copy here would have the next batch write
-   * the old serial straight back into billing.
-   */
-  const confirmReplaceSn = useCallback(async () => {
-    if (!replaceTarget) return;
-
-    const target = replaceTarget;
-    const serial = replaceSn.trim();
-
-    setReplacing(true);
-    try {
-      const result = await smartOltReconciliationService.replaceSn(
-        target.external_id,
-        serial,
-        replaceWriteBilling ? target.technical_detail_id ?? null : null
-      );
-
-      setNotice({
-        tone: result.success ? (result.skipped ? 'info' : 'success') : 'error',
-        text: result.message,
-      });
-
-      if (result.success) {
-        setReplaceTarget(null);
-        setReplaceSn('');
-        await loadState(true);
-        if (tab !== 'inventory') await loadTabData(tab);
-      }
-    } finally {
-      setReplacing(false);
-    }
-  }, [replaceTarget, replaceSn, replaceWriteBilling, loadState, loadTabData, tab]);
-
-  const openReplaceSn = useCallback((row: any) => {
-    setReplaceTarget(row);
-    setReplaceSn('');
-    setReplaceWriteBilling(true);
-  }, []);
 
   const confirmUndo = useCallback(async () => {
     if (!undoTarget) return;
@@ -1031,6 +734,9 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
   const exportDataset: 'inventory' | 'alignment' | 'sn_alignment' | 'profile' | 'cleanup' =
     tab === 'sn_alignment' || tab === 'profile' || tab === 'cleanup' ? tab : 'inventory';
 
+  /** Checkbox column included, when the tab has one. */
+  const columnSpan = visibleColumns.length + (tab === 'inventory' ? 0 : 1);
+
   const emptyMessage =
     tab === 'inventory'
       ? (<>No ONU in the cache. Run <strong>Sync Inventory</strong> to download it from SmartOLT.</>)
@@ -1053,28 +759,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
             : `No ONU has been offline for ${offlineDays} days or more.`;
 
   /**
-   * The select-all header, on the tabs that have a checkbox column.
-   *
-   * Inventory is read-only and declares no `select` column at all, so nothing here
-   * fires for it.
-   */
-  const renderHeaderCell = (column: DataGridColumn<any>) =>
-    column.key === 'select' ? (
-      <SelectAllHeaderCell
-        isDarkMode={isDarkMode}
-        isPageSelected={grid.isPageSelected}
-        isAllFilteredSelected={grid.isAllFilteredSelected}
-        selectablePageCount={grid.selectablePageCount}
-        selectableFilteredCount={grid.selectableFilteredCount}
-        selectedCount={grid.selectedCount}
-        onSelectPage={grid.selectPage}
-        onDeselectPage={grid.deselectPage}
-        onSelectAllFiltered={grid.selectAllFiltered}
-        onClearSelection={grid.clearSelection}
-      />
-    ) : null;
-
-  /**
    * One table cell, chosen by column key within the active tab.
    *
    * Keys are namespaced by tab in `TAB_COLUMNS`, and a few (`sn`, `name`, `status`) are
@@ -1082,26 +766,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
    */
   const renderCell = (columnKey: string, row: any): React.ReactNode => {
     // ---- shared across tabs ----
-    if (columnKey === 'select') {
-      const id = onuRowKey(row);
-      return (
-        <td className="px-3 py-2.5">
-          {/* Disabled state comes from the same predicate the header's select-all uses.
-              It was once hardcoded to `!row.eligible`, which the two could - and did -
-              disagree about: after cleanup stopped gating on eligibility, Select All
-              took every inactive ONU while the individual boxes stayed greyed out, so a
-              row could be selected in bulk but not on its own. */}
-          <input
-            type="checkbox"
-            disabled={!selectable(row)}
-            checked={grid.selected.has(id)}
-            onChange={(event) => grid.toggleRow(id, event.target.checked)}
-            className="rounded disabled:opacity-30"
-          />
-        </td>
-      );
-    }
-
     if (columnKey === 'sn' && tab !== 'profile') {
       return <td className={`px-3 py-2.5 font-mono text-xs ${text}`}>{row.sn || '—'}</td>;
     }
@@ -1130,19 +794,6 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
           return (
             <td className={`px-3 py-2.5 text-xs font-mono ${row.mac_address ? text : muted}`}>
               {row.mac_address || 'pending discovery'}
-            </td>
-          );
-        case 'actions':
-          return (
-            <td className="px-3 py-2.5 text-right">
-              <button
-                onClick={() => openReplaceSn(row)}
-                disabled={jobRunning || !state?.configured}
-                title="The modem behind this ONU was swapped — point the provisioning record at the new serial"
-                className={`px-2 py-1 rounded border text-xs font-medium disabled:opacity-40 ${card} ${text}`}
-              >
-                Replace SN
-              </button>
             </td>
           );
         default:
@@ -1253,34 +904,25 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
           return <td className={`px-3 py-2.5 text-xs ${muted}`}>{row.status}</td>;
         case 'actions':
           return (
-            <td className="px-3 py-2.5">
-              <div className="flex items-center justify-end gap-1">
-                {row.eligible ? (
-                  <button
-                    onClick={() => startJob('sn_alignment', { items: [snItem(row)] })}
-                    disabled={jobRunning}
-                    title={`Write "${row.sn}" into this subscriber's router/modem SN`}
-                    className="px-2 py-1 rounded border text-xs font-medium disabled:opacity-40"
-                    style={{ borderColor: `${accent}66`, color: accent }}
-                  >
-                    {row.state === 'sn_mismatch' ? 'Adopt SN' : 'Write SN'}
-                  </button>
-                ) : (
-                  <span className={`text-xs ${muted}`} title={row.reason}>—</span>
-                )}
-
-                {/* The other direction. `Write SN` copies the OLT's serial into
-                    billing; this changes which device the OLT is provisioning, which
-                    is what actually happened when a technician swapped the modem. */}
+            <td className="px-3 py-2.5 text-right">
+              {row.eligible ? (
                 <button
-                  onClick={() => openReplaceSn(row)}
-                  disabled={jobRunning || !state?.configured}
-                  title="The modem behind this ONU was swapped — point SmartOLT at the new serial"
-                  className={`px-2 py-1 rounded border text-xs font-medium disabled:opacity-40 ${card} ${muted}`}
+                  onClick={() => startJob('sn_alignment', {
+                    items: [{
+                      external_id: row.external_id,
+                      technical_detail_id: row.technical_detail_id,
+                      new_sn: row.sn,
+                    }],
+                  })}
+                  disabled={jobRunning}
+                  title={`Write "${row.sn}" into this subscriber's router/modem SN`}
+                  className="px-2 py-1 rounded border border-cyan-500/40 text-cyan-500 text-xs font-medium hover:bg-cyan-500/10 disabled:opacity-40"
                 >
-                  Replace SN
+                  {row.state === 'sn_mismatch' ? 'Replace' : 'Write'}
                 </button>
-              </div>
+              ) : (
+                <span className={`text-xs ${muted}`} title={row.reason}>—</span>
+              )}
             </td>
           );
         default:
@@ -1383,489 +1025,637 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
   };
 
   return (
-    <ToolShell
-      title="SmartOLT Tool"
-      isDarkMode={isDarkMode}
-      colorPalette={colorPalette}
-      isMobile={isMobile}
-      allLabel={`All ${TAB_ALL_LABEL[tab]}`}
-      allCount={tab === 'logs' ? logs.length : activeRows.length}
-      slices={sidebarSlices}
-      selectedSliceId={slice}
-      onSelectSlice={setSlice}
-      configurableSlices={slices}
-      sliceDefinitions={sliceDefinitions}
-      onSaveSlices={saveSlices}
-      onResetSlices={resetSlices}
-      groupableColumns={groupableColumns}
-      groupTree={grouping.tree}
-      viewOptions={grouping.options}
-      onSaveViewOptions={grouping.save}
-      onResetViewOptions={grouping.reset}
-      distinctValues={grouping.distinctValues}
-      colorFor={grouping.colorFor}
-      notice={notice}
-      onDismissNotice={() => setNotice(null)}
-      sidebarHeader={
-        <div className={`px-2 py-2 border-b space-y-1 ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                tab === id ? 'text-white' : `${text} ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`
-              }`}
-              style={tab === id ? { backgroundColor: accent } : undefined}
-            >
-              <Icon className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate text-left">{label}</span>
-            </button>
+    <div className={`p-4 md:p-6 min-h-full ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+            <Network className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className={`text-xl font-bold ${text}`}>SmartOLT Tool</h1>
+            <p className={`text-sm ${muted}`}>
+              ONU inventory, bridge-MAC discovery, MAC-based name and router/modem SN alignment, profile push and safe decommissioning.
+              {state?.inventory_synced_at && (
+                <> Inventory synced {new Date(state.inventory_synced_at).toLocaleString()}.</>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => startJob('smartolt_sync')}
+            disabled={jobRunning || !state?.configured}
+            className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+          >
+            <RefreshCw className="w-4 h-4" /> Sync SmartOLT Inventory
+          </button>
+          <button
+            onClick={() => startJob('radius_scan')}
+            disabled={jobRunning || !state?.configured}
+            className={`px-3 py-2 rounded-lg border text-sm font-medium flex items-center gap-2 disabled:opacity-50 ${card} ${text}`}
+          >
+            <Activity className="w-4 h-4" /> Sync RADIUS
+          </button>
+          {/* Background bridge-MAC crawl. One API call per ONU against a hard quota,
+              so it runs as a bounded background job and never inline. Default queues
+              only ONUs never read; hold Shift to force a full rescan. */}
+          <button
+            onClick={(e) => startJob('optical_scan', { rescan: e.shiftKey })}
+            disabled={jobRunning || !state?.configured}
+            title="Discover bridge MACs in the background. Shift-click to re-read every ONU."
+            className={`px-3 py-2 rounded-lg border text-sm font-medium flex items-center gap-2 disabled:opacity-50 ${card} ${text}`}
+          >
+            <Gauge className="w-4 h-4" /> Discover Bridge MACs
+          </button>
+          <button
+            onClick={() => smartOltReconciliationService.exportCsv(exportDataset)}
+            disabled={loading}
+            className={`px-3 py-2 rounded-lg border text-sm font-medium flex items-center gap-2 disabled:opacity-50 ${card} ${text}`}
+          >
+            <Download className="w-4 h-4" /> Export All
+          </button>
+        </div>
+      </div>
+
+      {/* Notice */}
+      {notice && (
+        <div
+          className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-start justify-between gap-3 ${notice.tone === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500'
+              : notice.tone === 'error'
+                ? 'bg-red-500/10 border-red-500/30 text-red-500'
+                : 'bg-blue-500/10 border-blue-500/30 text-blue-500'
+            }`}
+        >
+          <span className="flex-1">{notice.text}</span>
+          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Rate-limit pause banner — the job is parked, not broken, and resumes itself */}
+      {jobRateLimited && job && (
+        <div className="mb-4 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500">
+          <div className="flex items-start gap-2">
+            <PauseCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-semibold">SmartOLT API rate limit reached — the job is paused, not lost.</div>
+              <div className="mt-1 opacity-90">
+                {job.message}
+                {job.context?.resume_at && (
+                  <> It resumes automatically at {new Date(job.context.resume_at).toLocaleTimeString()}.</>
+                )}
+              </div>
+              <div className="mt-1 text-xs opacity-75">
+                Progress is checkpointed at {job.current} of {job.total}
+                {typeof job.context?.rate_limit_hits === 'number' && job.context.rate_limit_hits > 0 && (
+                  <> · {job.context.rate_limit_hits} quota stop{job.context.rate_limit_hits === 1 ? '' : 's'} this run</>
+                )}
+                . The nightly automation also picks up parked jobs from this checkpoint.
+              </div>
+            </div>
+            <div className="shrink-0 flex items-center gap-1.5">
+              <button
+                onClick={startWatching}
+                title="Retry now. If SmartOLT's quota has not cleared the job stays paused."
+                className="px-2 py-1 rounded border border-amber-500/40 text-xs font-medium hover:bg-amber-500/10"
+              >
+                Resume
+              </button>
+              <button
+                onClick={cancelJob}
+                className="px-2 py-1 rounded border border-amber-500/40 text-xs font-medium hover:bg-amber-500/10"
+              >
+                Abort
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live slice progress for any running background job */}
+      {job && job.status === 'running' && (
+        <div className={`mb-4 rounded-lg border p-3 ${card}`}>
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <span className={`text-sm font-medium ${text} flex items-center gap-2`}>
+              <Loader2 className="w-4 h-4 animate-spin text-cyan-500" />
+              {job.message}
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={`text-xs font-mono ${muted}`}>
+                {job.current} / {job.total || '?'}
+              </span>
+              <button
+                onClick={jobPaused ? startWatching : stopWatching}
+                className={`px-2 py-1 rounded border text-xs font-medium ${card} ${text}`}
+              >
+                {jobPaused ? 'Watch' : 'Stop watching'}
+              </button>
+              <button
+                onClick={cancelJob}
+                className="px-2 py-1 rounded border border-red-500/40 text-red-500 text-xs font-medium hover:bg-red-500/10"
+              >
+                Abort
+              </button>
+            </div>
+          </div>
+
+          <div className={`h-1.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
+            <div
+              className="h-full bg-cyan-500 transition-all duration-300"
+              style={{ width: job.total > 0 ? `${Math.min(100, (job.current / job.total) * 100)}%` : '100%' }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Metrics grid. Fifteen cards in three rows of six, six and three: the estate
+          as SmartOLT reports it, then what RADIUS and the MAC cache make of it, then
+          what there is to act on. A dash rather than a zero means the pass behind that
+          figure has not run yet — open its tab, or wait for the nightly automation. */}
+      {state && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">
+          {metricCards.map(({ key, label, caption, value, tone }) => (
+            <div key={key} className={`rounded-xl border p-3 ${card}`} title={caption}>
+              <div className={`text-[10px] font-semibold tracking-wide uppercase ${muted}`}>{label}</div>
+              <div className={`text-2xl font-bold mt-1 ${value === null || value === undefined ? muted : (tone || text)}`}>
+                {formatMetric(value)}
+              </div>
+              <div className={`text-[10px] mt-0.5 truncate ${muted}`}>{caption}</div>
+            </div>
           ))}
         </div>
-      }
-      toolbar={
-        <ToolToolbar
-          isDarkMode={isDarkMode}
-          colorPalette={colorPalette}
-          searchQuery={grid.search}
-          onSearch={grid.setSearch}
-          searchPlaceholder="Search by serial, name, account number or zone..."
-          onOpenFilter={() => setFunnelOpen(true)}
-          activeFilterCount={Object.keys(funnelFilters).length}
-          columns={grid.columns}
-          hiddenKeys={grid.hiddenKeys}
-          onToggleColumn={grid.toggleColumn}
-          onResetColumns={grid.resetColumns}
-          onExport={() => grid.toCsv(`smartolt_${tab}_${new Date().toISOString().slice(0, 10)}`)}
-          exportDisabled={tab === 'logs' || grid.filteredCount === 0}
-          onRefresh={() => (tab === 'inventory' ? loadState(true) : rematch(tab))}
-          refreshing={loading}
-          refreshTitle={
-            tab === 'inventory'
-              ? 'Re-read the cached inventory and metrics'
-              : 'Recompute this view against the live RADIUS sessions and current billing records'
-          }
-        >
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={() => startJob('smartolt_sync')}
-              disabled={jobRunning || !state?.configured}
-              title="Download the ONU inventory and VLAN assignments from SmartOLT"
-              className="px-3 py-2 rounded-lg text-white text-xs font-medium flex items-center gap-1.5 disabled:opacity-50"
-              style={{ backgroundColor: accent }}
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">Sync Inventory</span>
-            </button>
+      )}
 
-            {/* Sync RADIUS and discover MACs. One button, because they are one job to
-                an operator: read who is authenticating, then find the bridge MAC that
-                binds a session to an ONU. Shift-click forces a full re-crawl of every
-                ONU rather than only the ones never read. */}
-            <button
-              onClick={(event) => startReconcileSweep(event.shiftKey)}
-              disabled={jobRunning || !state?.configured}
-              title="Sync ONU statuses from RADIUS, then discover bridge MACs. Shift-click to re-read every ONU."
-              className={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 disabled:opacity-50 ${card} ${text}`}
-            >
-              <Activity className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">Sync RADIUS &amp; MACs</span>
-            </button>
+      {/* Tabs */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-3 py-2 rounded-lg text-sm font-medium border flex items-center gap-2 transition-colors ${tab === id ? 'bg-cyan-600 border-cyan-600 text-white' : `${card} ${text} hover:border-cyan-500/50`
+              }`}
+          >
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
 
-            <button
-              onClick={() => smartOltReconciliationService.exportCsv(exportDataset)}
-              disabled={loading}
-              title="Export the full server-side dataset for this tab"
-              className={`px-3 py-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 disabled:opacity-50 ${card} ${text}`}
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">Export All</span>
-            </button>
-          </div>
-        </ToolToolbar>
-      }
-      banner={
-        <>
-          {/* Rate-limit pause banner — the job is parked, not broken, and resumes itself */}
-          {jobRateLimited && job && (
-            <div className="mx-4 mt-3 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500">
-              <div className="flex items-start gap-2">
-                <PauseCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <div className="font-semibold">SmartOLT API rate limit reached — the job is paused, not lost.</div>
-                  <div className="mt-1 opacity-90">
-                    {job.message}
-                    {job.context?.resume_at && (
-                      <> It resumes automatically at {new Date(job.context.resume_at).toLocaleTimeString()}.</>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+      {/* Search + per-tab controls */}
+      {tab !== 'logs' && (
+        <div className={`rounded-xl border p-3 mb-4 flex flex-col md:flex-row md:items-center gap-3 ${card}`}>
+          <GridFilterBar
+            isDarkMode={isDarkMode}
+            search={grid.search}
+            onSearch={grid.setSearch}
+            placeholder="Search by serial, name, account number or zone…"
+            filters={gridFilters}
+            filterValues={grid.filterValues}
+            onFilterChange={grid.setFilterValue}
+            hasActiveFilter={grid.hasActiveFilter}
+            onClear={grid.clearFilters}
+            filteredCount={grid.filteredCount}
+            totalRows={grid.totalRows}
+          />
 
-          {/* Estate metrics. A dash rather than a zero means the pass behind that figure
-              has not run yet — open its tab, or wait for the nightly automation.
-              Collapsible: fifteen cards is the right amount of context when an operator
-              arrives and pure noise once they are working a table. */}
-          {state && (
-            <div className="px-4 pt-3">
+          <PageSizeSelector
+            isDarkMode={isDarkMode}
+            pageSize={grid.pageSize}
+            onPageSizeChange={grid.setPageSize}
+            filteredCount={grid.filteredCount}
+          />
+
+          {/* Exports what is on screen — current filters, sort and columns, or just
+              the ticked rows. The header's Export All is the server-side full dataset. */}
+          <ExportButton
+            isDarkMode={isDarkMode}
+            onExport={() => grid.toCsv(`smartolt_${tab}_${new Date().toISOString().slice(0, 10)}`)}
+            rowCount={grid.selectedCount > 0 ? grid.selectedCount : grid.filteredCount}
+            isSelection={grid.selectedCount > 0}
+            label="Export View"
+          />
+
+          <ColumnMenu
+            isDarkMode={isDarkMode}
+            columns={grid.columns}
+            hiddenKeys={grid.hiddenKeys}
+            onToggle={grid.toggleColumn}
+            onMove={grid.moveColumn}
+            onReset={grid.resetColumns}
+          />
+
+          {tab === 'cleanup' && (
+            <div className="flex items-center gap-2">
+              <label className={`text-xs ${muted}`}>Offline for at least</label>
+              <input
+                type="number"
+                min={1}
+                value={offlineDays}
+                onChange={(e) => setOfflineDays(Math.max(1, Number(e.target.value)))}
+                className={`w-20 px-2 py-2 rounded-lg border text-sm ${input}`}
+              />
+              <span className={`text-xs ${muted}`}>days</span>
               <button
-                onClick={() => setShowMetrics((open) => !open)}
-                className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide mb-2 ${muted} hover:opacity-80`}
+                onClick={() => loadTabData('cleanup')}
+                className={`px-3 py-2 rounded-lg border text-xs font-medium ${card} ${text}`}
               >
-                {showMetrics ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                Estate metrics
+                Re-evaluate
               </button>
-              <div
-                className={`grid grid-cols-3 sm:grid-cols-5 xl:grid-cols-8 gap-2 ${showMetrics ? '' : 'hidden'}`}
+            </div>
+          )}
+
+          {tab === 'mac_alignment' && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => rematch('mac_alignment')}
+                disabled={loading}
+                title="Recompute this table against the live RADIUS sessions and current billing records."
+                className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${text}`}
               >
-                {metricCards.map(({ key, label, caption, value, tone }) => (
-                  <div key={key} className={`rounded-lg border px-2.5 py-2 ${card}`} title={caption}>
-                    <div className={`text-[9px] font-semibold tracking-wide uppercase truncate ${muted}`}>{label}</div>
-                    <div
-                      className={`text-lg font-bold leading-tight ${
-                        value === null || value === undefined ? muted : tone || text
-                      }`}
-                    >
-                      {formatMetric(value)}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                {loading ? 'Re-matching…' : 'Re-match'}
+              </button>
+
+              {/* Batch actions. `Align All Matched` deliberately ignores the checkbox
+                  selection and takes every eligible row — including ones on pages the
+                  operator has not scrolled to — which is the whole point of "All". */}
+              <select
+                value=""
+                disabled={jobRunning}
+                onChange={(e) => {
+                  const action = e.target.value;
+                  e.target.value = '';
+
+                  if (action === 'align_all') {
+                    const items = (macAlignment?.rows ?? [])
+                      .filter((row) => row.eligible)
+                      .map((row) => ({ external_id: row.external_id, new_name: row.target_name }));
+
+                    if (items.length === 0) {
+                      setNotice({ tone: 'info', text: 'Every matched ONU already carries its RADIUS username.' });
+                      return;
+                    }
+                    startJob('rename', { items });
+                    return;
+                  }
+
+                  if (action === 'align_selected') {
+                    const items = (macAlignment?.rows ?? [])
+                      .filter((row) => row.eligible && selected.has(row.external_id))
+                      .map((row) => ({ external_id: row.external_id, new_name: row.target_name }));
+
+                    if (items.length === 0) {
+                      setNotice({ tone: 'info', text: 'Select at least one ONU whose name differs from its RADIUS username.' });
+                      return;
+                    }
+                    startJob('rename', { items });
+                    return;
+                  }
+
+                  if (action === 'unprovision_selected') {
+                    if (selected.size === 0) {
+                      setNotice({ tone: 'info', text: 'Select at least one ONU to unprovision.' });
+                      return;
+                    }
+                    // Same confirmation gate the cleanup tab uses — permanent removal
+                    // must never be one dropdown click away.
+                    setDeleteConfirm('');
+                    setDeleteModalOpen(true);
+                  }
+                }}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium disabled:opacity-50 ${input}`}
+              >
+                <option value="">Batch actions…</option>
+                <option value="align_all">
+                  Align All Matched ({(macAlignment?.rows ?? []).filter((r) => r.eligible).length})
+                </option>
+                <option value="align_selected">Align Selected ({selected.size})</option>
+                <option value="unprovision_selected">Unprovision Selected ({selected.size})</option>
+              </select>
             </div>
           )}
 
-          {/* MAC alignment summary — and any device that did not answer */}
-          {tab === 'mac_alignment' && macAlignment && (
-            <div className="px-4 pt-3 space-y-2">
-              <div className={`px-4 py-3 rounded-lg border text-sm ${card} ${muted}`}>
-                Matched <strong className={text}>{macAlignment.summary.matched}</strong> of{' '}
-                <strong className={text}>{macAlignment.summary.total}</strong> ONU(s) against{' '}
-                <strong className={text}>{macAlignment.summary.sessions}</strong> live RADIUS session(s) —{' '}
-                <span className="text-amber-500">{macAlignment.summary.rename_needed} need renaming</span>,{' '}
-                <span className="text-emerald-500">{macAlignment.summary.aligned} already aligned</span>,{' '}
-                {macAlignment.summary.unmatched} unmatched, {macAlignment.summary.no_mac} awaiting MAC discovery. The
-                target name is the matched RADIUS username exactly.
-              </div>
+          {tab === 'sn_alignment' && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => rematch('sn_alignment')}
+                disabled={loading}
+                title="Recompute this table against the live RADIUS sessions and current billing records."
+                className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${text}`}
+              >
+                {loading ? 'Re-matching…' : 'Re-match'}
+              </button>
 
-              {macAlignment.errors.length > 0 && (
-                <div className="px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>
-                    Some RADIUS devices did not answer, so this match is incomplete — an ONU shown as unmatched may
-                    simply belong to a device that was unreachable. {macAlignment.errors.join(' · ')}
-                  </span>
-                </div>
-              )}
+              {/* `Write All Missing` is offered separately from `All Eligible` on purpose:
+                  filling blank columns is safe and is what most operators want, while
+                  replacing serials somebody already recorded deserves its own decision. */}
+              <select
+                value=""
+                disabled={jobRunning}
+                onChange={(e) => {
+                  const action = e.target.value;
+                  e.target.value = '';
+
+                  const toItem = (row: any) => ({
+                    external_id: row.external_id,
+                    technical_detail_id: row.technical_detail_id,
+                    new_sn: row.sn,
+                  });
+
+                  if (action === 'write_missing') {
+                    const items = (snAlignment?.rows ?? [])
+                      .filter((row) => row.eligible && row.state === 'sn_missing')
+                      .map(toItem);
+
+                    if (items.length === 0) {
+                      setNotice({ tone: 'info', text: 'Every matched subscriber already has a router/modem SN recorded.' });
+                      return;
+                    }
+                    startJob('sn_alignment', { items });
+                    return;
+                  }
+
+                  if (action === 'write_all') {
+                    const items = (snAlignment?.rows ?? []).filter((row) => row.eligible).map(toItem);
+
+                    if (items.length === 0) {
+                      setNotice({ tone: 'info', text: 'Nothing to write — every matched subscriber already carries its ONU serial.' });
+                      return;
+                    }
+                    startJob('sn_alignment', { items });
+                    return;
+                  }
+
+                  if (action === 'write_selected') {
+                    const items = (snAlignment?.rows ?? [])
+                      .filter((row) => row.eligible && selected.has(row.external_id))
+                      .map(toItem);
+
+                    if (items.length === 0) {
+                      setNotice({ tone: 'info', text: 'Select at least one subscriber whose recorded SN differs from the ONU.' });
+                      return;
+                    }
+                    startJob('sn_alignment', { items });
+                  }
+                }}
+                className={`px-3 py-2 rounded-lg border text-sm font-medium disabled:opacity-50 ${input}`}
+              >
+                <option value="">Batch actions…</option>
+                <option value="write_missing">
+                  Fill Missing Only ({(snAlignment?.rows ?? []).filter((r) => r.state === 'sn_missing').length})
+                </option>
+                <option value="write_all">
+                  Write All Eligible ({(snAlignment?.rows ?? []).filter((r) => r.eligible).length})
+                </option>
+                <option value="write_selected">Write Selected ({selected.size})</option>
+              </select>
             </div>
           )}
 
-          {/* SN alignment summary — and any device that did not answer */}
-          {tab === 'sn_alignment' && snAlignment && (
-            <div className="px-4 pt-3 space-y-2">
-              <div className={`px-4 py-3 rounded-lg border text-sm ${card} ${muted}`}>
-                Matched <strong className={text}>{snAlignment.summary.matched}</strong> of{' '}
-                <strong className={text}>{snAlignment.summary.total}</strong> ONU(s) against{' '}
-                <strong className={text}>{snAlignment.summary.sessions}</strong> live RADIUS session(s) —{' '}
-                <span className="text-amber-500">{snAlignment.summary.missing} missing an SN</span>,{' '}
-                <span className="text-orange-500">{snAlignment.summary.mismatch} recorded differently</span>,{' '}
-                <span className="text-emerald-500">{snAlignment.summary.aligned} already aligned</span>,{' '}
-                {snAlignment.summary.no_subscriber} with no billing record, {snAlignment.summary.unmatched} unmatched,{' '}
-                {snAlignment.summary.no_mac} awaiting MAC discovery. Applying writes SmartOLT&rsquo;s serial into the
-                subscriber&rsquo;s <strong className={text}>router/modem SN</strong>; nothing is ever pushed back to
-                SmartOLT.
-              </div>
-
-              {snAlignment.summary.mismatch > 0 && (
-                <div className="px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/10 text-sm text-orange-500 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>
-                    {snAlignment.summary.mismatch} subscriber(s) already carry a different serial. Writing those
-                    overwrites what is recorded now — the old value is shown struck through, and every write is
-                    reversible from Operation Logs &amp; Undo.
-                  </span>
-                </div>
-              )}
-
-              {snAlignment.errors.length > 0 && (
-                <div className="px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>
-                    Some RADIUS devices did not answer, so this match is incomplete — an ONU shown as unmatched may
-                    simply belong to a device that was unreachable. {snAlignment.errors.join(' · ')}
-                  </span>
-                </div>
-              )}
-            </div>
+          {tab === 'profile' && (
+            <button
+              onClick={() => {
+                const items = (profile?.rows ?? [])
+                  .filter((row) => row.eligible && selected.has(row.external_id))
+                  .map((row) => ({
+                    external_id: row.external_id,
+                    new_address: row.new_address,
+                    new_contact: row.new_contact,
+                    new_latitude: row.new_latitude,
+                    new_longitude: row.new_longitude,
+                    address_changed: row.address_changed,
+                    contact_changed: row.contact_changed,
+                    coords_changed: row.coords_changed,
+                  }));
+                if (items.length === 0) {
+                  setNotice({ tone: 'info', text: 'Select at least one ONU with a pending change.' });
+                  return;
+                }
+                startJob('profile_sync', { items });
+              }}
+              disabled={jobRunning}
+              className="px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium disabled:opacity-50"
+            >
+              Push {selected.size > 0 ? `${selected.size} ` : ''}selected
+            </button>
           )}
 
-          {/* VLAN advisory on the profile tab */}
-          {tab === 'profile' && profile && (
-            <div className="mx-4 mt-3 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
+          {tab === 'cleanup' && (
+            <button
+              onClick={() => {
+                if (selected.size === 0) {
+                  setNotice({ tone: 'info', text: 'Select at least one eligible ONU.' });
+                  return;
+                }
+                setDeleteConfirm('');
+                setDeleteModalOpen(true);
+              }}
+              disabled={jobRunning}
+              className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+            >
+              <Trash2 className="w-4 h-4" /> Decommission {selected.size > 0 ? selected.size : ''}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Selection summary — the batch triggers themselves stay on each tab's control row */}
+      {tab !== 'inventory' && tab !== 'logs' && (
+        <SelectionBar
+          isDarkMode={isDarkMode}
+          selectedCount={grid.selectedCount}
+          selectableFilteredCount={grid.selectableFilteredCount}
+          isAllFilteredSelected={grid.isAllFilteredSelected}
+          onSelectAllFiltered={grid.selectAllFiltered}
+          onClearSelection={grid.clearSelection}
+        />
+      )}
+
+      {/* MAC alignment summary — and any device that did not answer */}
+      {tab === 'mac_alignment' && macAlignment && (
+        <div className="mb-4 space-y-2">
+          <div className={`px-4 py-3 rounded-lg border text-sm ${card} ${muted}`}>
+            Matched <strong className={text}>{macAlignment.summary.matched}</strong> of{' '}
+            <strong className={text}>{macAlignment.summary.total}</strong> ONU(s) against{' '}
+            <strong className={text}>{macAlignment.summary.sessions}</strong> live RADIUS session(s) —{' '}
+            <span className="text-amber-500">{macAlignment.summary.rename_needed} need renaming</span>,{' '}
+            <span className="text-emerald-500">{macAlignment.summary.aligned} already aligned</span>,{' '}
+            {macAlignment.summary.unmatched} unmatched, {macAlignment.summary.no_mac} awaiting MAC discovery.
+            The target name is the matched RADIUS username exactly.
+          </div>
+
+          {macAlignment.errors.length > 0 && (
+            <div className="px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
-                {profile.vlan_note}
-                {profile.summary.vlan_drift > 0 &&
-                  ` ${profile.summary.vlan_drift} ONU(s) currently show a VLAN difference.`}
+                Some RADIUS devices did not answer, so this match is incomplete — an ONU shown as
+                unmatched may simply belong to a device that was unreachable. {macAlignment.errors.join(' · ')}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SN alignment summary — and any device that did not answer */}
+      {tab === 'sn_alignment' && snAlignment && (
+        <div className="mb-4 space-y-2">
+          <div className={`px-4 py-3 rounded-lg border text-sm ${card} ${muted}`}>
+            Matched <strong className={text}>{snAlignment.summary.matched}</strong> of{' '}
+            <strong className={text}>{snAlignment.summary.total}</strong> ONU(s) against{' '}
+            <strong className={text}>{snAlignment.summary.sessions}</strong> live RADIUS session(s) —{' '}
+            <span className="text-amber-500">{snAlignment.summary.missing} missing an SN</span>,{' '}
+            <span className="text-orange-500">{snAlignment.summary.mismatch} recorded differently</span>,{' '}
+            <span className="text-emerald-500">{snAlignment.summary.aligned} already aligned</span>,{' '}
+            {snAlignment.summary.no_subscriber} with no billing record, {snAlignment.summary.unmatched} unmatched,{' '}
+            {snAlignment.summary.no_mac} awaiting MAC discovery. Applying writes SmartOLT's serial into the
+            subscriber's <strong className={text}>router/modem SN</strong>; nothing is ever pushed back to SmartOLT.
+          </div>
+
+          {snAlignment.summary.mismatch > 0 && (
+            <div className="px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/10 text-sm text-orange-500 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                {snAlignment.summary.mismatch} subscriber(s) already carry a different serial. Writing those
+                overwrites what is recorded now — the old value is shown struck through, and every write is
+                reversible from Operation Logs &amp; Undo.
               </span>
             </div>
           )}
 
-          {/* Per-tab action row */}
-          {tab !== 'logs' && tab !== 'inventory' && (
-            <div className="px-4 pt-3 flex flex-wrap items-center gap-2">
-              {tab === 'cleanup' && (
-                <div className="flex items-center gap-2">
-                  <label className={`text-xs ${muted}`}>Offline for at least</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={offlineDays}
-                    onChange={(e) => setOfflineDays(Math.max(1, Number(e.target.value)))}
-                    className={`w-20 px-2 py-2 rounded-lg border text-sm ${input}`}
-                  />
-                  <span className={`text-xs ${muted}`}>days</span>
-                  <button
-                    onClick={() => loadTabData('cleanup')}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium ${card} ${text}`}
-                  >
-                    Re-evaluate
-                  </button>
-                </div>
-              )}
-
-              {tab === 'mac_alignment' && (
-                <>
-                  {/* `Align All Matched` deliberately ignores the checkbox selection and
-                      takes every eligible row — including ones on pages the operator has
-                      not scrolled to — which is the whole point of "All". */}
-                  <button
-                    onClick={() => {
-                      const items = (macAlignment?.rows ?? [])
-                        .filter((row) => row.eligible)
-                        .map((row) => ({ external_id: row.external_id, new_name: row.target_name }));
-
-                      if (items.length === 0) {
-                        setNotice({ tone: 'info', text: 'Every matched ONU already carries its RADIUS username.' });
-                        return;
-                      }
-                      startJob('rename', { items });
-                    }}
-                    disabled={jobRunning}
-                    title="Rename every matched ONU to its subscriber's RADIUS username, across all pages"
-                    className="px-3 py-2 rounded-lg text-white text-xs font-medium disabled:opacity-50"
-                    style={{ backgroundColor: accent }}
-                  >
-                    Align All Matched ({(macAlignment?.rows ?? []).filter((r) => r.eligible).length})
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const items = (macAlignment?.rows ?? [])
-                        .filter((row) => row.eligible && selected.has(row.external_id))
-                        .map((row) => ({ external_id: row.external_id, new_name: row.target_name }));
-
-                      if (items.length === 0) {
-                        setNotice({
-                          tone: 'info',
-                          text: 'Select at least one ONU whose name differs from its RADIUS username.',
-                        });
-                        return;
-                      }
-                      startJob('rename', { items });
-                    }}
-                    disabled={jobRunning}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${text}`}
-                  >
-                    Align Selected ({selected.size})
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (selected.size === 0) {
-                        setNotice({ tone: 'info', text: 'Select at least one ONU to unprovision.' });
-                        return;
-                      }
-                      // Same confirmation gate the cleanup tab uses — permanent removal
-                      // must never be one click away.
-                      setDeleteConfirm('');
-                      setDeleteModalOpen(true);
-                    }}
-                    disabled={jobRunning}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${muted}`}
-                  >
-                    Unprovision Selected ({selected.size})
-                  </button>
-                </>
-              )}
-
-              {tab === 'sn_alignment' && (
-                <>
-                  {/* `Fill Missing` is offered separately from `Write All` on purpose:
-                      filling blank columns is safe and is what most operators want, while
-                      replacing serials somebody already recorded deserves its own decision. */}
-                  <button
-                    onClick={() => {
-                      const items = (snAlignment?.rows ?? [])
-                        .filter((row) => row.eligible && row.state === 'sn_missing')
-                        .map(snItem);
-
-                      if (items.length === 0) {
-                        setNotice({
-                          tone: 'info',
-                          text: 'Every matched subscriber already has a router/modem SN recorded.',
-                        });
-                        return;
-                      }
-                      startJob('sn_alignment', { items });
-                    }}
-                    disabled={jobRunning}
-                    title="Write the ONU serial into every matched subscriber whose router/modem SN is blank"
-                    className="px-3 py-2 rounded-lg text-white text-xs font-medium disabled:opacity-50"
-                    style={{ backgroundColor: accent }}
-                  >
-                    Fill Missing Only ({(snAlignment?.rows ?? []).filter((r) => r.state === 'sn_missing').length})
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const items = (snAlignment?.rows ?? []).filter((row) => row.eligible).map(snItem);
-
-                      if (items.length === 0) {
-                        setNotice({
-                          tone: 'info',
-                          text: 'Nothing to write — every matched subscriber already carries its ONU serial.',
-                        });
-                        return;
-                      }
-                      startJob('sn_alignment', { items });
-                    }}
-                    disabled={jobRunning}
-                    title="Write the ONU serial into every write-eligible subscriber, including ones that already hold a different serial"
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${text}`}
-                  >
-                    Write All Eligible ({(snAlignment?.rows ?? []).filter((r) => r.eligible).length})
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      const items = (snAlignment?.rows ?? [])
-                        .filter((row) => row.eligible && selected.has(row.external_id))
-                        .map(snItem);
-
-                      if (items.length === 0) {
-                        setNotice({
-                          tone: 'info',
-                          text: 'Select at least one subscriber whose recorded SN differs from the ONU.',
-                        });
-                        return;
-                      }
-                      startJob('sn_alignment', { items });
-                    }}
-                    disabled={jobRunning}
-                    className={`px-3 py-2 rounded-lg border text-xs font-medium disabled:opacity-50 ${card} ${text}`}
-                  >
-                    Write Selected ({selected.size})
-                  </button>
-                </>
-              )}
-
-              {tab === 'profile' && (
-                <button
-                  onClick={() => {
-                    const items = (profile?.rows ?? [])
-                      .filter((row) => row.eligible && selected.has(row.external_id))
-                      .map((row) => ({
-                        external_id: row.external_id,
-                        new_address: row.new_address,
-                        new_contact: row.new_contact,
-                        new_latitude: row.new_latitude,
-                        new_longitude: row.new_longitude,
-                        address_changed: row.address_changed,
-                        contact_changed: row.contact_changed,
-                        coords_changed: row.coords_changed,
-                      }));
-                    if (items.length === 0) {
-                      setNotice({ tone: 'info', text: 'Select at least one ONU with a pending change.' });
-                      return;
-                    }
-                    startJob('profile_sync', { items });
-                  }}
-                  disabled={jobRunning}
-                  className="px-3 py-2 rounded-lg text-white text-xs font-medium disabled:opacity-50"
-                  style={{ backgroundColor: accent }}
-                >
-                  Push {selected.size > 0 ? `${selected.size} ` : ''}selected
-                </button>
-              )}
-
-              {tab === 'cleanup' && (
-                <button
-                  onClick={() => {
-                    if (selected.size === 0) {
-                      setNotice({ tone: 'info', text: 'Select at least one ONU.' });
-                      return;
-                    }
-                    setDeleteConfirm('');
-                    setDeleteModalOpen(true);
-                  }}
-                  disabled={jobRunning}
-                  className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-medium disabled:opacity-50 flex items-center gap-2"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Decommission {selected.size > 0 ? selected.size : ''}
-                </button>
-              )}
+          {snAlignment.errors.length > 0 && (
+            <div className="px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Some RADIUS devices did not answer, so this match is incomplete — an ONU shown as
+                unmatched may simply belong to a device that was unreachable. {snAlignment.errors.join(' · ')}
+              </span>
             </div>
           )}
+        </div>
+      )}
 
-          {/* Selection summary — the batch triggers themselves stay on the action row */}
-          {tab !== 'inventory' && tab !== 'logs' && grid.selectedCount > 0 && (
-            <div className="px-4 pt-3">
-              <SelectionBar
-                isDarkMode={isDarkMode}
-                selectedCount={grid.selectedCount}
-                selectableFilteredCount={grid.selectableFilteredCount}
-                isAllFilteredSelected={grid.isAllFilteredSelected}
-                onSelectAllFiltered={grid.selectAllFiltered}
-                onClearSelection={grid.clearSelection}
-              />
-            </div>
-          )}
-        </>
-      }
-    >
-      {tab === 'logs' ? (
-        <div className="flex-1 overflow-auto">
+      {/* VLAN advisory on the profile tab */}
+      {tab === 'profile' && profile && (
+        <div className="mb-4 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-sm text-amber-500 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            {profile.vlan_note}
+            {profile.summary.vlan_drift > 0 && ` ${profile.summary.vlan_drift} ONU(s) currently show a VLAN difference.`}
+          </span>
+        </div>
+      )}
+
+      {/* Content table */}
+      <div className={`rounded-xl border overflow-hidden ${card}`}>
+        <div className="overflow-x-auto">
+          {/*
+            One table body for every tab.
+
+            The columns are operator-orderable and hideable now, so a fixed sequence of
+            <td>s no longer works — `renderCell` returns each cell and the header order
+            drives the row order. Every badge, diff line and reason list the four previews
+            rendered before is preserved inside it.
+          */}
           <table className="w-full text-sm">
             <thead className={`text-xs uppercase tracking-wide ${headRow}`}>
               <tr>
-                <th className="px-3 py-2.5 text-left font-semibold">When</th>
-                <th className="px-3 py-2.5 text-left font-semibold">Operator</th>
-                <th className="px-3 py-2.5 text-left font-semibold">Action</th>
-                <th className="px-3 py-2.5 text-left font-semibold">ONU</th>
-                <th className="px-3 py-2.5 text-left font-semibold">Change</th>
-                <th className="px-3 py-2.5 text-left font-semibold">Status</th>
-                <th className="px-3 py-2.5 text-right font-semibold">Undo</th>
+                {/* Inventory is a read-only view: no selection column at all. */}
+                {tab !== 'inventory' && (
+                  <SelectAllHeaderCell
+                    isDarkMode={isDarkMode}
+                    isPageSelected={grid.isPageSelected}
+                    isAllFilteredSelected={grid.isAllFilteredSelected}
+                    selectablePageCount={grid.selectablePageCount}
+                    selectableFilteredCount={grid.selectableFilteredCount}
+                    selectedCount={grid.selectedCount}
+                    onSelectPage={grid.selectPage}
+                    onDeselectPage={grid.deselectPage}
+                    onSelectAllFiltered={grid.selectAllFiltered}
+                    onClearSelection={grid.clearSelection}
+                  />
+                )}
+                {visibleColumns.map((column) => {
+                  const sortState = grid.sortStateFor(column.key);
+                  return (
+                    <SortableHeaderCell
+                      key={column.key}
+                      label={column.label}
+                      sortable={!!column.value}
+                      direction={sortState.direction}
+                      priority={sortState.priority}
+                      onSort={(additive) => grid.toggleSort(column.key, additive)}
+                      align={column.key === 'actions' ? 'right' : 'left'}
+                    />
+                  );
+                })}
               </tr>
             </thead>
             <tbody className={isDarkMode ? 'divide-y divide-gray-800' : 'divide-y divide-gray-100'}>
               {loading && (
                 <tr>
-                  <td colSpan={7} className={`px-4 py-10 text-center ${muted}`}>
-                    <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+                  <td colSpan={columnSpan} className={`px-4 py-12 text-center ${muted}`}>
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto" />
                   </td>
                 </tr>
               )}
-              {!loading && logs.length === 0 && (
+
+              {!loading && pagedRows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className={`px-4 py-10 text-center ${muted}`}>
-                    No operation has been recorded yet.
-                  </td>
+                  <td colSpan={columnSpan} className={`px-4 py-12 text-center ${muted}`}>{emptyMessage}</td>
                 </tr>
               )}
-              {!loading &&
-                logs.map((entry) => (
+
+              {!loading && pagedRows.map((row: any) => {
+                const id = onuRowKey(row);
+                return (
+                  <tr key={id} className={rowHover}>
+                    {tab !== 'inventory' && (
+                      <td className="px-3 py-2.5">
+                        {/* Disabled state comes from the same predicate the header's
+                            select-all uses. It was hardcoded to `!row.eligible`, which
+                            the two could — and did — disagree about: after cleanup
+                            stopped gating on eligibility, Select All took every
+                            inactive ONU while the individual boxes stayed greyed out,
+                            so a row could be selected in bulk but not on its own. */}
+                        <input
+                          type="checkbox"
+                          disabled={!selectable(row)}
+                          checked={selected.has(id)}
+                          onChange={(e) => toggle(id, e.target.checked)}
+                          className="rounded disabled:opacity-30"
+                        />
+                      </td>
+                    )}
+                    {visibleColumns.map((column) => (
+                      <React.Fragment key={column.key}>{renderCell(column.key, row)}</React.Fragment>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {tab === 'logs' && (
+            <table className="w-full text-sm">
+              <thead className={`text-xs uppercase tracking-wide ${headRow}`}>
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-semibold">When</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Operator</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Action</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">ONU</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Change</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">Status</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Undo</th>
+                </tr>
+              </thead>
+              <tbody className={isDarkMode ? 'divide-y divide-gray-800' : 'divide-y divide-gray-100'}>
+                {loading && <tr><td colSpan={7} className={`px-4 py-10 text-center ${muted}`}><Loader2 className="w-5 h-5 animate-spin mx-auto" /></td></tr>}
+                {!loading && logs.length === 0 && (
+                  <tr><td colSpan={7} className={`px-4 py-10 text-center ${muted}`}>No operation has been recorded yet.</td></tr>
+                )}
+                {!loading && logs.map((entry) => (
                   <tr key={entry.log_id} className={rowHover}>
                     <td className={`px-3 py-2.5 text-xs whitespace-nowrap ${muted}`}>
                       {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
@@ -1874,23 +1664,15 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                     <td className={`px-3 py-2.5 text-xs font-mono ${text}`}>{entry.action}</td>
                     <td className={`px-3 py-2.5 text-xs font-mono ${text}`}>{entry.external_id ?? '—'}</td>
                     <td className={`px-3 py-2.5 text-xs ${muted} max-w-md`}>
-                      <div className="truncate" title={entry.message}>
-                        {entry.message}
-                      </div>
+                      <div className="truncate" title={entry.message}>{entry.message}</div>
                     </td>
                     <td className="px-3 py-2.5">
                       {entry.reversed ? (
-                        <span className="text-[11px] px-2 py-0.5 rounded border bg-gray-500/15 text-gray-400 border-gray-500/30">
-                          Reversed
-                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded border bg-gray-500/15 text-gray-400 border-gray-500/30">Reversed</span>
                       ) : entry.reversible ? (
-                        <span className="text-[11px] px-2 py-0.5 rounded border bg-emerald-500/15 text-emerald-500 border-emerald-500/30">
-                          Applied
-                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded border bg-emerald-500/15 text-emerald-500 border-emerald-500/30">Applied</span>
                       ) : (
-                        <span className="text-[11px] px-2 py-0.5 rounded border bg-amber-500/15 text-amber-500 border-amber-500/30">
-                          Final
-                        </span>
+                        <span className="text-[11px] px-2 py-0.5 rounded border bg-amber-500/15 text-amber-500 border-amber-500/30">Final</span>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-right">
@@ -1904,44 +1686,33 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                     </td>
                   </tr>
                 ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          )}
         </div>
-      ) : (
-        <ToolDataTable
-          grid={grid}
-          isDarkMode={isDarkMode}
-          colorPalette={colorPalette}
-          renderCell={(row, column) => renderCell(column.key, row)}
-          renderHeaderCell={renderHeaderCell}
-          rowKey={onuRowKey}
-          loading={loading}
-          emptyMessage={emptyMessage}
-          storageKey={`smartolt_tool.widths.${tab}`}
-        />
-      )}
 
-      <TableFunnelFilter
-        isOpen={funnelOpen}
-        onClose={() => setFunnelOpen(false)}
-        onApplyFilters={(filters) => {
-          setFunnelFilters(filters);
-          setFunnelOpen(false);
-        }}
-        currentFilters={funnelFilters}
-        columns={funnelColumns}
-        title="SmartOLT Filters"
-        subtitle={TABS.find((entry) => entry.id === tab)?.label ?? 'Narrow by column'}
-        storageKey={`smartolt_tool.funnel.${tab}`}
-        optionsByKey={funnelOptions}
-      />
+        {tab !== 'logs' && !loading && grid.filteredCount > PAGE_SIZE && (
+          <div className={`flex items-center justify-between px-4 py-3 border-t ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
+            <span className={`text-xs ${muted}`}>
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, grid.filteredCount)} of {grid.filteredCount}
+            </span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => grid.setPage(Math.max(1, page - 1))} disabled={page === 1}
+                className={`px-3 py-1 rounded border text-xs disabled:opacity-40 ${card} ${text}`}>Previous</button>
+              <span className={`text-xs ${muted}`}>Page {page} of {totalPages}</span>
+              <button onClick={() => grid.setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages}
+                className={`px-3 py-1 rounded border text-xs disabled:opacity-40 ${card} ${text}`}>Next</button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Stepwise job progress — full modal, or docked to the corner when minimized.
           Both branches read the same job state and the same poll; minimizing only
           drops the backdrop and the console, never the work. */}
       {job && (job.status === 'running' || jobPaused) && (
         isMinimized ? (
-          <div className="fixed bottom-5 right-5 z-[950] w-80 max-w-[calc(100vw-2.5rem)]">
+          <div className="fixed bottom-5 right-5 z-50 w-80 max-w-[calc(100vw-2.5rem)]">
             <div className={`rounded-xl border shadow-2xl p-3 ${card}`}>
               <div className="flex items-center gap-2 mb-2">
                 <Loader2 className={`w-4 h-4 shrink-0 ${jobPaused ? '' : 'animate-spin'}`} />
@@ -1949,101 +1720,95 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                   {jobTypeLabel(job.type)}
                 </span>
                 <button
+                  type="button"
                   onClick={() => setIsMinimized(false)}
                   title="Expand"
-                  className={`p-1 rounded shrink-0 ${muted} hover:opacity-70`}
+                  aria-label="Expand job progress"
+                  className={`p-1 rounded border ${card} ${text}`}
                 >
                   <ChevronUp className="w-3.5 h-3.5" />
                 </button>
                 <button
+                  type="button"
                   onClick={cancelJob}
-                  title="Abort this job"
-                  className="p-1 rounded shrink-0 text-red-500 hover:opacity-70"
+                  title="Cancel job"
+                  aria-label="Cancel job"
+                  className="p-1 rounded bg-red-600 hover:bg-red-500 text-white"
                 >
-                  <XCircle className="w-3.5 h-3.5" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
 
               <div className={`h-1.5 rounded-full overflow-hidden mb-1.5 ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
                 <div
-                  className="h-full transition-all duration-300"
-                  style={{ width: `${jobProgressPercent(job)}%`, backgroundColor: accent }}
+                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all duration-300"
+                  style={{ width: `${jobProgressPercent(job)}%` }}
                 />
               </div>
 
-              <div className={`text-[11px] flex items-center justify-between ${muted}`}>
-                <span className="truncate" title={job.message}>
-                  {job.message}
-                </span>
-                <span className="shrink-0 ml-2 font-mono">
-                  {job.current}/{job.total || '?'}
+              <div className="flex items-baseline justify-between gap-2">
+                <p className={`text-[11px] truncate flex-1 min-w-0 ${muted}`} title={job.message}>{job.message}</p>
+                <span className={`text-[11px] font-medium tabular-nums shrink-0 ${muted}`}>
+                  {jobProgressPercent(job)}% · {job.current}/{job.total || '?'}
                 </span>
               </div>
             </div>
           </div>
         ) : (
-          <div className="fixed inset-0 z-[950] flex items-center justify-center bg-black/60 p-4">
-            <div className={`w-full max-w-lg rounded-xl border p-5 ${card}`}>
-              <div className="flex items-center gap-3 mb-4">
-                <Loader2 className={`w-5 h-5 ${jobPaused ? '' : 'animate-spin'}`} style={{ color: accent }} />
-                <h3 className={`text-base font-bold flex-1 ${text}`}>{jobTypeLabel(job.type)}</h3>
-                <button
-                  onClick={() => setIsMinimized(true)}
-                  title="Keep it running and get back to the tables"
-                  className={`p-1.5 rounded ${muted} hover:opacity-70`}
-                >
-                  <ChevronDown className="w-4 h-4" />
-                </button>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className={`w-full max-w-2xl rounded-xl border p-5 ${card}`}>
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h3 className={`text-base font-bold flex items-center gap-2 min-w-0 ${text}`}>
+                  <Loader2 className={`w-4 h-4 shrink-0 ${jobPaused ? '' : 'animate-spin'}`} />
+                  <span className="truncate">{jobTypeLabel(job.type)}</span>
+                </h3>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-xs ${muted}`}>
+                    Step {job.current} of {job.total || '?'}
+                  </span>
+                  {/* Sends the job to the corner dock. The sweep is unaffected — this
+                      is what lets an operator keep working through a long pass. */}
+                  <button
+                    type="button"
+                    onClick={() => setIsMinimized(true)}
+                    title="Minimize"
+                    aria-label="Minimize job progress"
+                    className={`p-1 rounded border ${card} ${text}`}
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className={`h-2 rounded-full overflow-hidden mb-2 ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
                 <div
-                  className="h-full transition-all duration-300"
-                  style={{ width: `${jobProgressPercent(job)}%`, backgroundColor: accent }}
+                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all duration-300"
+                  style={{ width: `${jobProgressPercent(job)}%` }}
                 />
               </div>
+              <p className={`text-sm mb-4 ${muted}`}>{job.message}</p>
 
-              <div className={`text-xs mb-3 flex items-center justify-between ${muted}`}>
-                <span>{job.message}</span>
-                <span className="font-mono">
-                  {job.current}/{job.total || '?'}
-                </span>
+              <div className={`rounded-lg border p-3 mb-4 h-48 overflow-y-auto font-mono text-[11px] ${isDarkMode ? 'bg-gray-950 border-gray-800 text-gray-400' : 'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                {jobLog.length === 0 ? <span>Waiting for the first step…</span> : jobLog.map((line, index) => <div key={index}>{line}</div>)}
               </div>
 
-              <div
-                className={`rounded-lg border p-2 h-40 overflow-y-auto text-[11px] font-mono space-y-0.5 ${
-                  isDarkMode ? 'bg-gray-950 border-gray-800' : 'bg-gray-50 border-gray-200'
-                }`}
-              >
-                {jobLog.map((line, index) => (
-                  <div key={index} className={muted}>
-                    {line}
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-end gap-2 mt-4">
+              <div className="flex items-center justify-end gap-2">
+                {/* Watching is a property of this screen, not of the job. The work runs
+                    server-side either way; only Cancel stops it. */}
                 <button onClick={() => setIsMinimized(true)} className={`px-4 py-2 rounded-lg border text-sm ${card} ${text}`}>
-                  Run in background
+                  Minimize
                 </button>
                 {jobPaused ? (
-                  <button
-                    onClick={startWatching}
-                    className="px-4 py-2 rounded-lg text-white text-sm font-medium"
-                    style={{ backgroundColor: accent }}
-                  >
-                    Watch again
+                  <button onClick={startWatching} className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium">
+                    Watch
                   </button>
                 ) : (
                   <button onClick={stopWatching} className={`px-4 py-2 rounded-lg border text-sm ${card} ${text}`}>
                     Stop watching
                   </button>
                 )}
-                <button
-                  onClick={cancelJob}
-                  className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium"
-                >
-                  Abort
+                <button onClick={cancelJob} className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium">
+                  Cancel job
                 </button>
               </div>
             </div>
@@ -2051,150 +1816,58 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
         )
       )}
 
-      {/* Replace SN confirmation */}
-      {replaceTarget && (
-        <div className="fixed inset-0 z-[900] flex items-center justify-center bg-black/60 p-4">
-          <div className={`w-full max-w-md rounded-xl border p-5 ${card}`}>
-            <h3 className={`text-base font-bold mb-2 flex items-center gap-2 ${text}`}>
-              <HardDrive className="w-4 h-4" style={{ color: accent }} /> Replace this ONU&rsquo;s serial?
-            </h3>
-
-            <p className={`text-sm mb-3 ${muted}`}>
-              Points the SmartOLT provisioning record at a different physical device. The ONU keeps its slot, zone,
-              VLAN, speed profile and name — only the serial that answers on it changes. Use this after a technician has
-              swapped the modem.
-            </p>
-
-            <div
-              className={`rounded-lg border p-3 mb-3 text-xs space-y-1 ${
-                isDarkMode ? 'bg-gray-950 border-gray-800' : 'bg-gray-50 border-gray-200'
-              }`}
-            >
-              <div className="flex justify-between gap-3">
-                <span className={muted}>ONU</span>
-                <span className={`font-mono ${text}`}>{replaceTarget.external_id}</span>
+      {/* Permanent deletion confirmation */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className={`w-full max-w-lg rounded-xl border p-5 ${card}`}>
+            <div className="flex items-start gap-3 mb-4">
+              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+              <div>
+                <h3 className={`text-base font-bold ${text}`}>Permanently unprovision {selected.size} ONU(s)?</h3>
+                <p className={`text-sm mt-1 ${muted}`}>
+                  This removes the ONU from the OLT. It cannot be undone from this tool — the ONU must be re-provisioned
+                  in SmartOLT. Your selection is what runs: billing and RADIUS state is still checked and recorded against
+                  each deletion, but it no longer stops one. Check the Safety Notes column before confirming.
+                </p>
               </div>
-              <div className="flex justify-between gap-3">
-                <span className={muted}>Name</span>
-                <span className={text}>{replaceTarget.name || 'not set'}</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className={muted}>Current serial</span>
-                <span className={`font-mono ${text}`}>{replaceTarget.sn || '—'}</span>
-              </div>
-              {replaceTarget.account_no && (
-                <div className="flex justify-between gap-3">
-                  <span className={muted}>Account</span>
-                  <span className={`font-mono ${text}`}>{replaceTarget.account_no}</span>
-                </div>
-              )}
             </div>
 
-            <label className={`block text-xs mb-1 ${muted}`}>Replacement serial</label>
-            <input
-              value={replaceSn}
-              onChange={(e) => setReplaceSn(e.target.value.trim().toUpperCase())}
-              placeholder="e.g. HWTC1A2B3C4D"
-              autoFocus
-              maxLength={64}
-              className={`w-full px-3 py-2 rounded-lg border text-sm font-mono mb-3 ${input}`}
-            />
-
-            {replaceTarget.technical_detail_id ? (
-              <label className={`flex items-start gap-2 text-xs mb-4 ${muted}`}>
-                <input
-                  type="checkbox"
-                  checked={replaceWriteBilling}
-                  onChange={(e) => setReplaceWriteBilling(e.target.checked)}
-                  className="rounded mt-0.5"
-                />
-                <span>
-                  Also record it as this subscriber&rsquo;s router/modem SN. The OLT is changed first; if that is
-                  refused nothing is written to billing.
-                </span>
-              </label>
-            ) : (
-              <div className={`text-xs mb-4 ${muted}`}>
-                No subscriber is matched to this ONU, so only SmartOLT is changed. Reconcile billing afterwards from the
-                Router/Modem SN tab.
+            {tab === 'mac_alignment' && (
+              <div className="mb-4 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-500">
+                Deleting from this tab removes ONUs that are currently MAC-matched to a live RADIUS session. Billing and
+                session state is evaluated and recorded against each deletion, but it will not stop one — the selection
+                is what runs. Confirm from the Inactive ONU tab instead unless you intend exactly this.
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => {
-                  setReplaceTarget(null);
-                  setReplaceSn('');
-                }}
-                disabled={replacing}
-                className={`px-4 py-2 rounded-lg border text-sm disabled:opacity-50 ${card} ${text}`}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmReplaceSn}
-                disabled={replacing || replaceSn.trim().length < 4 || replaceSn.trim() === replaceTarget.sn}
-                title={
-                  replaceSn.trim() === replaceTarget.sn
-                    ? 'That is the serial this ONU already carries.'
-                    : 'Apply the replacement'
-                }
-                className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50 flex items-center gap-2"
-                style={{ backgroundColor: accent }}
-              >
-                {replacing ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />}
-                Replace serial
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Permanent deletion */}
-      {deleteModalOpen && (
-        <div className="fixed inset-0 z-[900] flex items-center justify-center bg-black/60 p-4">
-          <div className={`w-full max-w-md rounded-xl border p-5 ${card}`}>
-            <h3 className="text-base font-bold mb-2 text-red-500 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4" /> Permanently unprovision {selected.size} ONU(s)?
-            </h3>
-            <p className={`text-sm mb-3 ${muted}`}>
-              This removes the ONU from SmartOLT. It cannot be undone from this tool — the ONU has to be
-              re-provisioned by hand. Type <strong className={text}>{DELETE_CONFIRMATION}</strong> to confirm.
-            </p>
-            <p className={`text-xs mb-3 ${muted}`}>
-              Only ONUs with a pullout Service Order marked Done can be removed. Any ONU that no longer has one
-              when the job reaches it is skipped and counted as blocked.
-            </p>
+            <label className={`block text-xs font-medium mb-1.5 ${muted}`}>
+              Type <span className="font-mono font-bold">{DELETE_CONFIRMATION}</span> to confirm
+            </label>
             <input
               value={deleteConfirm}
               onChange={(e) => setDeleteConfirm(e.target.value)}
               placeholder={DELETE_CONFIRMATION}
-              className={`w-full px-3 py-2 rounded-lg border text-sm mb-4 ${input}`}
+              className={`w-full px-3 py-2 rounded-lg border text-sm font-mono mb-4 ${input}`}
             />
+
             <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => {
-                  setDeleteModalOpen(false);
-                  setDeleteConfirm('');
-                }}
-                className={`px-4 py-2 rounded-lg border text-sm ${card} ${text}`}
-              >
+              <button onClick={() => { setDeleteModalOpen(false); setDeleteConfirm(''); }} className={`px-4 py-2 rounded-lg border text-sm ${card} ${text}`}>
                 Cancel
               </button>
               <button
-                disabled={deleteConfirm !== DELETE_CONFIRMATION}
                 onClick={() => {
                   setDeleteModalOpen(false);
                   startJob('delete', {
                     external_ids: Array.from(selected),
-                    confirmation: deleteConfirm,
                     offline_days: offlineDays,
+                    confirmation: deleteConfirm,
                   });
                   setDeleteConfirm('');
                 }}
-                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium disabled:opacity-40"
+                disabled={deleteConfirm !== DELETE_CONFIRMATION}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                Unprovision
+                Permanently delete
               </button>
             </div>
           </div>
@@ -2203,28 +1876,23 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
 
       {/* Undo confirmation */}
       {undoTarget && (
-        <div className="fixed inset-0 z-[900] flex items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className={`w-full max-w-md rounded-xl border p-5 ${card}`}>
             <h3 className={`text-base font-bold mb-2 ${text}`}>Reverse this operation?</h3>
             <p className={`text-sm mb-3 ${muted}`}>{undoTarget.message}</p>
-            <div
-              className={`rounded-lg border p-3 mb-4 text-xs font-mono ${
-                isDarkMode ? 'bg-gray-950 border-gray-800' : 'bg-gray-50 border-gray-200'
-              }`}
-            >
+
+            <div className={`rounded-lg border p-3 mb-4 text-xs font-mono ${isDarkMode ? 'bg-gray-950 border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
               <div className={`mb-1 ${muted}`}>Restoring:</div>
-              <pre className={`whitespace-pre-wrap break-all ${text}`}>
-                {JSON.stringify(undoTarget.previous_state, null, 2)}
-              </pre>
+              <pre className={`whitespace-pre-wrap break-all ${text}`}>{JSON.stringify(undoTarget.previous_state, null, 2)}</pre>
             </div>
+
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setUndoTarget(null)} className={`px-4 py-2 rounded-lg border text-sm ${card} ${text}`}>
                 Cancel
               </button>
               <button
                 onClick={confirmUndo}
-                className="px-4 py-2 rounded-lg text-white text-sm font-medium flex items-center gap-2"
-                style={{ backgroundColor: accent }}
+                className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium flex items-center gap-2"
               >
                 <Undo2 className="w-4 h-4" /> Reverse
               </button>
@@ -2232,7 +1900,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
           </div>
         </div>
       )}
-    </ToolShell>
+    </div>
   );
 };
 

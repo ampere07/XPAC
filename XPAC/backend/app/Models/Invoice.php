@@ -21,6 +21,7 @@ class Invoice extends Model
         'rebate',
         'discounts',
         'staggered',
+        'vat',
         'total_amount',
         'received_payment',
         'due_date',
@@ -43,6 +44,7 @@ class Invoice extends Model
         'rebate' => 'decimal:2',
         'discounts' => 'decimal:2',
         'staggered' => 'decimal:2',
+        'vat' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'received_payment' => 'decimal:2'
     ];

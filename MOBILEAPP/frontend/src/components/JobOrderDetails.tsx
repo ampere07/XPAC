@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, Linking, Platform, useWindowDimensions, StyleSheet, Alert, DeviceEventEmitter } from 'react-native';
-import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin, Paperclip, Lock } from 'lucide-react-native';
+import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin, Paperclip } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
-import { updateJobOrder, approveJobOrder, enableJobOrderForTechnician } from '../services/jobOrderService';
+import { referredByEcho } from '../utils/referredByField';
+import { updateJobOrder, approveJobOrder } from '../services/jobOrderService';
 import { getBillingStatuses, BillingStatus } from '../services/lookupService';
 import { JobOrderDetailsProps } from '../types/jobOrder';
 import JobOrderDoneFormModal from '../modals/JobOrderDoneFormModal';
@@ -17,18 +18,11 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { getApplication } from '../services/applicationService';
 import { Application } from '../types/application';
 import { getJobOrderItems, JobOrderItem } from '../services/jobOrderItemService';
+import ContactActions from './common/ContactActions';
 import { useJobOrderContext } from '../contexts/JobOrderContext';
-import { referredByEcho } from '../utils/referredByField';
-import { usePermissions } from '../hooks/usePermissions';
 import { useServiceOrderContext } from '../contexts/ServiceOrderContext';
 import { useWorkOrderStore } from '../store/workOrderStore';
 import { techInOutService } from '../services/techInOutService';
-import {
-  buildTechnicianLockedJobOrderIds,
-  isClosedForTechnicianQueue,
-  isTechnicianEnabled,
-  TECHNICIAN_LOCKED_MESSAGE,
-} from '../utils/technicianJobOrderAccess';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -53,7 +47,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
   const { silentRefresh, jobOrders } = useJobOrderContext();
   const { serviceOrders } = useServiceOrderContext();
   const { workOrders } = useWorkOrderStore();
-  const { can, ready: permissionsReady } = usePermissions();
 
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
   const [loading, setLoading] = useState(false);
@@ -73,15 +66,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
   const [jobOrderItems, setJobOrderItems] = useState<JobOrderItem[]>([]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
-  const [isEnablingTechnician, setIsEnablingTechnician] = useState(false);
-  /**
-   * Local echo of technician_enabled after a successful enable.
-   *
-   * The list refresh is what makes the change permanent everywhere; this only
-   * keeps the button honest in the moment between the two. Cleared whenever a
-   * different job order is opened so it can never leak across records.
-   */
-  const [technicianEnabledOverride, setTechnicianEnabledOverride] = useState<boolean | null>(null);
   const checkIsStarted = (time?: string | null) => {
     if (!time) return false;
     const lowerTime = String(time).toLowerCase().trim();
@@ -296,15 +280,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
     fetchItems();
   }, [jobOrder]);
 
-  // Reading /applications/{id} needs the application-management key. A technician
-  // or an agent does not hold it, so asking anyway bought a guaranteed 403 on
-  // every job order they opened — for data that is only ever a fallback here, for
-  // fields the job order itself may be missing.
-  const canReadApplication = permissionsReady && can('application-management');
-
   useEffect(() => {
-    if (!canReadApplication) return;
-
     const fetchApplicationData = async () => {
       const appId = jobOrder.application_id || jobOrder.Application_ID || jobOrder.account_id;
       if (appId) {
@@ -320,7 +296,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
     if (jobOrder) {
       fetchApplicationData();
     }
-  }, [jobOrder, canReadApplication]);
+  }, [jobOrder]);
 
   const getBillingStatusName = (statusId?: number | null): string => {
     if (!statusId) return 'Not Set';
@@ -468,14 +444,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
   };
 
   const handleDoneClick = () => {
-    // A locked job order opens for reading, but not for editing: the form here is
-    // how the work gets recorded, so letting it open would hand back everything
-    // the locked Start button withholds.
-    if (technicianLocked) {
-      Alert.alert('Job Order Locked', TECHNICIAN_LOCKED_MESSAGE, [{ text: 'OK' }]);
-      return;
-    }
-
     if (userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2') {
       if (!isStarted) {
         Alert.alert(
@@ -639,80 +607,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
     return onsiteStatus === 'done' && billingStatus !== 'done' && isAdministrator;
   };
 
-  // ── Technician queue release ────────────────────────────────────────────────
-  // Technicians work their job orders oldest first: everything newer is greyed
-  // out until either the older work moves forward or an administrator releases
-  // one early. This is that release.
-
-  const isAdminUser = userRole === 'administrator' || userRole === 'superadmin' || userRoleId === 1 || userRoleId === 7;
-
-  const technicianEnabled = technicianEnabledOverride ?? isTechnicianEnabled(jobOrder);
-
-  const isTechnicianViewer = userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2';
-
-  /**
-   * Is this job order still waiting its turn in the technician's queue?
-   *
-   * The same rule the list greys cards out with, asked again here because the
-   * actions live in this view. A technician may read any job order assigned to
-   * them; starting it, editing it and closing it wait until it is their next job
-   * or an administrator releases it. Built from the whole assigned set out of
-   * the context — the API already scopes that to them — so a filtered or paged
-   * view can never change which job order counts as next.
-   *
-   * JobOrderController::isJobOrderLockedForTechnician() enforces the same rule
-   * on update, so what happens here is the message, not the lock itself.
-   */
-  const technicianLocked = useMemo(() => {
-    if (!isTechnicianViewer || technicianEnabled) return false;
-    return buildTechnicianLockedJobOrderIds(jobOrders).has(String(jobOrder.id));
-  }, [isTechnicianViewer, technicianEnabled, jobOrders, jobOrder.id]);
-
-  // Offered for administrators on any job order a technician still owes work on,
-  // including one that has been rescheduled — that is precisely the case where
-  // the technician cannot pick it back up without being released. A job order
-  // that is finished, failed or cancelled has nothing left to release.
-  const shouldShowEnableTechnicianButton = () => isAdminUser && !isClosedForTechnicianQueue(jobOrder);
-
-  const handleEnableTechnicianClick = async () => {
-    if (isEnablingTechnician || technicianEnabled) return;
-
-    if (!jobOrder.id) {
-      setError('Cannot enable job order: Missing ID');
-      return;
-    }
-
-    setError(null);
-    setIsEnablingTechnician(true);
-
-    try {
-      const response = await enableJobOrderForTechnician(jobOrder.id);
-
-      if (response?.success) {
-        setTechnicianEnabledOverride(true);
-        setSuccessMessage('Job order enabled. The technician can now start it.');
-        setShowSuccessModal(true);
-        if (onRefresh) {
-          onRefresh();
-        }
-        silentRefresh();
-      } else {
-        setError(response?.message || 'Failed to enable job order for the technician');
-      }
-    } catch (err: any) {
-      setError(
-        err.response?.data?.message || err.message || 'Failed to enable job order for the technician'
-      );
-    } finally {
-      setIsEnablingTechnician(false);
-    }
-  };
-
-  // A different record is a different lock state.
-  useEffect(() => {
-    setTechnicianEnabledOverride(null);
-  }, [jobOrder.id]);
-
   const handleStatusUpdate = async (newStatus: string) => {
     try {
       setLoading(true);
@@ -745,13 +639,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
     try {
       const isTechnician = userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2';
       if (isTechnician) {
-        // Reading the job order is always allowed; starting it waits until this
-        // one is their next job or an administrator releases it.
-        if (technicianLocked) {
-          Alert.alert('Job Order Locked', TECHNICIAN_LOCKED_MESSAGE, [{ text: 'OK' }]);
-          return;
-        }
-
         if (techStatus === 'offline') {
           setShowTimeInWarning(true);
           return;
@@ -760,9 +647,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
         const isJobInProgress = (item: any) => {
           const hasStarted = checkIsStarted(item.start_time) || checkIsStarted(item.StartTimeStamp) || checkIsStarted(item.start_timestamp);
           const hasEnded = checkIsStarted(item.end_time) || checkIsStarted(item.EndTimeStamp) || checkIsStarted(item.end_timestamp);
-          // onsite_status is the only status a job order carries. visit_status
-          // belongs to Service Orders and is never present here.
-          const status = (item.onsite_status || item.Onsite_Status || '').toLowerCase().trim();
+          const status = (item.visit_status || item.visitStatus || item.onsite_status || item.Onsite_Status || '').toLowerCase().trim();
           
           if (!hasStarted || hasEnded) return false;
           if (status !== 'in progress' && status !== 'reschedule' && status !== 'inprogress' && status !== 'in-progress') return false;
@@ -1014,8 +899,23 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
     jobOrderNumber: () => <Text style={valStyle} selectable={true}>{jobOrder.id || jobOrder.JobOrder_ID || (applicationData ? 'App-' + applicationData.id : 'N/A')}</Text>,
     referredBy: () => <Text style={valStyle} selectable={true}>{jobOrder.Referred_By || jobOrder.referred_by || (applicationData?.referred_by) || 'None'}</Text>,
     fullName: () => <Text style={valStyle} selectable={true}>{getClientFullName()}</Text>,
-    contactNumber: () => <Text style={valStyle} selectable={true}>{jobOrder.Contact_Number || jobOrder.Mobile_Number || jobOrder.mobile_number || (applicationData?.mobile_number) || 'Not provided'}</Text>,
-    secondContactNumber: () => <Text style={valStyle} selectable={true}>{jobOrder.Second_Contact_Number || jobOrder.Secondary_Mobile_Number || jobOrder.secondary_mobile_number || (applicationData?.secondary_mobile_number) || 'Not provided'}</Text>,
+    // Call and SMS sit on the number itself. A technician confirming an install
+    // is the single most repeated action in this screen, and it used to mean
+    // copying the number out and leaving the app. The SMS button prefills the
+    // agreed spiel; it does not send — the device's composer opens and the
+    // technician presses send.
+    contactNumber: () => (
+      <ContactActions
+        value={jobOrder.Contact_Number || jobOrder.mobile_number || (applicationData?.mobile_number)}
+        valueStyle={valStyle}
+      />
+    ),
+    secondContactNumber: () => (
+      <ContactActions
+        value={jobOrder.Second_Contact_Number || jobOrder.secondary_mobile_number || (applicationData?.secondary_mobile_number)}
+        valueStyle={valStyle}
+      />
+    ),
     emailAddress: () => <Text style={valStyle} selectable={true}>{jobOrder.Email_Address || jobOrder.email_address || (applicationData?.email_address) || 'Not provided'}</Text>,
     fullAddress: () => <Text style={valStyle} selectable={true}>{getClientFullAddress()}</Text>,
     addressCoordinates: () => {
@@ -1102,8 +1002,8 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
       case 'jobOrderNumber': return !(jobOrder.id || jobOrder.JobOrder_ID || applicationData?.id);
       case 'referredBy': return !(jobOrder.Referred_By || jobOrder.referred_by || applicationData?.referred_by);
       case 'fullName': return !getClientFullName() || getClientFullName() === 'Unknown Client';
-      case 'contactNumber': return !(jobOrder.Contact_Number || jobOrder.Mobile_Number || jobOrder.mobile_number || applicationData?.mobile_number);
-      case 'secondContactNumber': return !(jobOrder.Second_Contact_Number || jobOrder.Secondary_Mobile_Number || jobOrder.secondary_mobile_number || applicationData?.secondary_mobile_number);
+      case 'contactNumber': return !(jobOrder.Contact_Number || jobOrder.mobile_number || applicationData?.mobile_number);
+      case 'secondContactNumber': return !(jobOrder.Second_Contact_Number || jobOrder.secondary_mobile_number || applicationData?.secondary_mobile_number);
       case 'emailAddress': return !(jobOrder.Email_Address || jobOrder.email_address || applicationData?.email_address);
       case 'fullAddress': return !getClientFullAddress() || getClientFullAddress() === 'No address provided';
       case 'addressCoordinates': return !(applicationData?.long_lat || jobOrder.Address_Coordinates || jobOrder.address_coordinates);
@@ -1197,7 +1097,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
                 if (isDone) {
                   setIsAttachmentModalOpen(true);
                 } else {
-                  Alert.alert('Notice', 'You need to done first the onsite status');
+                  Alert.alert('Notice', 'You need to done first the visit status');
                 }
               }}
             >
@@ -1210,33 +1110,14 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
             <>
               {(!isStarted || (['reschedule'].includes(jobOrder.Onsite_Status?.toLowerCase().trim() || jobOrder.onsite_status?.toLowerCase().trim() || '') && isStarted && isEnded)) && (
                 <Pressable
-                  style={[st.iconBtn, {
-                    backgroundColor: technicianLocked ? '#d1d5db' : (colorPalette?.primary || '#10b981'),
-                  }]}
+                  style={[st.iconBtn, { backgroundColor: colorPalette?.primary || '#10b981' }]}
                   onPress={handleStartTimer}
-                  disabled={loading || technicianLocked}
+                  disabled={loading}
                 >
-                  {technicianLocked
-                    ? <Lock width={18} height={18} color="#6b7280" />
-                    : <Play width={18} height={18} color="#ffffff" />}
+                  <Play width={18} height={18} color="#ffffff" />
                 </Pressable>
               )}
             </>
-          )}
-
-          {shouldShowEnableTechnicianButton() && (
-            <Pressable
-              style={[st.actionBtn, { backgroundColor: technicianEnabled ? '#e5e7eb' : '#059669' }]}
-              onPress={handleEnableTechnicianClick}
-              disabled={technicianEnabled || isEnablingTechnician}
-            >
-              {isEnablingTechnician && (
-                <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 6 }} />
-              )}
-              <Text style={[st.actionBtnText, { color: technicianEnabled ? '#6b7280' : '#ffffff', fontSize: isMobile ? 14 : 16 }]}>
-                {technicianEnabled ? 'Enabled' : (isEnablingTechnician ? 'Enabling...' : 'Enable')}
-              </Text>
-            </Pressable>
           )}
 
           {shouldShowApproveButton() && (
@@ -1247,12 +1128,11 @@ const JobOrderDetails: React.FC<JobOrderDetailsPropsExtended> = ({ jobOrder, onC
 
           {['in progress', 'reschedule'].includes(jobOrder.Onsite_Status?.toLowerCase().trim() || '') && userRole !== 'agent' && userRoleId !== 4 && (
               <Pressable
-                style={[st.actionBtn, { backgroundColor: technicianLocked ? '#d1d5db' : (colorPalette?.primary || '#7c3aed') }]}
+                style={[st.actionBtn, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}
                 onPress={handleDoneClick}
-                disabled={loading || technicianLocked}
+                disabled={loading}
               >
-                {technicianLocked && <Lock width={14} height={14} color="#6b7280" style={{ marginRight: 4 }} />}
-                <Text style={[st.actionBtnText, { fontSize: isMobile ? 14 : 16, color: technicianLocked ? '#6b7280' : '#ffffff' }]}>{(userRoleId === 2 || userRole === 'technician') ? 'Edit' : 'Done'}</Text>
+                <Text style={[st.actionBtnText, { fontSize: isMobile ? 14 : 16 }]}>{(userRoleId === 2 || userRole === 'technician') ? 'Edit' : 'Done'}</Text>
               </Pressable>
             )}
           {/* Invisible placeholder for centering symmetry if no actions */}

@@ -1,9 +1,11 @@
-import { Mail, Circle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, Columns3, X } from 'lucide-react';
+import { Mail, Circle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, Columns3, X, Filter } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import apiClient from '../config/api';
+import axios from 'axios';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { useTableColumns } from './globalfunctions/useTableColumns';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -96,6 +98,26 @@ const EmailLogs: React.FC = () => {
     { key: 'sent_at', label: 'Sent At', width: 'min-w-48' },
   ];
 
+  /**
+   * One filter entry per table column above, so every column the table can show is filterable.
+   * Keys match allColumns exactly - the table renders each cell from log[key] and the filter reads
+   * the same key. 'status' offers the values present in the loaded logs rather than requiring a
+   * lookup endpoint, and 'attempts' is a range so "which emails needed more than one try" is
+   * answerable in the table.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'date', label: 'Date', dataType: 'datetime' },
+    { key: 'recipient_email', label: 'Recipient', dataType: 'varchar' },
+    { key: 'email_sender', label: 'Sender', dataType: 'varchar' },
+    { key: 'subject', label: 'Subject', dataType: 'varchar' },
+    { key: 'account_no', label: 'Account No.', dataType: 'varchar' },
+    { key: 'status', label: 'Status', dataType: 'checklist' },
+    { key: 'attempts', label: 'Attempts', dataType: 'int' },
+    { key: 'cc', label: 'CC', dataType: 'varchar' },
+    { key: 'bcc', label: 'BCC', dataType: 'varchar' },
+    { key: 'sent_at', label: 'Sent At', dataType: 'datetime' },
+  ];
+
   const {
     visibleColumns,
     displayedColumns,
@@ -128,8 +150,17 @@ const EmailLogs: React.FC = () => {
       setIsLoading(true);
       setError(null);
 
-      const response = await apiClient.get<any>('/email-queue', {
+      let token = '';
+      try {
+        token = JSON.parse(localStorage.getItem('authData') || '{}').token || '';
+      } catch { /* ignore */ }
+
+      const response = await axios.get<any>(`${API_BASE_URL}/email-queue`, {
         params: { per_page: 1000 },
+        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        // The session cookie, as the shared API client sends it: the bearer
+        // token is not what the API authenticates by.
+        withCredentials: true,
       });
 
       // Laravel paginator returns { data: [...] }
@@ -207,6 +238,15 @@ const EmailLogs: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logs, searchQuery, statementDateFrom, statementDateTo]);
 
+  // Applied here, on the search-narrowed set, so the sidebar counts, the tab counts and the
+  // table all describe the same rows. Customer.tsx applies its funnel at the same point; a
+  // filter applied further down would leave the counts describing the unfiltered set.
+  const funnel = useFunnelFilter({
+    storageKey: 'emailLogsFunnelFilters',
+    columns: funnelColumns,
+    rows: globalFilteredLogs,
+  });
+
   // Sidebar resize handlers
   useEffect(() => {
     if (!isResizingSidebar) return;
@@ -232,7 +272,7 @@ const EmailLogs: React.FC = () => {
 
   // Status sidebar items
   const statusItems: StatusItem[] = useMemo(() => {
-    const filtered = globalFilteredLogs.filter(log => {
+    const filtered = funnel.filteredRows.filter(log => {
       const month = getLogDate(log).substring(0, 7);
       return selectedDate === 'All' || month === selectedDate;
     });
@@ -246,10 +286,10 @@ const EmailLogs: React.FC = () => {
       name: STATUS_META[id]?.label || id,
       count,
     }));
-  }, [globalFilteredLogs, selectedDate]);
+  }, [funnel.filteredRows, selectedDate]);
 
   const dateItems = useMemo(() => {
-    const filtered = globalFilteredLogs.filter(log =>
+    const filtered = funnel.filteredRows.filter(log =>
       selectedStatus === 'all' || (log.status || '').toLowerCase() === selectedStatus
     );
     const counts: Record<string, number> = {};
@@ -263,9 +303,10 @@ const EmailLogs: React.FC = () => {
     });
     const sortedMonths = Array.from(months).sort().reverse().map(month => ({ date: month, count: counts[month] }));
     return { all: filtered.length, dates: sortedMonths };
-  }, [globalFilteredLogs, selectedStatus]);
+  }, [funnel.filteredRows, selectedStatus]);
 
   // Final filtered + sorted records
+
   const filteredLogs = useMemo(() => {
     let filtered = logs.filter(log => {
       const matchesStatus = selectedStatus === 'all' || (log.status || '').toLowerCase() === selectedStatus;
@@ -432,7 +473,7 @@ const EmailLogs: React.FC = () => {
               className={`px-2 py-1 rounded text-xs transition-colors ${selectedStatus === 'all' && selectedDate === 'All' ? 'text-white' : isDarkMode ? 'bg-gray-800 text-gray-400' : 'bg-gray-100 text-gray-400'}`}
               style={selectedStatus === 'all' && selectedDate === 'All' ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
             >
-              {globalFilteredLogs.length}
+              {funnel.filteredRows.length}
             </span>
           </button>
 
@@ -548,6 +589,24 @@ const EmailLogs: React.FC = () => {
                   placeholder="Search email logs..."
                 />
               </div>
+              <button
+                className={`flex-shrink-0 px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                  ? 'text-white'
+                  : isDarkMode
+                    ? 'hover:bg-gray-700 text-white bg-gray-800 border-gray-700'
+                    : 'hover:bg-gray-200 text-gray-900 bg-white border border-gray-300'
+                  }`}
+                style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                onClick={funnel.open}
+                title={funnel.activeCount > 0
+                  ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                  : 'Column Filters'}
+              >
+                <Filter className="h-5 w-5" />
+                {funnel.activeCount > 0 && (
+                  <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                )}
+              </button>
               <div className="relative flex-shrink-0" ref={filterDropdownRef}>
                 <button
                   onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
@@ -754,6 +813,12 @@ const EmailLogs: React.FC = () => {
           </div>
         </div>
       )}
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Email Log Filters"
+        subtitle="Refine your email log results"
+      />
     </div>
   );
 };

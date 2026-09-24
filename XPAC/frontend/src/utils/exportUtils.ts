@@ -14,8 +14,7 @@ export const exportToCSV = <T,>(
 
   const escapeCsv = (str: any) => {
     if (str === null || str === undefined) return '""';
-    // Remove currency symbols/prefixes (e.g. '₱', 'PHP') so values export as clean numbers for formulas
-    const s = String(str).replace(/(?:₱|PHP)\s*/gi, '').replace(/"/g, '""');
+    const s = String(str).replace(/"/g, '""');
     return `"${s}"`;
   };
 
@@ -27,7 +26,7 @@ export const exportToCSV = <T,>(
     csvRows.push(row.map(escapeCsv).join(','));
   });
 
-  const csvContent = '\uFEFF' + csvRows.join('\n');
+  const csvContent = csvRows.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

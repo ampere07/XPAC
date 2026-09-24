@@ -18,12 +18,29 @@ export interface BillingRecord {
   billing_status_id?: number;
   vip_expiration?: string;
   vip_remarks?: string;
+  generationType?: string;
+  prepaidExpiration?: string;
+  // Prepaid plan change already paid for, taking effect when the current period lapses.
+  pendingPlanId?: number | null;
+  pendingPlanEffectiveAt?: string;
+  /** Legacy free-text VAT mode. vatEnabled below is what billing generation actually reads. */
+  vatType?: string;
+  /** false = No VAT (plan price billed as-is). true = VAT Included (VAT added on top). */
+  vatEnabled?: boolean | null;
+  withholdingEnabled?: boolean | null;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */
+  withholdingPercentage?: number | null;
   dateInstalled?: string;
   contactNumber?: string;
   secondContactNumber?: string;
   emailAddress?: string;
   plan?: string;
   username?: string;
+  /**
+   * PPPoE password. Read from the account's job order, not technical_details — the technician
+   * sets it when completing the install, so accounts predating that flow have none.
+   */
+  pppoePassword?: string;
   connectionType?: string;
   routerModel?: string;
   routerModemSN?: string;
@@ -131,13 +148,6 @@ export interface BillingDetailRecord extends BillingRecord {
   logs?: string;
   /** Raw document URL, kept alongside houseFrontPicture for the attachment viewer. */
   houseFrontPictureUrl?: string;
-  pppoePassword?: string;
-  /** Legacy free-text VAT mode. vatEnabled below is what billing generation actually reads. */
-  vatType?: string;
-  /** Null when the account predates the boolean column - not the same as false. */
-  vatEnabled?: boolean | null;
-  withholdingEnabled?: boolean | null;
-  withholdingPercentage?: number | null;
 }
 
 export interface OnlineStatusRecord {

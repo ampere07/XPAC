@@ -18,68 +18,210 @@ use App\Models\Overdue;
 use App\Models\DCNotice;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Support\CronLog;
+use Illuminate\Support\Facades\Schema;
 use Carbon\Carbon;
 
 class EnhancedBillingGenerationServiceWithNotifications
 {
     protected BillingNotificationService $notificationService;
     protected const VAT_RATE = 0.12;
+
+    /** Resolved VAT rate for this instance (billing_config lookup performed once). */
+    private ?float $resolvedVatRate = null;
+
+    /**
+     * VAT rate to apply during bill generation.
+     *
+     * Reads billing_config.vat_rate (stored as a fraction, e.g. 0.12 = 12%) and falls back to the
+     * historical default (self::VAT_RATE) when no valid rate is configured, so behaviour is
+     * unchanged for installs that never set one. Resolved once per instance to avoid a per-account
+     * query during a batch run.
+     */
+    protected function getVatRate(): float
+    {
+        if ($this->resolvedVatRate !== null) {
+            return $this->resolvedVatRate;
+        }
+
+        try {
+            $configured = \App\Models\BillingConfig::first()?->vat_rate;
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVatRate = (is_numeric($configured) && (float) $configured >= 0)
+            ? (float) $configured
+            : self::VAT_RATE;
+
+        return $this->resolvedVatRate;
+    }
+
+    /**
+     * Is VAT applied to this account's plan amount?
+     *
+     * VAT is a plain boolean now — either the plan price is billed as-is, or VAT is added on top
+     * of it. The 'Vat Included' mode (VAT unwrapped out of the plan price) no longer exists.
+     *
+     * Reads billing_accounts.vat_enabled. Accounts written before that column existed carry NULL,
+     * so the legacy free-text vat_type is used as the fallback:
+     *
+     *   'Excluded Vat' -> true   VAT is added on top, same as before.
+     *   'Vat Included' -> false  It already billed a total EQUAL to the plan price, and so does
+     *                            "no VAT" — the total is unchanged, only the VAT line becomes 0.
+     *   'No Vat'       -> false  Unchanged.
+     *   NULL / unknown -> false  Bill exactly the plan price; never invent a 12% surcharge for an
+     *                            account nobody configured.
+     *
+     * Matching is on a lower-cased, letters-only form so 'Excluded Vat', 'VAT Excluded' and
+     * 'vat-excluded' all resolve the same way.
+     */
+    protected function isVatEnabled(BillingAccount $account): bool
+    {
+        if ($account->vat_enabled !== null) {
+            return (bool) $account->vat_enabled;
+        }
+
+        $normalized = preg_replace('/[^a-z]/', '', strtolower((string) $account->vat_type));
+
+        return str_contains($normalized, 'exclu');
+    }
+
+    /**
+     * Split a plan-derived amount (monthly fee + any prorate) into its net / VAT / billable-total
+     * components according to whether VAT is enabled on the account.
+     *
+     *  - VAT off : no VAT is applied at all; the bill is exactly the plan price.
+     *              e.g. 1,000        -> net 1,000.00, VAT 0.00, total 1,000.00
+     *  - VAT on  : VAT is added ON TOP of the plan price (labelled "VAT Included" in the UI).
+     *              e.g. 1,000 @ 12% -> net 1,000.00, VAT 120.00, total 1,120.00
+     *
+     * The VAT percentage is the one already configured for the system ({@see getVatRate()}).
+     * Only the plan portion is VAT-bearing here, exactly as before — staggered installation fees,
+     * service charges and deductions are untouched line items.
+     *
+     * @return array{net: float, vat: float, total: float, vat_enabled: bool, vat_rate: float}
+     */
+    protected function calculateVatBreakdown(float $planAmount, BillingAccount $account): array
+    {
+        $vatRate = $this->getVatRate();
+        $vatEnabled = $this->isVatEnabled($account);
+
+        $net = $planAmount;
+        $vat = $vatEnabled ? $planAmount * $vatRate : 0.0;
+
+        return [
+            'net' => $net,
+            'vat' => $vat,
+            'total' => $net + $vat,
+            'vat_enabled' => $vatEnabled,
+            'vat_rate' => $vatRate,
+        ];
+    }
+
+    /**
+     * Withholding tax deducted from the bill AFTER VAT has been applied.
+     *
+     * The base is the VAT-inclusive plan subtotal ({@see calculateVatBreakdown()}'s 'total'), so:
+     *
+     *   plan 1,000 + VAT 120 = 1,120 subtotal, withholding 5% -> 56.00 -> final 1,064.00
+     *
+     * Disabled, NULL, zero or negative percentages all deduct nothing, so an account that was
+     * never configured for withholding bills exactly as it did before. The percentage is clamped
+     * to 100 so a bad value can never turn the bill negative on its own.
+     *
+     * @return array{enabled: bool, percentage: float, amount: float}
+     */
+    protected function calculateWithholding(float $baseAmount, BillingAccount $account): array
+    {
+        $enabled = (bool) $account->withholding_enabled;
+        $percentage = is_numeric($account->withholding_percentage)
+            ? (float) $account->withholding_percentage
+            : 0.0;
+
+        if (!$enabled || $percentage <= 0) {
+            return ['enabled' => $enabled, 'percentage' => $percentage, 'amount' => 0.0];
+        }
+
+        $percentage = min($percentage, 100.0);
+
+        return [
+            'enabled' => true,
+            'percentage' => $percentage,
+            'amount' => round($baseAmount * ($percentage / 100), 2),
+        ];
+    }
+
+    /** Fallback VIP status id, matching the hard-coded value in the vip:check-expiration command. */
+    protected const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id (billing_status lookup performed once). */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Looked up by name so a reordered status table cannot silently break the VIP skip, with the
+     * historical id as the fallback. Resolved once per instance to avoid a per-account query
+     * during a batch run.
+     */
+    protected function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
+        }
+
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
+     * Should this account be skipped entirely by billing generation because it is a VIP?
+     *
+     * VIP is the account's billing status — the same one the JO Assign Form now sets at approval
+     * and that vip:check-expiration flips off once vip_expiration passes. There is no separate
+     * VIP flag to keep in sync.
+     *
+     * A VIP produces NO invoice, NO statement, NO billing record and NO notification — it is
+     * simply passed over, and starts billing again as soon as its status is no longer VIP.
+     *
+     * Most paths never reach this: {@see getActiveAccountsForBillingDay()} already loads only
+     * Active accounts. It exists for the two flows that bypass that filter — prepaid renewal and
+     * the initial bill raised at approval.
+     */
+    protected function isVipBillingSuspended(BillingAccount $account): bool
+    {
+        if ((int) $account->billing_status_id !== $this->getVipBillingStatusId()) {
+            return false;
+        }
+
+        $this->log('info', 'Skipped billing generation — account is a VIP', [
+            'account_no' => $account->account_no,
+            'vip_expiration' => $account->vip_expiration,
+        ]);
+
+        return true;
+    }
+
     protected const DAYS_IN_MONTH = 30;
     protected const DAYS_UNTIL_DUE = 7;
     protected const DAYS_UNTIL_DC_NOTICE = 4;
     protected const END_OF_MONTH_BILLING = 0;
 
-    /**
-     * Accounts touched by the current generation run, bucketed by outcome.
-     *
-     * The per-account narration is filtered out now, so the record of which accounts were
-     * billed has to survive somewhere. It is emitted once per run as a quoted,
-     * comma-separated list per outcome, in a form that pastes into a query when one
-     * account has to be chased.
-     */
-    protected CronLog $runLog;
-
     public function __construct(BillingNotificationService $notificationService)
     {
         $this->notificationService = $notificationService;
-        $this->runLog = new CronLog();
     }
-
-    /**
-     * Faults and run summaries only.
-     *
-     * The `billing` channel used to inherit LOG_LEVEL, which is `error` here, so the
-     * info-level narration was already being discarded — but silently, and the run
-     * summaries below would have been discarded with it. The channel now records what it
-     * is given and this decides what to give it, which is the same arrangement the
-     * writeLog()-based services use and keeps every cron log filtered the one way.
-     */
+    
     protected function log($level, $message, $context = [])
     {
-        $level = (string) $level;
-
-        $isFault = in_array($level, ['error', 'critical', 'alert', 'emergency'], true)
-            || ($level === 'warning' && CronLog::includeWarnings());
-
-        if (CronLog::errorsOnly() && !$isFault && !CronLog::isSummary((string) $message)) {
-            return;
-        }
-
         Log::channel('billing')->{$level}($message, $context);
-    }
-
-    /**
-     * Emit the run's account lists, then clear them so a second run on the same instance
-     * cannot inherit the first one's accounts.
-     */
-    protected function writeRunSummary(string $stage): void
-    {
-        foreach ($this->runLog->summaryLines($stage) as $line) {
-            $this->log('info', $line);
-        }
-
-        $this->runLog->reset();
     }
 
     public function generateSOAForBillingDay(int $billingDay, Carbon $generationDate, int $userId): array
@@ -102,7 +244,6 @@ class EnhancedBillingGenerationServiceWithNotifications
                     // account was already billed for the current cycle.
                     if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
                         $results['skipped']++;
-                        $this->runLog->skipped($account->account_no);
                         $this->log('info', 'Skipped SOA generation — statement already exists for this billing cycle', [
                             'account_no' => $account->account_no,
                             'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
@@ -113,7 +254,6 @@ class EnhancedBillingGenerationServiceWithNotifications
                     $statement = $this->createEnhancedStatement($account, $generationDate, $userId);
                     $results['statements'][] = $statement;
                     $results['success']++;
-                    $this->runLog->processed($account->account_no);
 
                     $notificationResult = $this->queueNotification($account, null, $statement);
                     $results['notifications'][] = $notificationResult;
@@ -125,12 +265,9 @@ class EnhancedBillingGenerationServiceWithNotifications
                         'account_no' => $account->account_no,
                         'error' => $e->getMessage()
                     ];
-                    $this->runLog->failed($account->account_no);
                     $this->log('error', "Failed to generate SOA for account {$account->account_no}: " . $e->getMessage());
                 }
             }
-
-            $this->writeRunSummary('SOA');
 
             return $results;
         } catch (\Exception $e) {
@@ -159,7 +296,6 @@ class EnhancedBillingGenerationServiceWithNotifications
                     // account was already billed for the current cycle.
                     if ($this->invoiceAlreadyGeneratedForCycle($account, $generationDate)) {
                         $results['skipped']++;
-                        $this->runLog->skipped($account->account_no);
                         $this->log('info', 'Skipped invoice generation — invoice already exists for this billing cycle', [
                             'account_no' => $account->account_no,
                             'billing_period' => $generationDate->copy()->setTimezone('Asia/Manila')->format('Y-m')
@@ -170,7 +306,6 @@ class EnhancedBillingGenerationServiceWithNotifications
                     $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
                     $results['invoices'][] = $invoice;
                     $results['success']++;
-                    $this->runLog->processed($account->account_no);
 
                     $notificationResult = $this->queueNotification($account, $invoice, null);
                     $results['notifications'][] = $notificationResult;
@@ -182,12 +317,9 @@ class EnhancedBillingGenerationServiceWithNotifications
                         'account_no' => $account->account_no,
                         'error' => $e->getMessage()
                     ];
-                    $this->runLog->failed($account->account_no);
                     $this->log('error', "Failed to generate invoice for account {$account->account_no}: " . $e->getMessage());
                 }
             }
-
-            $this->writeRunSummary('INVOICE');
 
             return $results;
         } catch (\Exception $e) {
@@ -257,9 +389,26 @@ class EnhancedBillingGenerationServiceWithNotifications
             'technicalDetails',
             'plan'
         ])
+            // Active only. This is also what keeps VIP accounts out of scheduled billing: VIP is
+            // a billing status of its own, so a VIP is never loaded here and receives no invoice,
+            // no statement and no notification. Once vip:check-expiration moves the account off
+            // VIP it is picked up again with no manual intervention.
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
-            ->whereNotNull('account_no');
+            ->whereNotNull('account_no')
+            // Prepaid accounts are not billed on the fixed billing-day cadence. Their ONLY bill is
+            // the initial one raised at approval (generateInitialBillingForAccount); renewals raise
+            // no bill at all, because the amount is settled at checkout from the plan the customer
+            // picks (see notifyExpiredPrepaidAccounts). They are therefore excluded from THIS
+            // billing-day path only — NOT from the service as a whole. Post Paid and legacy
+            // NULL-generation_type accounts bill normally here.
+            ->where(function ($q) {
+                // Alias list, not a single '!=': a row still spelled 'Pre Paid' must stay excluded
+                // from the billing-day path, otherwise a prepaid customer would be billed on the
+                // fixed billing day on top of the initial bill they already have.
+                $q->whereNotIn('generation_type', BillingAccount::PREPAID_ALIASES)
+                  ->orWhereNull('generation_type');
+            });
 
         if ($billingDay === self::END_OF_MONTH_BILLING) {
             $query->where('billing_day', self::END_OF_MONTH_BILLING);
@@ -333,29 +482,8 @@ class EnhancedBillingGenerationServiceWithNotifications
         return $billingDay;
     }
 
-    /**
-     * One statement per account per calendar month, for the same reason as the invoice:
-     * generating twice runs calculateAdvancedPayments() again, which marks advance payments
-     * Used and would spend the customer's credit without it reaching their bill.
-     */
     public function createEnhancedStatement(BillingAccount $account, Carbon $statementDate, int $userId): StatementOfAccount
     {
-        $period = $statementDate->copy()->setTimezone('Asia/Manila');
-        $existingStatement = StatementOfAccount::where('account_no', $account->account_no)
-            ->whereMonth('statement_date', $period->month)
-            ->whereYear('statement_date', $period->year)
-            ->first();
-
-        if ($existingStatement) {
-            $this->log('info', 'Statement already exists for this billing cycle — returning it without regenerating', [
-                'account_no' => $account->account_no,
-                'statement_id' => $existingStatement->id,
-                'billing_period' => $period->format('Y-m')
-            ]);
-
-            return $existingStatement;
-        }
-
         $statementDate = $statementDate->copy()->setTimezone('Asia/Manila')->startOfDay();
         DB::beginTransaction();
 
@@ -412,34 +540,48 @@ class EnhancedBillingGenerationServiceWithNotifications
             $reconProrate = $this->calculateReconnectionProrate($account, $statementDate, $plan->price);
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
-            $monthlyFeeGross = $effectiveProrateAmount / (1 + self::VAT_RATE);
-            $vat = $monthlyFeeGross * self::VAT_RATE;
-            $monthlyServiceFee = $effectiveProrateAmount - $vat;
 
-            // Use statement ID as the reference for charges.
-            // includeDiscounts = true so the SOA REFLECTS the discount (amount_due and the
-            // discounts column), matching the invoice. consumeRecords stays false: the
-            // statement is produced before the invoice and must only read. Discounts,
-            // rebates and advance payments are all spent in the invoice pass, so the SOA
-            // shows them without using them up.
+            // Apply VAT to the plan portion of the bill, then deduct withholding from that
+            // VAT-inclusive subtotal. With VAT off and withholding off $billablePlanAmount ===
+            // $effectiveProrateAmount, i.e. the bill is exactly the plan price.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account);
+            $monthlyServiceFee = $vatBreakdown['net'];
+            $vat = $vatBreakdown['vat'];
+
+            $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+            $billablePlanAmount = $vatBreakdown['total'] - $withholding['amount'];
+
+            $this->log('info', 'Applied VAT and withholding computation to SOA plan amount', [
+                'account_no' => $account->account_no,
+                'vat_enabled' => $vatBreakdown['vat_enabled'],
+                'vat_rate' => $vatBreakdown['vat_rate'],
+                'plan_amount' => round($effectiveProrateAmount, 2),
+                'monthly_service_fee' => round($monthlyServiceFee, 2),
+                'vat' => round($vat, 2),
+                'subtotal_with_vat' => round($vatBreakdown['total'], 2),
+                'withholding_enabled' => $withholding['enabled'],
+                'withholding_percentage' => $withholding['percentage'],
+                'withholding_amount' => $withholding['amount'],
+                'billable_plan_amount' => round($billablePlanAmount, 2)
+            ]);
+
+            // Use statement ID as the reference for charges
             $charges = $this->calculateChargesAndDeductions(
-                $account,
-                $statementDate,
-                $userId,
+                $account, 
+                $statementDate, 
+                $userId, 
                 (string)$statement->id,
                 $plan->price,
                 false,
-                true
+                false
             );
             
             $othersAndBasicCharges = 0;
 
-            $amountDue = $monthlyServiceFee + $vat + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+            $amountDue = $billablePlanAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
             
-            // Payment first: the previous balance is reconstructed from it, because
-            // account_balance has already had the payment taken off.
+            $previousBalance = $this->getPreviousBalance($account, $statementDate);
             $paymentReceived = $charges['payment_received_previous'];
-            $previousBalance = $this->getPreviousBalance($account, $statementDate, $paymentReceived);
             $remainingBalance = $previousBalance - $paymentReceived;
             $totalAmountDue = $remainingBalance + $amountDue;
 
@@ -516,34 +658,8 @@ class EnhancedBillingGenerationServiceWithNotifications
         }
     }
 
-    /**
-     * One invoice per account per calendar month. If one already exists for the cycle it is
-     * returned untouched and nothing is charged again.
-     *
-     * This guard is what protects an advance payment. Billing a cycle twice consumes the
-     * credit twice over: the first run applies it and leaves the balance at zero, so the
-     * second run sees zero, finds no credit, and charges the full amount again — which looks
-     * exactly like the advance payment having been ignored.
-     */
     public function createEnhancedInvoice(BillingAccount $account, Carbon $invoiceDate, int $userId): Invoice
     {
-        $period = $invoiceDate->copy()->setTimezone('Asia/Manila');
-        $existingInvoice = Invoice::where('account_no', $account->account_no)
-            ->whereMonth('invoice_date', $period->month)
-            ->whereYear('invoice_date', $period->year)
-            ->first();
-
-        if ($existingInvoice) {
-            $this->log('info', 'Invoice already exists for this billing cycle — returning it without re-billing', [
-                'account_no' => $account->account_no,
-                'invoice_id' => $existingInvoice->id,
-                'billing_period' => $period->format('Y-m'),
-                'account_balance' => $account->account_balance
-            ]);
-
-            return $existingInvoice;
-        }
-
         $invoiceDate = $invoiceDate->copy()->setTimezone('Asia/Manila')->startOfDay();
         DB::beginTransaction();
 
@@ -583,6 +699,7 @@ class EnhancedBillingGenerationServiceWithNotifications
                 'rebate' => 0,
                 'discounts' => 0,
                 'staggered' => 0,
+                'vat' => 0,
                 'total_amount' => 0,
                 'received_payment' => 0.00,
                 'due_date' => $dueDate,
@@ -596,30 +713,48 @@ class EnhancedBillingGenerationServiceWithNotifications
             
             $effectiveProrateAmount = $prorateAmount + $reconProrate['total_prorate'];
 
+            // Apply VAT to the plan portion of the bill, then deduct withholding from that
+            // VAT-inclusive subtotal, so the invoice's total_amount below is the FINAL amount the
+            // customer owes. With VAT off and withholding off $billablePlanAmount ===
+            // $effectiveProrateAmount, i.e. the bill is exactly the plan price.
+            $vatBreakdown = $this->calculateVatBreakdown($effectiveProrateAmount, $account);
+            $vat = $vatBreakdown['vat'];
+            $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+            $billablePlanAmount = $vatBreakdown['total'] - $withholding['amount'];
+
+            $this->log('info', 'Applied VAT and withholding computation to invoice plan amount', [
+                'account_no' => $account->account_no,
+                'vat_enabled' => $vatBreakdown['vat_enabled'],
+                'vat_rate' => $vatBreakdown['vat_rate'],
+                'plan_amount' => round($effectiveProrateAmount, 2),
+                'vat' => round($vatBreakdown['vat'], 2),
+                'subtotal_with_vat' => round($vatBreakdown['total'], 2),
+                'withholding_enabled' => $withholding['enabled'],
+                'withholding_percentage' => $withholding['percentage'],
+                'withholding_amount' => $withholding['amount'],
+                'billable_plan_amount' => round($billablePlanAmount, 2)
+            ]);
+
             $charges = $this->calculateChargesAndDeductions(
-                $account, 
-                $invoiceDate, 
-                $userId, 
+                $account,
+                $invoiceDate,
+                $userId,
                 (string)$invoice->id,
                 $plan->price,
                 true,
                 true
             );
-            
+
             $othersBasicCharges = 0;
 
-            // Balance before this run. Captured once, because $account->account_balance
-            // is overwritten further down and the logging below needs the original.
-            $openingBalance = (float) $account->account_balance;
+            $periodCharges = $billablePlanAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
 
-            $totalAmount = $effectiveProrateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+            $priorBalance = round((float) $account->account_balance, 2);
 
-            // A negative balance is an advance payment. It is carried forward and applied
-            // against this cycle's charges, and is deliberately NOT clamped to zero: if the
-            // credit is larger than the bill, the remainder stays as credit on the account.
-            if ($openingBalance < 0) {
-                $totalAmount += $openingBalance;
-            }
+            // An advance payment sits on the account as a negative (credit) balance. It is netted
+            // into THIS invoice's total so the customer sees the credit applied, which means it must
+            // not be folded into the account balance again below — that would spend it twice.
+            $totalAmount = $priorBalance < 0 ? $periodCharges + $priorBalance : $periodCharges;
 
             $proRateStartInvoice = $reconProrate['pro_rate_start'];
             if (!$proRateStartInvoice) {
@@ -634,12 +769,13 @@ class EnhancedBillingGenerationServiceWithNotifications
             }
 
             $invoice->update([
-                'invoice_balance' => round($effectiveProrateAmount, 2),
+                'invoice_balance' => round($billablePlanAmount, 2),
                 'others_and_basic_charges' => round($othersBasicCharges, 2),
                 'service_charge' => round($charges['service_fees'], 2),
                 'rebate' => round($charges['rebates'], 2),
                 'discounts' => round($charges['discounts'], 2),
                 'staggered' => round($charges['staggered_install_fees'], 2),
+                'vat' => round($vat, 2),
                 'total_amount' => round($totalAmount, 2),
                 'status' => $totalAmount <= 0 ? 'Paid' : 'Unpaid',
                 'pro_rate' => round($reconProrate['total_prorate'], 2),
@@ -648,26 +784,23 @@ class EnhancedBillingGenerationServiceWithNotifications
 
             $appliedDiscounts = $charges['discounts'];
             
-            // Arrears are added on top of this cycle's charges. A credit has already been
-            // applied to $totalAmount above, so it must not be added a second time here.
-            $newBalance = $openingBalance > 0
-                ? $totalAmount + $openingBalance
-                : $totalAmount;
+            // Always accumulate onto the running ledger — never assign the invoice total over it.
+            // Assigning is what wiped advance credits: a -5,000.00 credit was replaced by the new
+            // invoice total instead of absorbing it. Adding this period's charges to a negative
+            // balance nets it down toward zero and carries any remaining credit forward.
+            $newBalance = round($priorBalance + $periodCharges, 2);
 
             $account->update([
-                'account_balance' => round($newBalance, 2),
+                'account_balance' => $newBalance,
                 'balance_update_date' => $invoiceDate->format('Y-m-d')
             ]);
 
             $this->log('info', 'Invoice updated with discount applied to balance', [
                 'account_no' => $account->account_no,
-                'invoice_balance' => $effectiveProrateAmount,
+                'invoice_balance' => $billablePlanAmount,
                 'total_amount' => $totalAmount,
                 'discounts_applied' => $appliedDiscounts,
-                // Read from the captured value: $account has already been updated above,
-                // so reading the model here reported the new balance as the previous one.
-                'previous_balance' => $openingBalance,
-                'credit_applied' => $openingBalance < 0 ? abs($openingBalance) : 0,
+                'previous_balance' => $priorBalance,
                 'new_balance' => $newBalance
             ]);
             
@@ -699,7 +832,15 @@ class EnhancedBillingGenerationServiceWithNotifications
         if ($account->billing_day === self::END_OF_MONTH_BILLING) {
             return $baseDate->copy()->endOfMonth();
         }
-        
+
+        // No billing day at all — a prepaid account, which bills on a rolling period rather than a
+        // fixed day. The bill is dated the day it is generated, so the due date lands the usual
+        // offset after that. Guarding here is essential: Carbon's ->day(null) silently resolves to
+        // the LAST DAY OF THE PREVIOUS MONTH, which would back-date the bill.
+        if ($account->billing_day === null || $account->billing_day === '') {
+            return $baseDate->copy()->startOfDay();
+        }
+
         // Normalize time to start of day to avoid time propagation issues
         $baseDate = $baseDate->copy()->startOfDay();
         $adjustedDate = $baseDate->copy()->day($account->billing_day);
@@ -842,65 +983,39 @@ class EnhancedBillingGenerationServiceWithNotifications
         $totalProrate = 0.00;
         $proRateStart = null;
         $logIds = [];
-        $advanceGenOffset = $this->getAdvanceGenerationDay();
-
-        // Calculate cycle bounds relative to the current generation date
-        $currentCycleEnd = $this->calculateAdjustedBillingDate($account, $generationDate);
-        $currentCycleStart = $currentCycleEnd->copy()->subMonth();
-
-        $totalDaysInCycle = $currentCycleStart->diffInDays($currentCycleEnd);
-        if ($totalDaysInCycle <= 0) {
-            $totalDaysInCycle = self::DAYS_IN_MONTH;
-        }
-
-        // Calculate advance generation cutoff date for the current cycle (e.g. 23rd if cycleEnd is 30th and offset is 7)
-        $advanceGenCutoff = $currentCycleEnd->copy()->subDays($advanceGenOffset > 0 ? $advanceGenOffset : self::DAYS_UNTIL_DUE);
 
         foreach ($unbilledLogs as $log) {
-            $reconDate = Carbon::parse($log->created_at)->startOfDay();
+            $reconDate = Carbon::parse($log->created_at);
+            
+            $cycleEnd = $this->calculateAdjustedBillingDate($account, $reconDate);
+            $cycleStart = $cycleEnd->copy()->subMonth();
 
-            if ($reconDate->lt($currentCycleStart)) {
-                // Log is from a past billing cycle -> mark as cleared/processed so it doesn't pile up, but do NOT add proration
-                $logIds[] = $log->id;
-                $this->log('info', 'Clearing past-cycle unbilled reconnection log without adding proration to current bill', [
-                    'account_no' => $account->account_no,
-                    'reconnection_log_id' => $log->id,
-                    'reconnection_date' => $reconDate->format('Y-m-d'),
-                    'current_cycle_start' => $currentCycleStart->format('Y-m-d')
-                ]);
-            } elseif ($reconDate->betweenIncluded($currentCycleStart, $currentCycleEnd)) {
-                // Log is within the current billing cycle
-                $logIds[] = $log->id;
+            $totalDaysInCycle = $cycleStart->diffInDays($cycleEnd);
+            if ($totalDaysInCycle <= 0) {
+                $totalDaysInCycle = self::DAYS_IN_MONTH;
+            }
 
-                if ($reconDate->gt($advanceGenCutoff)) {
-                    // Reconnection happened AFTER advance generation cutoff date (e.g., 24th > 23rd)
-                    $excessDays = $advanceGenCutoff->diffInDays($reconDate);
-                    if ($excessDays > 0 && $excessDays < $totalDaysInCycle) {
-                        $dailyRate = $monthlyFee / $totalDaysInCycle;
-                        $proratedAmount = round($dailyRate * $excessDays, 2);
-                        
-                        $totalProrate += $proratedAmount;
+            if ($reconDate->betweenIncluded($cycleStart, $cycleEnd)) {
+                $activeDays = $reconDate->diffInDays($cycleEnd);
+                if ($activeDays > 0 && $activeDays < $totalDaysInCycle) {
+                    $dailyRate = $monthlyFee / $totalDaysInCycle;
+                    $proratedAmount = round($dailyRate * $activeDays, 2);
+                    
+                    $totalProrate += $proratedAmount;
+                    $logIds[] = $log->id;
 
-                        if (!$proRateStart || $reconDate->lt(Carbon::parse($proRateStart))) {
-                            $proRateStart = $reconDate->format('Y-m-d');
-                        }
-
-                        $this->log('info', 'Calculated excess days reconnection prorate past advance generation date', [
-                            'account_no' => $account->account_no,
-                            'reconnection_log_id' => $log->id,
-                            'reconnection_date' => $reconDate->format('Y-m-d'),
-                            'advance_gen_cutoff' => $advanceGenCutoff->format('Y-m-d'),
-                            'excess_days' => $excessDays,
-                            'daily_rate' => round($dailyRate, 2),
-                            'prorated_amount' => $proratedAmount
-                        ]);
+                    if (!$proRateStart || $reconDate->lt(Carbon::parse($proRateStart))) {
+                        $proRateStart = $reconDate->format('Y-m-d');
                     }
-                } else {
-                    $this->log('info', 'Reconnection occurred on or before advance generation date; covered by standard plan rate', [
+
+                    $this->log('info', 'Calculated mid-cycle reconnection prorate', [
                         'account_no' => $account->account_no,
                         'reconnection_log_id' => $log->id,
                         'reconnection_date' => $reconDate->format('Y-m-d'),
-                        'advance_gen_cutoff' => $advanceGenCutoff->format('Y-m-d')
+                        'cycle_end' => $cycleEnd->format('Y-m-d'),
+                        'active_days' => $activeDays,
+                        'daily_rate' => round($dailyRate, 2),
+                        'prorated_amount' => $proratedAmount
                     ]);
                 }
             }
@@ -1170,6 +1285,16 @@ class EnhancedBillingGenerationServiceWithNotifications
         $invoice = null;
 
         try {
+            // A VIP account is billing-suspended and gets no invoice, scheduled or manual.
+            // The scheduled path relies on its Active-only filter for this; that filter does
+            // not apply here, so the check has to happen explicitly.
+            if ($this->isVipBillingSuspended($account)) {
+                $result['success'] = true;
+                $result['skipped'] = true;
+
+                return $result;
+            }
+
             if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
                 $this->log('info', 'Manual billing: statement already exists for this cycle, skipping', [
                     'account_no' => $account->account_no,
@@ -1235,25 +1360,616 @@ class EnhancedBillingGenerationServiceWithNotifications
     }
 
     /**
-     * @param bool $consumeRecords True only for the invoice pass, which is the one that
-     *                             spends the credits and charges it reads. The statement is
-     *                             produced first and must read everything without consuming
-     *                             it, or the invoice finds nothing left to apply.
+     * Generate the initial bill for a single, freshly-approved account immediately.
+     *
+     * Used by the Job Order approval flow for PREPAID customers, whose only bill is created at
+     * approval time (they are permanently excluded from the scheduled generator by
+     * {@see getActiveAccountsForBillingDay()}). This mirrors {@see generateUnifiedBilling()} for
+     * a single account: it creates the SOA + Invoice with the exact same logic and reuses the
+     * per-cycle idempotency guards ({@see statementAlreadyGeneratedForCycle()} /
+     * {@see invoiceAlreadyGeneratedForCycle()}) so re-running never produces duplicate records,
+     * and it notifies at most once (only when something new was actually created).
+     *
+     * It bypasses the prepaid exclusion filter by operating on the passed account directly,
+     * which is exactly why prepaid accounts can still be billed here even though the scheduled
+     * path skips them.
+     *
+     * @return array{success:bool, statement_created:bool, invoice_created:bool, skipped:bool, error?:string}
      */
-    protected function calculateChargesAndDeductions(
+    /**
+     * Is this a prepaid account still sitting on its very first, never-paid bill?
+     *
+     * That is the only window in which the initial bill may be re-priced for a different plan:
+     * no service period has started (prepaid_expires_at is NULL, it only gets set on payment) and
+     * no money has been taken. Once either is true the bill is history and must not be rewritten.
+     */
+    public function isUnpaidPrepaidOnboarding(BillingAccount $account): bool
+    {
+        if (!BillingAccount::isPrepaidType($account->generation_type)) {
+            return false;
+        }
+
+        if (!empty($account->prepaid_expires_at)) {
+            return false;
+        }
+
+        return !DB::table('transactions')
+            ->where('account_no', $account->account_no)
+            ->where('status', 'Done')
+            ->exists();
+    }
+
+    /**
+     * Re-price the unpaid initial prepaid bill for a different plan.
+     *
+     * A customer who is onboarding but has not paid yet may still change their mind about the
+     * plan. Their bill was raised at approval for the plan on the job order, so picking another
+     * one has to re-price that same bill — otherwise they would be charged one plan's price
+     * against an invoice for another, and the invoice would sit Unpaid forever.
+     *
+     * Only the PLAN portion is recomputed. Everything else on the invoice (staggered installation
+     * fees, service charges, rebates, discounts, advanced payments) is carried across untouched as
+     * a single figure derived from `total_amount - invoice_balance`. That is deliberate: re-running
+     * calculateChargesAndDeductions() would consume those discounts and advanced payments a second
+     * time, since creating the invoice already marked them Used.
+     *
+     * @param bool $persist false performs the identical calculation without writing anything,
+     *                      so a caller can quote the amount before the customer commits.
+     * @return array{revised: bool, reason?: string, plan?: string, previous_total: float,
+     *               new_total: float, plan_amount: float, vat: float, withholding: float,
+     *               previous_balance: float, new_balance: float, invoice_id?: int}
+     */
+    public function repricePrepaidInitialBillForPlan(
         BillingAccount $account,
-        Carbon $date,
+        AppPlan $newPlan,
         int $userId,
+        bool $persist = true
+    ): array {
+        $result = [
+            'revised' => false,
+            'previous_total' => 0.0,
+            'new_total' => 0.0,
+            'plan_amount' => 0.0,
+            'vat' => 0.0,
+            'withholding' => 0.0,
+            'previous_balance' => (float) $account->account_balance,
+            'new_balance' => (float) $account->account_balance,
+        ];
+
+        if (!$this->isUnpaidPrepaidOnboarding($account)) {
+            $result['reason'] = 'not an unpaid prepaid onboarding account';
+            return $result;
+        }
+
+        $planPrice = (float) ($newPlan->price ?? 0);
+        if ($planPrice <= 0) {
+            $result['reason'] = 'selected plan has no price';
+            return $result;
+        }
+
+        // The bill to re-price: the outstanding initial invoice.
+        $invoice = Invoice::where('account_no', $account->account_no)
+            ->whereIn('status', ['Unpaid', 'Partial'])
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$invoice) {
+            $result['reason'] = 'no outstanding invoice to reprice';
+            return $result;
+        }
+
+        $vatBreakdown = $this->calculateVatBreakdown($planPrice, $account);
+        $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+        $billablePlanAmount = round($vatBreakdown['total'] - $withholding['amount'], 2);
+
+        $previousTotal = round((float) $invoice->total_amount, 2);
+        // Everything on the invoice that is not the plan — preserved exactly, sign included.
+        $nonPlanPortion = round($previousTotal - (float) $invoice->invoice_balance, 2);
+        $newTotal = round($billablePlanAmount + $nonPlanPortion, 2);
+
+        $previousBalance = round((float) $account->account_balance, 2);
+        // Move the balance by the delta rather than assigning the new total, so any unrelated
+        // amount already sitting on the account is preserved.
+        $newBalance = round($previousBalance + ($newTotal - $previousTotal), 2);
+
+        $result = array_merge($result, [
+            'plan' => $newPlan->plan_name,
+            'previous_total' => $previousTotal,
+            'new_total' => $newTotal,
+            'plan_amount' => round($planPrice, 2),
+            'vat' => round($vatBreakdown['vat'], 2),
+            'withholding' => $withholding['amount'],
+            'previous_balance' => $previousBalance,
+            'new_balance' => $newBalance,
+            'invoice_id' => $invoice->id,
+        ]);
+
+        if (!$persist) {
+            $result['revised'] = true;
+            return $result;
+        }
+
+        DB::transaction(function () use ($invoice, $account, $billablePlanAmount, $newTotal, $newBalance, $userId) {
+            $invoice->update([
+                'invoice_balance' => $billablePlanAmount,
+                'total_amount' => $newTotal,
+                'status' => $newTotal <= 0 ? 'Paid' : 'Unpaid',
+                'updated_by' => (string) $userId,
+            ]);
+
+            $account->update([
+                'account_balance' => $newBalance,
+                'balance_update_date' => Carbon::now('Asia/Manila')->format('Y-m-d'),
+            ]);
+        });
+
+        $result['revised'] = true;
+
+        $this->log('info', 'Repriced unpaid prepaid initial bill for a newly selected plan', [
+            'account_no' => $account->account_no,
+            'plan' => $newPlan->plan_name,
+            'invoice_id' => $invoice->id,
+            'plan_amount' => $result['plan_amount'],
+            'vat' => $result['vat'],
+            'withholding' => $result['withholding'],
+            'non_plan_portion' => $nonPlanPortion,
+            'previous_total' => $previousTotal,
+            'new_total' => $newTotal,
+            'previous_balance' => $previousBalance,
+            'new_balance' => $newBalance,
+        ]);
+
+        return $result;
+    }
+
+    public function generateInitialBillingForAccount(BillingAccount $account, int $userId): array
+    {
+        $generationDate = Carbon::now('Asia/Manila');
+        $result = [
+            'success' => false,
+            'statement_created' => false,
+            'invoice_created' => false,
+            'skipped' => false,
+        ];
+
+        $soa = null;
+        $invoice = null;
+
+        try {
+            // 0. VIP guard: a VIP account gets no initial bill at all. Unlike the scheduled
+            // paths this one runs on the account handed to it, so the Active-only filter in
+            // getActiveAccountsForBillingDay() does not apply and the check has to happen here.
+            if ($this->isVipBillingSuspended($account)) {
+                $result['success'] = true;
+                $result['skipped'] = true;
+                return $result;
+            }
+
+            // 1. SOA — skip if one already exists for this billing cycle.
+            if ($this->statementAlreadyGeneratedForCycle($account, $generationDate)) {
+                $this->log('info', 'Initial billing: SOA already exists for this cycle, skipping', [
+                    'account_no' => $account->account_no,
+                ]);
+            } else {
+                $soa = $this->createEnhancedStatement($account, $generationDate, $userId);
+                $result['statement_created'] = true;
+            }
+
+            // 2. Invoice — skip if one already exists for this billing cycle.
+            if ($this->invoiceAlreadyGeneratedForCycle($account, $generationDate)) {
+                $this->log('info', 'Initial billing: invoice already exists for this cycle, skipping', [
+                    'account_no' => $account->account_no,
+                ]);
+            } else {
+                $invoice = $this->createEnhancedInvoice($account, $generationDate, $userId);
+                $result['invoice_created'] = true;
+            }
+
+            // 3. Notify ONCE — only when we actually created something new this run.
+            if ($soa || $invoice) {
+                $this->queueNotification($account, $invoice, $soa);
+            } else {
+                $result['skipped'] = true;
+            }
+
+            $result['success'] = true;
+
+            $this->log('info', 'Initial billing generation completed for prepaid account', [
+                'account_no' => $account->account_no,
+                'statement_created' => $result['statement_created'],
+                'invoice_created' => $result['invoice_created'],
+                'skipped' => $result['skipped'],
+            ]);
+
+            return $result;
+        } catch (\Exception $e) {
+            $this->log('error', 'Initial billing generation failed for account ' . $account->account_no . ': ' . $e->getMessage());
+            $result['error'] = $e->getMessage();
+            return $result;
+        }
+    }
+
+    /**
+     * What a prepaid customer pays to renew, for the plan they are currently on.
+     *
+     * The same maths {@see repricePrepaidInitialBillForPlan()} applies — plan price, plus VAT,
+     * less withholding — exposed publicly because the prepaid lapse notice has to quote a figure
+     * without an invoice to read it off. Callers must never reimplement the tax rules.
+     *
+     * Returns 0.0 when the account has no priced plan, which the caller reports rather than
+     * sending a notice quoting nothing.
+     */
+    public function quotePrepaidRenewalAmount(BillingAccount $account): float
+    {
+        $planPrice = (float) ($account->plan->price ?? 0);
+
+        if ($planPrice <= 0) {
+            return 0.0;
+        }
+
+        $vatBreakdown = $this->calculateVatBreakdown($planPrice, $account);
+        $withholding = $this->calculateWithholding($vatBreakdown['total'], $account);
+
+        return round($vatBreakdown['total'] - $withholding['amount'], 2);
+    }
+
+    /**
+     * Notify prepaid customers whose service period has EXPIRED. Raises NO bill.
+     *
+     * Prepaid deliberately produces no renewal SOA and no renewal invoice. A renewal bill has to
+     * be priced before the customer has said what they want, so it could only ever be priced at
+     * the plan they were LAST on — and a customer renewing onto a different plan was then made to
+     * settle the old plan's amount to get reconnected, while
+     * {@see \App\Services\PrepaidPlanChangeService::handleSettledPayment()} switched them to the
+     * new plan anyway. Wrong money collected in both directions: undercharged on an upgrade,
+     * overcharged on a downgrade.
+     *
+     * So nothing is billed at expiry. The customer is TOLD their period lapsed, and the amount is
+     * settled at checkout from the plan they actually pick — which is already how the customer
+     * app drives it (the payment screen sets the amount from the selected plan's price). With no
+     * invoice raised, account_balance stays at 0, so nothing stale can override that choice and
+     * the balance-based reconnect gate in TransactionController still passes on payment.
+     *
+     * Deliberately NOT filtered on billing_status: an expired prepaid account has usually already
+     * been restricted (Inactive), and it is exactly the customer who needs telling.
+     *
+     * Idempotent: `prepaid_expiry_notified_for` records the expiry the notice went out for, so a
+     * customer who stays lapsed is notified once, not every morning. It needs no cleanup —
+     * renewing moves prepaid_expires_at forward, the stored value stops matching, and the next
+     * lapse notifies again. Each account is isolated so one failure never aborts the batch.
+     *
+     * @return array{success:int, failed:int, skipped:int, errors:array, notifications:array}
+     */
+    public function notifyExpiredPrepaidAccounts(Carbon $generationDate): array
+    {
+        $results = [
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'errors' => [],
+            'notifications' => [],
+        ];
+
+        $now = $generationDate->copy();
+
+        $accounts = BillingAccount::with(['customer', 'technicalDetails', 'plan'])
+            ->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
+            ->whereNotNull('prepaid_expires_at')
+            ->where('prepaid_expires_at', '<=', $now)
+            ->whereNotNull('account_no')
+            ->get();
+
+        $this->log('info', 'Prepaid expiry scan: expired prepaid accounts found', [
+            'generation_date' => $now->format('Y-m-d'),
+            'expired_count' => $accounts->count(),
+        ]);
+
+        foreach ($accounts as $account) {
+            try {
+                // VIP guard: a VIP is not asked to renew. This scan deliberately ignores
+                // billing_status (an expired prepaid is usually already Inactive), so VIP has to
+                // be excluded explicitly here.
+                if ($this->isVipBillingSuspended($account)) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                $expiry = Carbon::parse($account->prepaid_expires_at);
+
+                // Already told them about THIS lapse. Compared as a timestamp string so a Carbon
+                // instance and its stored representation are not mistaken for a difference, which
+                // would re-notify every single day.
+                $notifiedFor = $account->prepaid_expiry_notified_for
+                    ? Carbon::parse($account->prepaid_expiry_notified_for)->toDateTimeString()
+                    : null;
+
+                if ($notifiedFor === $expiry->toDateTimeString()) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                // No renewal-amount guard here: a prepaid account reaching the expiry window is
+                // told regardless of whether its plan has a quotable price. quotePrepaidRenewalAmount()
+                // returns 0.0 for an unpriced/unlinked plan and the notice still goes out — see
+                // BillingNotificationService::generatePrepaidExpirySmsMessage(), which renders fine
+                // with a zero amount.
+                $renewalAmount = $this->quotePrepaidRenewalAmount($account);
+
+                // 8:00 AM Asia/Manila, matching queueNotification() — the scan runs at 01:00 and
+                // customers should not be woken by it.
+                $timeToSend = Carbon::now('Asia/Manila')->setTime(8, 0, 0)->format('Y-m-d H:i:s');
+
+                $notification = $this->notificationService->notifyPrepaidExpiry(
+                    $account,
+                    $expiry,
+                    $renewalAmount,
+                    $timeToSend
+                );
+
+                $results['notifications'][] = $notification;
+
+                // notifyPrepaidExpiry() never throws — a provider outage or a customer with no
+                // phone number on file both come back in `errors` with `sms_sent` false (prepaid
+                // notices are SMS-only; email_queued is always false and never counts against
+                // delivery). Marking unconditionally therefore recorded "notified" for a notice
+                // that was never sent, and because the marker matches the expiry timestamp for
+                // as long as the account stays lapsed, the customer was never told at all.
+                // Marked only once something actually went out, so a transient failure retries
+                // tomorrow. A duplicate is not a risk: SmsQueueService::queueSms() deduplicates on
+                // (account, contact, message, time_sent).
+                if (!$notification['sms_sent'] && !$notification['email_queued']) {
+                    $results['failed']++;
+                    $results['errors'][] = [
+                        'account_no' => $account->account_no,
+                        'error' => implode('; ', $notification['errors'] ?: ['Prepaid expiry notice not delivered']),
+                    ];
+
+                    $this->log('warning', 'Prepaid expiry notice not delivered — will retry on the next run', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => $expiry->toDateTimeString(),
+                        'errors' => $notification['errors'],
+                    ]);
+
+                    continue;
+                }
+
+                DB::transaction(function () use ($account, $expiry) {
+                    $account->prepaid_expiry_notified_for = $expiry;
+                    $account->save();
+                });
+
+                $results['success']++;
+
+                $this->log('info', 'Prepaid expiry notice sent (no SOA, no invoice)', [
+                    'account_no' => $account->account_no,
+                    'prepaid_expires_at' => $expiry->toDateTimeString(),
+                    'renewal_amount' => $renewalAmount,
+                ]);
+            } catch (\Exception $e) {
+                $results['failed']++;
+                $results['errors'][] = [
+                    'account_no' => $account->account_no,
+                    'error' => $e->getMessage(),
+                ];
+                $this->log('error', "Failed prepaid expiry notice for account {$account->account_no}: " . $e->getMessage());
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * How many days AHEAD of prepaid_expires_at a prepaid customer is warned.
+     *
+     * Falls back to 3 when billing_config has no row or holds a non-numeric value, matching the
+     * column default. A configured 0 is honoured and means "never warn".
+     */
+    protected const DEFAULT_PREPAID_PRE_EXPIRY_DAYS = 3;
+
+    /**
+     * Warn prepaid customers whose service period is ABOUT to lapse. Raises NO bill.
+     *
+     * The early counterpart to {@see notifyExpiredPrepaidAccounts()}, which only fires once the
+     * period has already gone and the customer is usually restricted. Nothing is billed here for
+     * exactly the same reason it is not billed at expiry: a renewal is priced from the plan the
+     * customer picks at checkout, so a bill raised in advance could only ever quote the plan they
+     * are currently on. The quoted figure is a quote, not a charge.
+     *
+     * Window: accounts expiring from now through the end of the configured day
+     * (`billing_config.prepaid_pre_expiry_days`, default 3). Already-expired accounts are excluded
+     * by the lower bound — those belong to the lapse notice, and letting both fire would send two
+     * messages for one event.
+     *
+     * Deliberately NOT filtered on billing_status, mirroring the expiry scan: the point is to reach
+     * the customer whatever state their account is in. VIP is therefore excluded explicitly.
+     *
+     * Idempotent, at two levels. `prepaid_pre_expiry_notified_for` records the expiry the warning
+     * went out for, so a customer sitting inside the window is warned once, not every morning; it
+     * is a separate column from `prepaid_expiry_notified_for` on purpose, because both notices key
+     * off the same expiry timestamp and a shared marker would let this warning suppress the lapse
+     * notice days later. It needs no cleanup: renewing moves prepaid_expires_at forward, the stored
+     * value stops matching, and the next period warns again. Beneath that,
+     * {@see \App\Services\SmsQueueService::queueSms()} deduplicates on
+     * (account, contact, message, time_sent) under a UNIQUE index — so even a run whose marker
+     * write fails, or two runs overlapping, cannot text the same customer twice.
+     *
+     * Each account is isolated so one failure never aborts the batch.
+     *
+     * NOT part of bill generation. This concerns prepaid accounts only and raises no SOA and no
+     * invoice, so it runs from its own command and its own schedule entry —
+     * {@see \App\Console\Commands\NotifyPrepaidPreExpiry} / 'billing:notify-prepaid-pre-expiry',
+     * daily at 01:30. It used to be a step inside cron:generate-daily-billings, which meant a
+     * failure in either landed in the other's log and the warning could not be re-run without
+     * re-entering bill generation. Use `--dry-run` on that command to see what a run would do.
+     *
+     * @return array{success:int, failed:int, skipped:int, errors:array, notifications:array}
+     */
+    public function notifyPrepaidPreExpiryAccounts(Carbon $generationDate): array
+    {
+        $results = [
+            'success' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'errors' => [],
+            'notifications' => [],
+        ];
+
+        // The marker column is what makes this scan idempotent. Without it every account inside the
+        // window is re-warned on every run, so the condition is reported up front and at warning
+        // level rather than surfacing later as an opaque per-account save() failure — it means the
+        // pre-expiry migration has not been run on this database.
+        $markerColumnPresent = Schema::hasColumn('billing_accounts', 'prepaid_pre_expiry_notified_for');
+
+        if (!$markerColumnPresent) {
+            $this->log('warning', 'Prepaid pre-expiry scan: billing_accounts.prepaid_pre_expiry_notified_for is missing — run the pending migrations. Warnings will send but cannot be marked as sent.');
+        }
+
+        $configured = BillingConfig::first()?->prepaid_pre_expiry_days;
+        $preExpiryDays = is_numeric($configured)
+            ? (int) $configured
+            : self::DEFAULT_PREPAID_PRE_EXPIRY_DAYS;
+
+        if ($preExpiryDays <= 0) {
+            // Reported at warning, not info: "no pre-expiry SMS is going out" is indistinguishable
+            // from a broken scan when it is only ever logged as routine, and 0 is reachable simply
+            // by clearing the field on the Billing Configuration page.
+            $this->log('warning', 'Prepaid pre-expiry scan skipped — warning disabled in billing config (prepaid_pre_expiry_days is 0)', [
+                'prepaid_pre_expiry_days' => $preExpiryDays,
+                'configured_value' => $configured,
+            ]);
+
+            return $results;
+        }
+
+        $now = $generationDate->copy();
+        // endOfDay so an account expiring late on the final day of the window is still caught —
+        // the scan runs at 01:00 and would otherwise miss everything after that hour.
+        $windowEnd = $now->copy()->addDays($preExpiryDays)->endOfDay();
+
+        // Eager-loaded up front: the notice reads the customer for name and contact number and the
+        // plan for its name and price, so lazy loading would cost two queries per account.
+        $accounts = BillingAccount::with(['customer', 'technicalDetails', 'plan'])
+            ->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
+            ->whereNotNull('prepaid_expires_at')
+            ->whereBetween('prepaid_expires_at', [$now, $windowEnd])
+            ->whereNotNull('account_no')
+            ->get();
+
+        $this->log('info', 'Prepaid pre-expiry scan: accounts approaching expiry found', [
+            'generation_date' => $now->format('Y-m-d'),
+            'pre_expiry_days' => $preExpiryDays,
+            'window_end' => $windowEnd->toDateTimeString(),
+            'expiring_count' => $accounts->count(),
+        ]);
+
+        foreach ($accounts as $account) {
+            try {
+                // VIP guard: a VIP is not asked to renew. This scan ignores billing_status, so VIP
+                // has to be excluded explicitly here.
+                if ($this->isVipBillingSuspended($account)) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                $expiry = Carbon::parse($account->prepaid_expires_at);
+
+                // Already warned about THIS period. Compared as a timestamp string so a Carbon
+                // instance and its stored representation are not mistaken for a difference, which
+                // would re-warn every single day.
+                $notifiedFor = $account->prepaid_pre_expiry_notified_for
+                    ? Carbon::parse($account->prepaid_pre_expiry_notified_for)->toDateTimeString()
+                    : null;
+
+                if ($notifiedFor === $expiry->toDateTimeString()) {
+                    $results['skipped']++;
+                    continue;
+                }
+
+                // No renewal-amount guard here: any prepaid account inside the pre-expiry window is
+                // warned regardless of whether its plan has a quotable price. quotePrepaidRenewalAmount()
+                // returns 0.0 for an unpriced/unlinked plan and the warning still goes out — the
+                // pre-expiry template no longer carries a price placeholder at all (see
+                // BillingNotificationService::generatePrepaidPreExpirySmsMessage()).
+                $renewalAmount = $this->quotePrepaidRenewalAmount($account);
+
+                // 8:00 AM Asia/Manila, matching queueNotification() and the expiry scan — this
+                // runs at 01:00 and customers should not be woken by it.
+                $timeToSend = Carbon::now('Asia/Manila')->setTime(8, 0, 0)->format('Y-m-d H:i:s');
+
+                $notification = $this->notificationService->notifyPrepaidPreExpiry(
+                    $account,
+                    $expiry,
+                    $renewalAmount,
+                    $timeToSend
+                );
+
+                $results['notifications'][] = $notification;
+
+                // Marked only after the notice actually went out, so a failure retries tomorrow —
+                // there is still time left in the window — rather than silently swallowing this
+                // period's only warning.
+                if (!$notification['sms_sent']) {
+                    $results['failed']++;
+                    $results['errors'][] = [
+                        'account_no' => $account->account_no,
+                        'error' => implode('; ', $notification['errors'] ?: ['SMS not sent']),
+                    ];
+
+                    $this->log('warning', 'Prepaid pre-expiry notice not delivered — will retry while the account is still inside the window', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => $expiry->toDateTimeString(),
+                        'errors' => $notification['errors'],
+                    ]);
+
+                    continue;
+                }
+
+                // Skipped when the migration adding the column has not been run: the save() would
+                // throw and this account would be counted as failed even though the warning is
+                // already queued. The re-warn that follows is absorbed by the SMS queue's dedupe
+                // key, which suppresses an identical (account, message, time_sent) insert.
+                if ($markerColumnPresent) {
+                    DB::transaction(function () use ($account, $expiry) {
+                        $account->prepaid_pre_expiry_notified_for = $expiry;
+                        $account->save();
+                    });
+                }
+
+                $results['success']++;
+
+                $this->log('info', 'Prepaid pre-expiry notice sent (no SOA, no invoice)', [
+                    'account_no' => $account->account_no,
+                    'prepaid_expires_at' => $expiry->toDateTimeString(),
+                    'days_remaining' => $now->diffInDays($expiry, false),
+                    'renewal_amount' => $renewalAmount,
+                ]);
+            } catch (\Exception $e) {
+                $results['failed']++;
+                $results['errors'][] = [
+                    'account_no' => $account->account_no,
+                    'error' => $e->getMessage(),
+                ];
+                $this->log('error', "Failed prepaid pre-expiry notice for account {$account->account_no}: " . $e->getMessage());
+            }
+        }
+
+        return $results;
+    }
+
+    protected function calculateChargesAndDeductions(
+        BillingAccount $account, 
+        Carbon $date, 
+        int $userId, 
         string $invoiceId,
         float $monthlyFee,
-        bool $consumeRecords = false,
+        bool $updateDiscountStatus = false,
         bool $includeDiscounts = true
     ): array {
-        $staggeredInstallFees = $this->calculateStaggeredInstallFees($account, $userId, $invoiceId, $consumeRecords);
-        $discounts = $includeDiscounts ? $this->calculateDiscounts($account, $userId, $invoiceId, $consumeRecords) : 0;
-        $advancedPayments = $this->calculateAdvancedPayments($account, $date, $userId, $invoiceId, $consumeRecords);
+        $staggeredInstallFees = $this->calculateStaggeredInstallFees($account, $userId, $invoiceId, $updateDiscountStatus);
+        $discounts = $includeDiscounts ? $this->calculateDiscounts($account, $userId, $invoiceId, $updateDiscountStatus) : 0;
+        $advancedPayments = $this->calculateAdvancedPayments($account, $date, $userId, $invoiceId);
         $rebates = $this->calculateRebates($account, $date, $monthlyFee);
-        $serviceFees = $this->calculateServiceFees($account, $date, $userId, $consumeRecords);
+        $serviceFees = $this->calculateServiceFees($account, $date, $userId);
         $paymentReceived = $this->calculatePaymentReceived($account, $date);
 
         return [
@@ -1304,22 +2020,11 @@ class EnhancedBillingGenerationServiceWithNotifications
         return round($total, 2);
     }
 
-    /**
-     * Advance payments recorded against this billing month.
-     *
-     * @param bool $consume Mark the records Used. Only the invoice pass may do this. The
-     *                      statement runs first and must read without consuming: marking
-     *                      them Used there left nothing for the invoice to find, so the
-     *                      credit appeared on the statement but never reached the invoice
-     *                      total or the account balance, and the customer was charged in
-     *                      full despite having paid in advance.
-     */
     protected function calculateAdvancedPayments(
-        BillingAccount $account,
-        Carbon $date,
-        int $userId,
-        string $invoiceId,
-        bool $consume = false
+        BillingAccount $account, 
+        Carbon $date, 
+        int $userId, 
+        string $invoiceId
     ): float {
         $total = 0;
         $currentMonth = $date->format('F');
@@ -1331,14 +2036,11 @@ class EnhancedBillingGenerationServiceWithNotifications
 
         foreach ($advancedPayments as $payment) {
             $total += $payment->payment_amount;
-
-            if ($consume) {
-                $payment->update([
-                    'status' => 'Used',
-                    'invoice_used_id' => $invoiceId,
-                    'updated_by' => $userId
-                ]);
-            }
+            $payment->update([
+                'status' => 'Used',
+                'invoice_used_id' => $invoiceId,
+                'updated_by' => $userId
+            ]);
         }
 
         return round($total, 2);
@@ -1401,18 +2103,7 @@ class EnhancedBillingGenerationServiceWithNotifications
         return round($total, 2);
     }
 
-    /**
-     * Outstanding service charges waiting to be billed.
-     *
-     * @param bool $consume Mark the charges Used. Only the invoice pass may do this, for the
-     *                      same reason as advance payments: the statement runs first, and
-     *                      consuming there left the invoice with nothing to charge.
-     *
-     * Disconnection fees are deliberately not picked up here — AutoDisconnectService adds
-     * those straight to the account balance and writes its row without a status, so it never
-     * matches 'Unused'. Billing them here as well would charge them twice.
-     */
-    protected function calculateServiceFees(BillingAccount $account, Carbon $date, int $userId, bool $consume = false): float
+    protected function calculateServiceFees(BillingAccount $account, Carbon $date, int $userId): float
     {
         $total = 0;
 
@@ -1423,87 +2114,32 @@ class EnhancedBillingGenerationServiceWithNotifications
 
         foreach ($serviceFees as $fee) {
             $total += $fee->service_charge;
-
-            if ($consume) {
-                DB::table('service_charge_logs')
-                    ->where('id', $fee->id)
-                    ->update([
-                        'status' => 'Used',
-                        'date_used' => now(),
-                        'updated_at' => now()
-                    ]);
-            }
+            
+            DB::table('service_charge_logs')
+                ->where('id', $fee->id)
+                ->update([
+                    'status' => 'Used',
+                    'date_used' => now(),
+                    'updated_at' => now()
+                ]);
         }
 
         return round($total, 2);
     }
 
-    /**
-     * What the customer paid against the previous bill.
-     *
-     * The window is the billing cycle that just closed: everything after the
-     * previous statement's date, up to and including this statement's date.
-     *
-     * It used to be the calendar month before the statement date, which almost
-     * never contains the payment. A bill dated the 25th falls due after month
-     * end, so the payment for it lands in the SAME calendar month as the next
-     * statement — outside a "previous calendar month" window — and the column
-     * read 0.00 for every account that pays on time.
-     *
-     * Only Security Deposit is excluded, matching TransactionController::approve:
-     * every other approved transaction type moves account_balance, so every other
-     * type has to be counted here or the three previous-bill columns stop adding up.
-     */
     protected function calculatePaymentReceived(BillingAccount $account, Carbon $date): float
     {
-        $windowStart = $this->previousCycleStart($account, $date);
-        $windowEnd = $date->copy()->endOfDay();
-
+        $lastMonth = $date->copy()->subMonth();
+        
         $transactions = DB::table('transactions')
             ->where('account_no', $account->account_no)
             ->where('status', 'Done')
-            ->whereRaw("LOWER(TRIM(COALESCE(transaction_type, ''))) <> 'security deposit'")
-            ->whereNotNull('payment_date')
-            ->where('payment_date', '>', $windowStart)
-            ->where('payment_date', '<=', $windowEnd)
+            ->whereNotIn('transaction_type', ['Security Deposit', 'Installation Fee'])
+            ->whereMonth('payment_date', $lastMonth->month)
+            ->whereYear('payment_date', $lastMonth->year)
             ->sum('received_payment');
 
-        $this->log('info', 'Payment received on previous bill', [
-            'account_no' => $account->account_no,
-            'window_start' => $windowStart->format('Y-m-d H:i:s'),
-            'window_end' => $windowEnd->format('Y-m-d H:i:s'),
-            'payment_received' => floatval($transactions),
-        ]);
-
         return floatval($transactions);
-    }
-
-    /**
-     * The instant the cycle being reported on opened: the end of the previous
-     * statement's day, so payments already shown on that statement are not
-     * counted twice.
-     *
-     * The current statement row is created before the charges are calculated, so
-     * it is excluded by date rather than by id.
-     *
-     * With no earlier statement (a first bill), one month back is the best
-     * available window. subMonthNoOverflow keeps a statement dated the 31st from
-     * landing on the 2nd or 3rd of the following month.
-     */
-    protected function previousCycleStart(BillingAccount $account, Carbon $date): Carbon
-    {
-        $previousStatementDate = StatementOfAccount::where('account_no', $account->account_no)
-            ->whereNotNull('statement_date')
-            ->whereDate('statement_date', '<', $date->copy()->startOfDay())
-            ->orderByDesc('statement_date')
-            ->orderByDesc('id')
-            ->value('statement_date');
-
-        if ($previousStatementDate) {
-            return Carbon::parse($previousStatementDate, 'Asia/Manila')->endOfDay();
-        }
-
-        return $date->copy()->subMonthNoOverflow()->endOfDay();
     }
 
     protected function extractPlanName(string $desiredPlan): string
@@ -1523,35 +2159,17 @@ class EnhancedBillingGenerationServiceWithNotifications
         return trim($desiredPlan);
     }
 
-    /**
-     * What the previous bill left owing, BEFORE the customer paid against it.
-     *
-     * account_balance is already net of payments — TransactionController::approve
-     * subtracts each approved payment from it — so returning it raw made the SOA
-     * subtract the same payment a second time in
-     * `remaining = previousBalance - paymentReceived`, understating both the
-     * remaining balance and total_amount_due by the amount paid.
-     *
-     * Adding the cycle's payments back recovers the pre-payment figure, which
-     * makes the three columns reconcile:
-     *   balance_from_previous_bill - payment_received_previous
-     *     = remaining_balance_previous
-     *     = the account's live balance.
-     */
-    protected function getPreviousBalance(BillingAccount $account, Carbon $currentDate, float $paymentReceived = 0.0): float
+    protected function getPreviousBalance(BillingAccount $account, Carbon $currentDate): float
     {
         $accountBalance = floatval($account->account_balance);
-        $previousBalance = $accountBalance + $paymentReceived;
-
+        
         $this->log('info', 'Getting previous balance for SOA', [
             'account_no' => $account->account_no,
             'account_balance' => $accountBalance,
-            'payment_received' => $paymentReceived,
-            'previous_balance' => $previousBalance,
             'current_date' => $currentDate->format('Y-m-d')
         ]);
-
-        return $previousBalance;
+        
+        return $accountBalance;
     }
 
     protected function markDiscountsAsUsed(BillingAccount $account, int $userId, string $invoiceId): void

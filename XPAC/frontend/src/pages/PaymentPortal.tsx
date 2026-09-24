@@ -14,6 +14,7 @@ import { paymentMethodService, PaymentMethod } from '../services/paymentMethodSe
 import PaymentPortalFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/PaymentPortalFunnelFilter';
 import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -1077,9 +1078,9 @@ const PaymentPortal: React.FC = () => {
         case 'transaction_status':
           return record.transaction_status || '-';
         case 'total_amount':
-          return formatCurrency(record.total_amount || 0);
+          return Number(record.total_amount ?? 0).toFixed(2);
         case 'accountBalance':
-          return formatCurrency(record.accountBalance || 0);
+          return Number(record.accountBalance ?? 0).toFixed(2);
         default:
           return renderCellValue(record, columnKey);
       }

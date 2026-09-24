@@ -31,6 +31,7 @@ export interface Application {
   long_lat?: string;
   created_at?: string;
   updated_at?: string;
+  updated_by?: string;
   created_by_user_id?: number;
   updated_by_user_id?: number;
 

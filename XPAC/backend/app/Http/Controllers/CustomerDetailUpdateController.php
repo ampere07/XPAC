@@ -18,6 +18,41 @@ use App\Models\ActivityLog;
 class CustomerDetailUpdateController extends Controller
 {
     /**
+     * Fallback VIP billing status id.
+     *
+     * Matches the hard-coded value in the vip:check-expiration command and in
+     * {@see \App\Services\EnhancedBillingGenerationServiceWithNotifications}. Only used when the
+     * billing_status table cannot be read or has no row named 'VIP'.
+     */
+    private const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id, looked up once per request. */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Resolved by name so a reordered status table cannot silently break VIP detection, with the
+     * historical id as the fallback.
+     */
+    private function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
+        }
+
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
      * Unified update method dispatches based on editType
      */
     public function update(Request $request, $accountNo): JsonResponse
@@ -83,7 +118,7 @@ class CustomerDetailUpdateController extends Controller
                 'location' => $customer->location,
                 'address_coordinates' => $customer->address_coordinates,
                 'housing_status' => $customer->housing_status,
-                'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
+                'referred_by' => $customer->referred_by,
                 'group_name' => $customer->group_name,
                 'house_front_picture_url' => $customer->house_front_picture_url,
             ];
@@ -105,13 +140,8 @@ class CustomerDetailUpdateController extends Controller
                 'middle_initial' => $validated['middleInitial'] ?? $customer->middle_initial,
                 'last_name' => $validated['lastName'],
                 'email_address' => $validated['emailAddress'],
-                // Trimmed: a stray space around the number is invisible in the UI
-                // but was hashed verbatim into the portal password, locking the
-                // customer out with a number that looked exactly right.
-                'contact_number_primary' => trim($validated['contactNumberPrimary']),
-                'contact_number_secondary' => isset($validated['contactNumberSecondary'])
-                    ? trim($validated['contactNumberSecondary'])
-                    : $customer->contact_number_secondary,
+                'contact_number_primary' => $validated['contactNumberPrimary'],
+                'contact_number_secondary' => $validated['contactNumberSecondary'] ?? $customer->contact_number_secondary,
                 'address' => $validated['address'],
                 'region' => $validated['region'],
                 'city' => $validated['city'],
@@ -119,7 +149,11 @@ class CustomerDetailUpdateController extends Controller
                 'location' => $validated['location'] ?? $customer->location,
                 'address_coordinates' => $validated['addressCoordinates'] ?? $customer->address_coordinates,
                 'housing_status' => $validated['housingStatus'] ?? $customer->housing_status,
-                'referred_by' => $validated['referredBy'] ?? $customer->referred_by,
+                // A form echoing the displayed agent name back keeps the stored id.
+                'referred_by' => \App\Support\AgentReferral::preserveOnWrite(
+                    $validated['referredBy'] ?? null,
+                    $customer->referred_by
+                ) ?? $customer->referred_by,
                 'group_name' => $validated['groupName'] ?? $customer->group_name,
                 'house_front_picture_url' => $houseFrontPictureUrl,
             ]);
@@ -132,29 +166,13 @@ class CustomerDetailUpdateController extends Controller
             $user = User::where('username', $accountNo)->first();
             if ($user) {
                 $userUpdate = [];
-
-                // Keep contact_number and password_hash on the user in step with
-                // the customer's primary number. The portal password convention is
-                // that number, so the password follows it. contactNumberPrimary is
-                // required, so it is never null.
-                //
-                // The condition is deliberately not "did the number change". An
-                // account whose hash had already drifted from its number — written
-                // by a path that did not sync, or hashed in a spelling nobody types
-                // — could only be repaired by editing the contact number to
-                // something different, which is why operators had taken to adding a
-                // leading '0' and saving just to force a rehash. Rehashing whenever
-                // the stored hash does not already verify the number repairs those
-                // accounts on any save, with no edit to invent.
-                $newContact = trim($validated['contactNumberPrimary']);
-                $hashDrifted = \App\Support\PortalPassword::isCustomer($user)
-                    && !\App\Support\PortalPassword::hashIsCurrent($newContact, $user->password_hash);
-
-                if ($oldContact !== $newContact || $hashDrifted) {
-                    $userUpdate['contact_number'] = $newContact;
-                    // The mutator hashes this; store the canonical spelling so the
-                    // same number written any other way still verifies.
-                    $userUpdate['password_hash'] = \App\Support\PortalPassword::normalize($newContact);
+                
+                // If contact number changed, update contact_number and password_hash.
+                // The portal password convention is the primary contact number, so it
+                // follows the number. contactNumberPrimary is required, so never null.
+                if ($oldContact !== $validated['contactNumberPrimary']) {
+                    $userUpdate['contact_number'] = $validated['contactNumberPrimary'];
+                    $userUpdate['password_hash'] = $validated['contactNumberPrimary'];
                 }
 
                 // If email address changed, update email_address only. The email is never
@@ -166,7 +184,7 @@ class CustomerDetailUpdateController extends Controller
                 if (!empty($userUpdate)) {
                     // A password_hash value here triggers the setPasswordHashAttribute mutator
                     $user->update($userUpdate);
-
+                    
                     Log::info('User account synced with updated customer details', [
                         'username' => $accountNo,
                         'updated_fields' => array_keys($userUpdate)
@@ -190,7 +208,7 @@ class CustomerDetailUpdateController extends Controller
                 'location' => $customer->location,
                 'address_coordinates' => $customer->address_coordinates,
                 'housing_status' => $customer->housing_status,
-                'referred_by' => \App\Support\AgentReferral::displayName($customer->referred_by),
+                'referred_by' => $customer->referred_by,
                 'group_name' => $customer->group_name,
                 'house_front_picture_url' => $customer->house_front_picture_url,
             ];
@@ -206,11 +224,28 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
-            // details_update_logs is written by App\Observers\AccountDetailsObserver
-            // when the model saves, so no entry is made here: doing both would
-            // record every edit twice. The observer sees every changed column
-            // rather than the hand-picked list above, and covers the paths that
-            // update a customer without passing through this controller.
+            // Compared on the STORED value above (an id rewritten to the same
+            // agent's name is a real change), and recorded readably here.
+            if (array_key_exists('referred_by', $changedOldDetails)) {
+                $changedOldDetails['referred_by'] = \App\Support\AgentReferral::displayName($changedOldDetails['referred_by']);
+            }
+            if (array_key_exists('referred_by', $changedNewDetails)) {
+                $changedNewDetails['referred_by'] = \App\Support\AgentReferral::displayName($changedNewDetails['referred_by']);
+            }
+
+            if (!empty($changedOldDetails) || !empty($changedNewDetails)) {
+                // Log to details_update_logs
+                $logUserId = $request->input('updatedBy') ?: ($request->user() ? $request->user()->id : null);
+                DB::table('details_update_logs')->insert([
+                    'account_id' => $billingAccount->id,
+                    'old_details' => json_encode(['type' => 'customer_details', 'data' => $changedOldDetails]),
+                    'new_details' => json_encode(['type' => 'customer_details', 'data' => $changedNewDetails]),
+                    'created_at' => now(),
+                    'created_by_user_id' => $logUserId,
+                    'updated_at' => now(),
+                    'updated_by_user_id' => $logUserId,
+                ]);
+            }
 
             // Log Activity
             ActivityLog::log(
@@ -276,12 +311,35 @@ class CustomerDetailUpdateController extends Controller
                 'billing_day' => 'nullable|integer|min:0|max:31',
                 'date_installed' => 'nullable|date',
                 'vip_expiration' => 'nullable|date',
-                'vip_remarks' => 'nullable|string'
+                'vip_remarks' => 'nullable|string',
+                // Billing Type. Both spellings accepted while older clients are still in the wild;
+                // 'Prepaid'/'Postpaid' are canonical. Changing this switches the account between
+                // the fixed-billing-day flow and the rolling prepaid-period flow.
+                // Canonical plus legacy spellings — `in` is case- and whitespace-sensitive, and the
+                // value is normalised to canonical on write below regardless of what arrives.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid',
+                // Legacy free-text VAT mode. Still editable, but billing generation reads the
+                // boolean vat_enabled, which is kept in sync on write below.
+                'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat',
+                'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
+                // ACCEPTED BUT IGNORED — see the write block below. Kept in the validator so a
+                // stale client posting the field gets the same 422 for a malformed date as it
+                // always did, rather than having its whole submission behave differently
+                // depending on which build it is running.
+                'prepaid_expires_at' => 'nullable|date',
             ]);
 
             DB::beginTransaction();
 
             $billingAccount = BillingAccount::where('account_no', $accountNo)->firstOrFail();
+
+            // Held apart from the audit diff below because the VIP reconnect decision after the
+            // commit needs the pre-update status, and $oldBillingDetails only survives as far as
+            // the changed-fields comparison.
+            $oldBillingStatusId = (int) $billingAccount->billing_status_id;
 
             // Capture old billing details before update
             $oldBillingDetails = [
@@ -290,13 +348,21 @@ class CustomerDetailUpdateController extends Controller
                 'date_installed' => $billingAccount->date_installed,
                 'vip_expiration' => $billingAccount->vip_expiration,
                 'vip_remarks' => $billingAccount->vip_remarks,
+                'generation_type' => $billingAccount->generation_type,
+                'vat_type' => $billingAccount->vat_type,
+                // vat_enabled is what billing generation reads and it moves whenever vat_type
+                // does, so the audit diff has to carry it too.
+                'vat_enabled' => $billingAccount->vat_enabled,
+                'withholding_enabled' => $billingAccount->withholding_enabled,
+                'withholding_percentage' => $billingAccount->withholding_percentage,
+                'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 
             // Resolve billing_status_id
             $billingStatusId = $billingAccount->billing_status_id;
             if ($request->has('billing_status_id') && !empty($validated['billing_status_id'])) {
                 if (is_numeric($validated['billing_status_id'])) {
-                    $billingStatusId = (int) $validated['billing_status_id'];
+                    $billingStatusId = (int)$validated['billing_status_id'];
                 } else {
                     // Attempt to find by name in the database
                     $dbStatus = DB::table('billing_status')->where('status_name', $validated['billing_status_id'])->first();
@@ -309,16 +375,33 @@ class CustomerDetailUpdateController extends Controller
                             'Disconnected' => 2,
                             'Pending' => 3,
                             'Terminated' => 4,
-                            'Suspended' => 5
+                            'Suspended' => 5,
+                            // Without this, a client posting the NAME 'VIP' while the
+                            // billing_status lookup above came back empty would fall through and
+                            // silently keep the account on its old status — comping a customer
+                            // would appear to succeed and change nothing.
+                            'VIP' => self::BILLING_STATUS_VIP_FALLBACK,
                         ];
                         $billingStatusId = $statusMap[$validated['billing_status_id']] ?? $billingStatusId;
                     }
                 }
             }
 
+            // A fresh non-VIP -> VIP transition. Comping a customer exempts them from prepaid
+            // expiration entirely (billing_status_id alone already does that everywhere prepaid
+            // expiry is evaluated — AutoDisconnectService filters to Active accounts, VIP is a
+            // separate status), so the stale expiry date is cleared too rather than left to
+            // silently linger and confuse anyone reading the account.
+            $willBecomeVip = ((int) $billingStatusId === $this->getVipBillingStatusId())
+                && $oldBillingStatusId !== $this->getVipBillingStatusId();
+
             $updateData = [
                 'billing_status_id' => $billingStatusId,
             ];
+
+            if ($willBecomeVip) {
+                $updateData['prepaid_expires_at'] = null;
+            }
 
             if ($request->has('updatedBy')) {
                 $updateData['updated_by'] = $request->input('updatedBy');
@@ -340,6 +423,76 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['vip_remarks'] = $validated['vip_remarks'];
             }
 
+            // Normalise on write so the database converges on the canonical spellings even when an
+            // older client posts 'Pre Paid'.
+            if ($request->has('generation_type')) {
+                $generationType = $validated['generation_type'] ?? null;
+                if ($generationType !== null && $generationType !== '') {
+                    $generationType = \App\Models\BillingAccount::isPrepaidType($generationType)
+                        ? \App\Models\BillingAccount::GENERATION_PREPAID
+                        : \App\Models\BillingAccount::GENERATION_POSTPAID;
+                }
+                $updateData['generation_type'] = $generationType;
+            }
+
+            // Keep vat_type and vat_enabled in lockstep. Billing generation reads vat_enabled, so
+            // editing only the legacy text here would otherwise silently change nothing.
+            // 'Excluded Vat' is the only LEGACY value that still adds VAT — old vocabulary, not the
+            // current label (the UI says "VAT Included"). The old 'Vat Included' mode is gone; both
+            // it and 'No Vat' billed exactly the plan price, i.e. vat_enabled = false.
+            if ($request->has('vat_type')) {
+                $vatType = $validated['vat_type'] ?? null;
+                $updateData['vat_type'] = $vatType;
+                $updateData['vat_enabled'] = str_contains(
+                    preg_replace('/[^a-z]/', '', strtolower((string) $vatType)),
+                    'exclu'
+                );
+            }
+
+            // An explicit boolean from a newer client wins, and drags the legacy text along.
+            if ($request->has('vat_enabled')) {
+                $vatEnabled = (bool) ($validated['vat_enabled'] ?? false);
+                $updateData['vat_enabled'] = $vatEnabled;
+                $updateData['vat_type'] = $vatEnabled ? 'Excluded Vat' : 'No Vat';
+            }
+
+            // Withholding is stored as a pair; clearing the flag clears the percentage with it so a
+            // disabled account can never keep a stale rate that a later re-enable would apply.
+            if ($request->has('withholding_enabled')) {
+                $withholdingEnabled = (bool) ($validated['withholding_enabled'] ?? false);
+                $updateData['withholding_enabled'] = $withholdingEnabled;
+                $updateData['withholding_percentage'] = $withholdingEnabled
+                    ? ($validated['withholding_percentage'] ?? null)
+                    : null;
+            } elseif ($request->has('withholding_percentage')) {
+                $updateData['withholding_percentage'] = $validated['withholding_percentage'] ?? null;
+            }
+
+            /*
+             * prepaid_expires_at is NOT writable here, for any role.
+             *
+             * A single mistyped date on this form could hand out — or take away — months of service
+             * with no record of who did it or why. Adjustments now go through the Prepaid Override
+             * approval queue instead (Billing -> Prepaid Override), where they are reviewed by a
+             * second person, applied under a lock, and audited on both sides of the move. See
+             * {@see \App\Services\PrepaidOverrideService}.
+             *
+             * The field is read-only in the UI too, so anything arriving here is either a stale
+             * client or a direct API call. Both are dropped rather than rejected: the rest of the
+             * billing details in the same submission are legitimate and must still save, and
+             * failing the whole request would block ordinary edits on every prepaid account. The
+             * warning is what makes the drop visible instead of silent.
+             */
+            if ($request->has('prepaid_expires_at')) {
+                \Log::warning('Ignored prepaid_expires_at on billing details update — use the Prepaid Override workflow', [
+                    'account_no'       => $accountNo,
+                    'submitted_value'  => $request->input('prepaid_expires_at'),
+                    'current_value'    => optional($billingAccount->prepaid_expires_at)->toDateTimeString(),
+                    'user_id'          => $request->user() ? $request->user()->id : null,
+                    'updated_by_input' => $request->input('updatedBy'),
+                ]);
+            }
+
             $billingAccount->update($updateData);
 
             // Capture new billing details after update
@@ -350,6 +503,14 @@ class CustomerDetailUpdateController extends Controller
                 'date_installed' => $billingAccount->date_installed,
                 'vip_expiration' => $billingAccount->vip_expiration,
                 'vip_remarks' => $billingAccount->vip_remarks,
+                'generation_type' => $billingAccount->generation_type,
+                'vat_type' => $billingAccount->vat_type,
+                // vat_enabled is what billing generation reads and it moves whenever vat_type
+                // does, so the audit diff has to carry it too.
+                'vat_enabled' => $billingAccount->vat_enabled,
+                'withholding_enabled' => $billingAccount->withholding_enabled,
+                'withholding_percentage' => $billingAccount->withholding_percentage,
+                'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
             ];
 
             $changedOldBillingDetails = [];
@@ -363,8 +524,19 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
-            // details_update_logs is written by App\Observers\AccountDetailsObserver
-            // when the model saves — see the note in updateCustomerDetails().
+            if (!empty($changedOldBillingDetails) || !empty($changedNewBillingDetails)) {
+                // Log to details_update_logs
+                $logUserId = $request->input('updatedBy') ?: ($request->user() ? $request->user()->id : null);
+                DB::table('details_update_logs')->insert([
+                    'account_id' => $billingAccount->id,
+                    'old_details' => json_encode(['type' => 'billing_details', 'data' => $changedOldBillingDetails]),
+                    'new_details' => json_encode(['type' => 'billing_details', 'data' => $changedNewBillingDetails]),
+                    'created_at' => now(),
+                    'created_by_user_id' => $logUserId,
+                    'updated_at' => now(),
+                    'updated_by_user_id' => $logUserId,
+                ]);
+            }
 
             // Log Activity
             ActivityLog::log(
@@ -390,10 +562,60 @@ class CustomerDetailUpdateController extends Controller
 
             $this->broadcastCustomerUpdated($accountNo, 'billing_details');
 
+            /*
+             * Comping a customer has to actually restore their service.
+             *
+             * Setting the billing status to VIP is how an account is comped, but on its own it
+             * only stops future billing — it does nothing to RADIUS. An account that reached VIP
+             * from Inactive/Disconnected (the usual reason to comp someone) is still sitting in
+             * the Restricted RADIUS group with no session, so the customer stays offline while
+             * the record claims they are a VIP. This closes that gap by moving them back onto
+             * their plan group as soon as the status change commits.
+             *
+             * Strictly a non-VIP -> VIP transition: re-saving the billing form on an account that
+             * is already VIP must not fire a fresh RADIUS round-trip (and a fresh
+             * reconnection_logs row) every time an unrelated field is edited.
+             *
+             * Deliberately after DB::commit(): the billing update is the customer's record of
+             * being comped and must survive a RADIUS server that is down, so nothing below can
+             * roll it back.
+             */
+            $newBillingStatusId = (int) $billingAccount->billing_status_id;
+            $vipStatusId = $this->getVipBillingStatusId();
+            $becameVip = ($newBillingStatusId === $vipStatusId && $oldBillingStatusId !== $vipStatusId);
+
+            $radiusMessage = null;
+            $radiusQueued = false;
+
+            if ($becameVip) {
+                Log::info('Billing status changed to VIP — restoring RADIUS service', [
+                    'account_no' => $accountNo,
+                    'billing_account_id' => $billingAccount->id,
+                    'old_status' => $oldBillingStatusId,
+                    'new_status' => $newBillingStatusId,
+                    'vip_expiration' => $billingAccount->vip_expiration,
+                    'updated_by' => $request->input('updatedBy'),
+                ]);
+
+                $reconnectOutcome = $this->reconnectAccountForVip(
+                    $billingAccount,
+                    $oldBillingStatusId,
+                    $newBillingStatusId,
+                    $request->input('updatedBy') ?: 'System'
+                );
+
+                $radiusMessage = $reconnectOutcome['message'];
+                $radiusQueued = $reconnectOutcome['queued'];
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Billing status updated successfully',
-                'data' => $billingAccount->fresh()
+                'data' => $billingAccount->fresh(),
+                // Null on every non-VIP edit, so existing clients see the response they always
+                // did. Mirrors the shape updateTechnicalDetails() already returns.
+                'radius_message' => $radiusMessage,
+                'radius_queued' => $radiusQueued
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -442,10 +664,10 @@ class CustomerDetailUpdateController extends Controller
             DB::beginTransaction();
 
             $billingAccount = BillingAccount::where('account_no', $accountNo)->firstOrFail();
-
+            
             // Get or create technical details
             $technicalDetail = TechnicalDetail::where('account_id', $billingAccount->id)->first();
-
+            
             $isNewTechnicalDetail = false;
             if (!$technicalDetail) {
                 $isNewTechnicalDetail = true;
@@ -513,11 +735,11 @@ class CustomerDetailUpdateController extends Controller
             $technicalDetail->vlan = $validated['vlan'] ?? $technicalDetail->vlan;
             $technicalDetail->lcpnap = $lcpnap;
             $technicalDetail->usage_type = $validated['usage_type'] ?? $technicalDetail->usage_type;
-
+            
             if ($request->has('updatedBy')) {
                 $technicalDetail->updated_by = $request->input('updatedBy');
             }
-
+            
             $technicalDetail->save();
 
             // Sync username to online_status table if it changed
@@ -573,10 +795,19 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
-            // details_update_logs is written by App\Observers\AccountDetailsObserver
-            // when the model saves — see the note in updateCustomerDetails(). A
-            // technical row created here for the first time is an insert, not an
-            // update, and is recorded by the creation trail rather than as an edit.
+            if (!empty($changedNewTechnicalDetails) || !empty($changedOldTechnicalDetails)) {
+                // Log to details_update_logs
+                $logUserId = $request->input('updatedBy') ?: ($request->user() ? $request->user()->id : null);
+                DB::table('details_update_logs')->insert([
+                    'account_id' => $billingAccount->id,
+                    'old_details' => json_encode(['type' => 'technical_details', 'data' => $changedOldTechnicalDetails]),
+                    'new_details' => json_encode(['type' => 'technical_details', 'data' => $changedNewTechnicalDetails]),
+                    'created_at' => now(),
+                    'created_by_user_id' => $logUserId,
+                    'updated_at' => now(),
+                    'updated_by_user_id' => $logUserId,
+                ]);
+            }
 
             // Log Activity
             ActivityLog::log(
@@ -614,10 +845,10 @@ class CustomerDetailUpdateController extends Controller
                 // persisted to the queue so the cron can replay the exact same operation.
                 $credParams = [
                     'accountNumber' => $accountNo,
-                    'username' => $oldUsername,       // RADIUS still has the OLD name
-                    'newUsername' => $newUsernameInput,  // the target name
-                    'newPassword' => null,               // username-only change, keep password
-                    'updatedBy' => $request->input('updatedBy') ?: 'System',
+                    'username'      => $oldUsername,       // RADIUS still has the OLD name
+                    'newUsername'   => $newUsernameInput,  // the target name
+                    'newPassword'   => null,               // username-only change, keep password
+                    'updatedBy'     => $request->input('updatedBy') ?: 'System',
                 ];
 
                 $radiusFailedError = null;
@@ -642,13 +873,13 @@ class CustomerDetailUpdateController extends Controller
                 if ($radiusFailedError !== null) {
                     $queuedId = \App\Services\RadiusQueueService::queue([
                         'organization_id' => $billingAccount->organization_id ?? null,
-                        'source_type' => 'customer_detail_update',
-                        'source_id' => $billingAccount->id,
-                        'account_no' => $accountNo,
-                        'operation' => 'update_credentials',
-                        'params' => $credParams,
-                        'last_error' => $radiusFailedError,
-                        'created_by' => $credParams['updatedBy'],
+                        'source_type'     => 'customer_detail_update',
+                        'source_id'       => $billingAccount->id,
+                        'account_no'      => $accountNo,
+                        'operation'       => 'update_credentials',
+                        'params'          => $credParams,
+                        'last_error'      => $radiusFailedError,
+                        'created_by'      => $credParams['updatedBy'],
                     ]);
 
                     \Log::channel('radiusrelated')->error('[CUSTOMER DETAIL RADIUS UPDATE FAILED - QUEUED] Account: ' . $accountNo . ' - Old User: ' . $oldUsername . ' - New User: ' . $newUsernameInput . ' - Error: ' . $radiusFailedError);
@@ -708,6 +939,157 @@ class CustomerDetailUpdateController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Restore RADIUS service for an account that was just moved onto the VIP billing status.
+     *
+     * Moves the RADIUS user back into its plan group and kills any stale session so the new
+     * profile takes effect immediately — the same mechanism the payment pipelines use to
+     * reactivate a customer who has paid, minus the billing status write.
+     *
+     * Best-effort by contract. The caller has already committed the billing change, so every
+     * failure path here reports back rather than throwing: a RADIUS server that is down must
+     * never undo a record of the customer being comped. Failures are queued for the
+     * ProcessRadiusQueue cron to retry, matching how the rest of this controller handles RADIUS.
+     *
+     * @return array{message: string, queued: bool} Human-readable outcome for the API response.
+     */
+    private function reconnectAccountForVip(
+        BillingAccount $billingAccount,
+        int $oldStatusId,
+        int $newStatusId,
+        string $updatedBy
+    ): array {
+        $accountNo = $billingAccount->account_no;
+
+        $logContext = [
+            'account_no' => $accountNo,
+            'billing_account_id' => $billingAccount->id,
+            'old_status' => $oldStatusId,
+            'new_status' => $newStatusId,
+            'updated_by' => $updatedBy,
+        ];
+
+        // Resolve the PPPoE username and the plan to reconnect onto. plan_list is the plan the
+        // account is actually on; customers.desired_plan is the fallback, and is what the
+        // payment-driven reconnect paths (PaymentWorkerService, ServiceOrderController) read.
+        try {
+            $details = DB::table('billing_accounts')
+                ->leftJoin('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->leftJoin('technical_details', 'billing_accounts.id', '=', 'technical_details.account_id')
+                ->leftJoin('plan_list', 'billing_accounts.plan_id', '=', 'plan_list.id')
+                ->where('billing_accounts.id', $billingAccount->id)
+                ->select(
+                    'technical_details.username as username',
+                    'plan_list.plan_name as plan_title',
+                    'customers.desired_plan as desired_plan'
+                )
+                ->first();
+        } catch (\Throwable $e) {
+            Log::error('VIP reconnect aborted — failed to load technical/plan details', array_merge($logContext, [
+                'error' => $e->getMessage(),
+            ]));
+
+            return [
+                'message' => 'Account set to VIP, but its technical details could not be read so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        $username = $details->username ?? null;
+        $planTitle = ($details->plan_title ?? null) ?: ($details->desired_plan ?? null);
+
+        // Not error cases: the billing status is committed and correct either way. An account
+        // with no RADIUS user (or no plan to put it in) simply has nothing to reconnect, and
+        // gets provisioned onto its plan group by the normal install flow.
+        if (empty($username)) {
+            Log::warning('VIP reconnect skipped — no PPPoE username on technical_details', $logContext);
+
+            return [
+                'message' => 'Account set to VIP. No PPPoE username on file, so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        if (empty($planTitle)) {
+            Log::warning('VIP reconnect skipped — no plan on the account or customer', array_merge($logContext, [
+                'username' => $username,
+            ]));
+
+            return [
+                'message' => 'Account set to VIP. No plan on file, so no RADIUS reconnect was attempted.',
+                'queued' => false,
+            ];
+        }
+
+        $params = [
+            'accountNumber' => $accountNo,
+            'username' => $username,
+            'plan' => $planTitle,
+            'updatedBy' => $updatedBy,
+            'remarks' => 'VIP Status Applied - Auto Reconnect',
+            // This controller committed the VIP status a moment ago; without this the reconnect
+            // would write Active straight over it, un-comping the customer it was called to comp.
+            // See ManualRadiusOperationsService::reconnectUser().
+            'preserveBillingStatus' => true,
+        ];
+
+        $error = null;
+
+        try {
+            $result = app(\App\Services\ManualRadiusOperationsService::class)->reconnectUser($params);
+
+            if (($result['status'] ?? '') === 'success') {
+                Log::info('VIP reconnect succeeded', array_merge($logContext, [
+                    'username' => $username,
+                    'plan' => $planTitle,
+                ]));
+
+                return [
+                    'message' => 'Account set to VIP and RADIUS service restored.',
+                    'queued' => false,
+                ];
+            }
+
+            $error = $result['message'] ?? 'RADIUS reconnect returned failure';
+        } catch (\Throwable $e) {
+            // reconnectUser() normally returns a status rather than throwing, but stay defensive
+            // so a RADIUS glitch can never surface as a 500 on an already-committed update.
+            $error = $e->getMessage();
+        }
+
+        Log::error('VIP reconnect failed — queueing for retry', array_merge($logContext, [
+            'username' => $username,
+            'plan' => $planTitle,
+            'error' => $error,
+        ]));
+
+        \Log::channel('radiusrelated')->error('[VIP RECONNECT FAILED - QUEUED] Account: ' . $accountNo . ' - User: ' . $username . ' - Error: ' . $error);
+
+        $queuedId = \App\Services\RadiusQueueService::queue([
+            'organization_id' => $billingAccount->organization_id ?? null,
+            'source_type'     => 'vip_billing_update',
+            'source_id'       => $billingAccount->id,
+            'account_no'      => $accountNo,
+            'operation'       => 'reconnect_user',
+            'params'          => $params,
+            'last_error'      => $error,
+            'created_by'      => $updatedBy,
+        ]);
+
+        if ($queuedId) {
+            return [
+                'message' => 'Account set to VIP. RADIUS reconnect has been queued and will be processed automatically.',
+                'queued' => true,
+            ];
+        }
+
+        return [
+            'message' => 'Account set to VIP, but the RADIUS reconnect failed and could not be queued. Please notify an administrator to reconnect this account manually.',
+            'queued' => false,
+        ];
+    }
+
 
     /**
      * Push a technical-details change out to SmartOLT, best-effort.

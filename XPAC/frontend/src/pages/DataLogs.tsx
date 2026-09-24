@@ -9,6 +9,8 @@ import { useDataLogsStore } from '../store/dataLogsStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { DataLogRecord } from '../services/dataLogsService';
 import { exportToCSV } from '../utils/exportUtils';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -24,6 +26,23 @@ const allColumns = [
   { key: 'created_by', label: 'Created By', width: 'min-w-48' },
   { key: 'updated_at', label: 'Updated At', width: 'min-w-44' },
   { key: 'updated_by', label: 'Updated By', width: 'min-w-48' },
+];
+
+/**
+ * One filter entry per table column above, so every column the table can show is filterable.
+ * Keys match allColumns exactly - the table renders each cell from row[key] and the filter reads
+ * the same key. 'log_type' offers the values present in the loaded logs rather than requiring a
+ * lookup endpoint; the details columns are free text because that is how they are searched.
+ */
+const funnelColumns: FunnelColumn[] = [
+  { key: 'log_type', label: 'Log Type', dataType: 'checklist' },
+  { key: 'id', label: 'ID', dataType: 'varchar' },
+  { key: 'old_details', label: 'Old Details', dataType: 'text' },
+  { key: 'new_details', label: 'New Details', dataType: 'text' },
+  { key: 'created_at', label: 'Created At', dataType: 'datetime' },
+  { key: 'created_by', label: 'Created By', dataType: 'varchar' },
+  { key: 'updated_at', label: 'Updated At', dataType: 'datetime' },
+  { key: 'updated_by', label: 'Updated By', dataType: 'varchar' },
 ];
 
 const DataLogs: React.FC = () => {
@@ -124,7 +143,7 @@ const DataLogs: React.FC = () => {
   }, []);
 
   // Client-side instant live filtering
-  const filteredLogs = useMemo(() => {
+  const searchedLogs = useMemo(() => {
     let filtered = logRecords.filter((row) => {
       // Organization filter — mirrors applicationmanagement.tsx logic exactly
       if (userOrgId) {
@@ -200,6 +219,16 @@ const DataLogs: React.FC = () => {
 
     return filtered;
   }, [logRecords, logTypeFilter, searchQuery, userOrgId, sortColumn, sortDirection]);
+
+  // Applied on the searched set so the counts and the table describe the same rows - the point
+  // Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'dataLogsFunnelFilters',
+    columns: funnelColumns,
+    rows: searchedLogs,
+  });
+
+  const filteredLogs = funnel.filteredRows;
 
 
 
@@ -374,6 +403,23 @@ const DataLogs: React.FC = () => {
               placeholder="Search data logs..."
             />
           </div>
+
+          <button
+            onClick={funnel.open}
+            title={funnel.activeCount > 0
+              ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+              : 'Column Filters'}
+            className={`px-4 py-2 rounded text-sm transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+              ? 'text-white'
+              : isDarkMode ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900 border border-gray-300'
+              }`}
+            style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+          >
+            <Filter className="h-5 w-5" />
+            {funnel.activeCount > 0 && (
+              <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+            )}
+          </button>
 
           {/* Column Visibility Dropdown */}
           <div className="relative flex-shrink-0" ref={columnsDropdownRef}>
@@ -692,6 +738,12 @@ const DataLogs: React.FC = () => {
           colorPalette={colorPalette}
         />
       )}
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Data Log Filters"
+        subtitle="Refine your data log results"
+      />
     </div>
   );
 };

@@ -1,5 +1,5 @@
 -- ===========================================================================
---  ATSS — Agent module schema
+--  GOWISER — Agent module schema
 --  Weekly/monthly achievements, payout approval, and weekly referral invoices.
 --
 --  Run once, top to bottom. Requires MySQL 5.7+ / MariaDB 10.2+.
@@ -18,20 +18,32 @@ SET NAMES utf8mb4;
 --  applies it to the agent's balance.
 -- ===========================================================================
 
-ALTER TABLE `agent_commission_history`
-    ADD COLUMN `status`        VARCHAR(20)  NULL DEFAULT 'Pending',
-    ADD COLUMN `approve_by`    VARCHAR(255) NULL,
-    ADD COLUMN `job_order_ids` TEXT         NULL;
+-- One column per statement: GOWISER's tables already carry `approve_by`, and a
+-- multi-column ALTER fails as a whole on the first "Duplicate column name",
+-- which would silently leave `status` unadded.
+--
+-- `status` is added WITHOUT a default first: MySQL/MariaDB fill existing rows
+-- with a new column's DEFAULT, so adding it as DEFAULT 'Pending' would turn
+-- every historical (already applied) payout into a Pending one that could be
+-- approved - and its money moved - a second time.
+ALTER TABLE `agent_commission_history` ADD COLUMN `status`        VARCHAR(20)  NULL;
+ALTER TABLE `agent_commission_history` ADD COLUMN `job_order_ids` TEXT         NULL;
+-- Already present on GOWISER; harmless "Duplicate column name" if so.
+ALTER TABLE `agent_commission_history` ADD COLUMN `approve_by`    VARCHAR(255) NULL;
 
-ALTER TABLE `agent_bonus_history`
-    ADD COLUMN `status`     VARCHAR(20)  NULL DEFAULT 'Pending',
-    ADD COLUMN `approve_by` VARCHAR(255) NULL;
+ALTER TABLE `agent_bonus_history` ADD COLUMN `status`     VARCHAR(20)  NULL;
+-- Already present on GOWISER; harmless "Duplicate column name" if so.
+ALTER TABLE `agent_bonus_history` ADD COLUMN `approve_by` VARCHAR(255) NULL;
 
 -- Everything recorded before this change has already reached the agent's
 -- balance, so it is approved by definition. Without this, those rows would read
 -- as Pending and could be approved a second time.
 UPDATE `agent_commission_history` SET `status` = 'Approved' WHERE `status` IS NULL;
 UPDATE `agent_bonus_history`      SET `status` = 'Approved' WHERE `status` IS NULL;
+
+-- Only now do new rows default to Pending.
+ALTER TABLE `agent_commission_history` ALTER COLUMN `status` SET DEFAULT 'Pending';
+ALTER TABLE `agent_bonus_history`      ALTER COLUMN `status` SET DEFAULT 'Pending';
 
 
 -- ===========================================================================

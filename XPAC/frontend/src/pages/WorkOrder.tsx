@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Loader2, RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Download, Columns3, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Loader2, RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Download, Columns3, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { API_BASE_URL } from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useWorkOrderStore } from '../store/workOrderStore';
@@ -10,15 +10,16 @@ import pusher from '../services/pusherService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { exportToCSV } from '../utils/exportUtils';
+import { useUserDirectory } from '../hooks/useUserDirectory';
 import { isAgentUser } from '../utils/agentReferral';
-import {
-  buildTechnicianLockedWorkOrderIds,
-  isTechnicianUser,
-  sortWorkOrdersForTechnician,
-  TECHNICIAN_LOCKED_MESSAGE
-} from '../utils/technicianWorkOrderAccess';
-import { authFetch } from '../config/api';
+import { resolveUserDisplayName } from '../utils/userDisplay';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 import { usePermissions } from '../hooks/usePermissions';
+
+// work_orders persists these actors as email strings; they render as names where the
+// email is known to the user directory, and fall through unchanged otherwise.
+const USER_COLUMN_KEYS = ['assign_to', 'report_to', 'requested_by', 'updated_by'];
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -26,6 +27,7 @@ const hexToRgba = (hex: string, opacity: number) => {
 };
 
 const WorkOrderPage: React.FC = () => {
+  const userDirectory = useUserDirectory();
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [searchQuery, setSearchQuery] = useState('');
@@ -100,7 +102,6 @@ const WorkOrderPage: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, [mobileView]);
 
-  const { can } = usePermissions();
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [userRole, setUserRole] = useState<number | null>(null);
@@ -301,7 +302,7 @@ const WorkOrderPage: React.FC = () => {
     showGlobalModal('loading', 'Deleting', 'Removing work order from system...');
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/work-orders/${workOrder.id}`, {
+      const response = await fetch(`${API_BASE_URL}/work-orders/${workOrder.id}`, {
         method: 'DELETE',
         headers: {
           'Accept': 'application/json',
@@ -343,14 +344,10 @@ const WorkOrderPage: React.FC = () => {
     }
   };
 
-  // Agents have read-only access to their assigned work orders — they cannot raise new
-  // ones, matching the mobile app where the "add" action is hidden for them.
-  const isAgentView = isAgentUser(userRoleName, userRole);
-
-  // Raising or reassigning a work order, as opposed to working one already
-  // assigned to you. Keyed on the permission rather than on "is this an agent",
-  // so a custom role gets the same treatment and so the button agrees with the
-  // API — /api/work-orders writes require this same key.
+  // Raising (or deleting) a work order, as opposed to working the ones already
+  // assigned. work-order.manage: every role holding the page except the Agent,
+  // whose access is read-only, as on the mobile app.
+  const { can } = usePermissions();
   const canManageWorkOrders = can('work-order.manage');
 
   const handleAddNew = () => {
@@ -379,12 +376,6 @@ const WorkOrderPage: React.FC = () => {
     }
   };
 
-  /**
-   * Technicians only — narrower than the OSP/agent check below. The queue
-   * ordering and the lock are for the role that actually carries the work out.
-   */
-  const isTechnician = isTechnicianUser(userRoleName, userRole);
-
   const filteredWorkOrders = useMemo(() => {
     let filtered = workOrders;
 
@@ -411,55 +402,61 @@ const WorkOrderPage: React.FC = () => {
       });
     }
 
-    if (searchQuery) {
-      const normalizedQuery = searchQuery.toLowerCase().replace(/\s+/g, '');
-      filtered = filtered.filter(wo => {
-        const checkValue = (val: any): boolean => {
-          if (val === null || val === undefined) return false;
-          return String(val).toLowerCase().replace(/\s+/g, '').includes(normalizedQuery);
-        };
+    if (!searchQuery) return filtered;
 
-        return (
-          checkValue(wo.instructions) ||
-          checkValue(wo.report_to) ||
-          checkValue(wo.assign_to) ||
-          checkValue(wo.requested_by)
-        );
-      });
-    }
+    const normalizedQuery = searchQuery.toLowerCase().replace(/\s+/g, '');
+    return filtered.filter(wo => {
+      const checkValue = (val: any): boolean => {
+        if (val === null || val === undefined) return false;
+        return String(val).toLowerCase().replace(/\s+/g, '').includes(normalizedQuery);
+      };
 
-    // Technicians read their list in the order they work it: In Progress oldest
-    // first, then other active work, with Done / Failed / On Hold at the end.
-    // Every other role keeps the API's requested_date-descending order.
-    if (isTechnician) {
-      return sortWorkOrdersForTechnician(filtered);
-    }
-
-    return filtered;
-  }, [workOrders, userRole, userRoleName, userEmail, userName, searchQuery, currentUserOrgId, isTechnician]);
+      return (
+        checkValue(wo.instructions) ||
+        checkValue(wo.report_to) ||
+        checkValue(wo.assign_to) ||
+        checkValue(wo.requested_by)
+      );
+    });
+  }, [workOrders, userRole, userRoleName, userEmail, userName, searchQuery, currentUserOrgId]);
 
   /**
-   * The work orders a technician may not open yet.
+   * One filter entry per table column, so every column the table can show is filterable. Keys
+   * match workOrderColumns exactly - the table renders each cell from wo[key] and the filter
+   * reads the same key. Category, status and assignee columns offer the values present in the
+   * loaded work orders rather than requiring a lookup endpoint.
    *
-   * Built from the whole store set, not the filtered or paginated view, so
-   * searching, filtering or paging can never change whose turn it is. The util
-   * narrows to the records actually assigned to this technician — the work order
-   * API returns the whole organisation, unlike job and service orders, and this
-   * page does not narrow it for technicians either.
+   * This table had no column filter at all before; WorkOrderFunnelFilter.tsx exists in the repo
+   * but is imported by nothing and is written against a different (job-order) schema, so it is
+   * left alone rather than half-adapted.
    */
-  const technicianLockedIds = useMemo(() => {
-    if (!isTechnician) return new Set<string>();
-    return buildTechnicianLockedWorkOrderIds(workOrders, { email: userEmail, fullName: userName });
-  }, [isTechnician, workOrders, userEmail, userName]);
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'instructions', label: 'Instructions', dataType: 'text' },
+    { key: 'work_category', label: 'Work Category', dataType: 'checklist' },
+    { key: 'work_status', label: 'Status', dataType: 'checklist' },
+    { key: 'assign_to', label: 'Assigned To', dataType: 'checklist' },
+    { key: 'report_to', label: 'Report To', dataType: 'checklist' },
+    { key: 'requested_by', label: 'Requested By', dataType: 'varchar' },
+    { key: 'requested_date', label: 'Requested Date', dataType: 'date' },
+    { key: 'remarks', label: 'Remarks', dataType: 'text' },
+    { key: 'updated_by', label: 'Updated By', dataType: 'varchar' },
+    { key: 'updated_date', label: 'Updated Date', dataType: 'datetime' },
+  ];
 
-  const isWorkOrderLocked = (wo: WorkOrder): boolean =>
-    technicianLockedIds.has(String(wo.id));
+  // Applied on the search-narrowed set so the counts and the table describe the same rows -
+  // the point Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'workOrderFunnelFilters',
+    columns: funnelColumns,
+    rows: filteredWorkOrders,
+  });
 
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, itemsPerPage]);
 
-  const totalPages = Math.ceil(filteredWorkOrders.length / itemsPerPage);
+  const totalPages = Math.ceil(funnel.filteredRows.length / itemsPerPage);
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -475,14 +472,14 @@ const WorkOrderPage: React.FC = () => {
   }, [currentPage]);
 
   const paginatedWorkOrders = useMemo(() => {
-    return filteredWorkOrders.slice(
+    return funnel.filteredRows.slice(
       (currentPage - 1) * itemsPerPage,
       currentPage * itemsPerPage
     );
-  }, [filteredWorkOrders, currentPage, itemsPerPage]);
+  }, [funnel.filteredRows, currentPage, itemsPerPage]);
 
   const PaginationControls = () => {
-    if (filteredWorkOrders.length === 0) return null;
+    if (funnel.filteredRows.length === 0) return null;
 
     return (
       <div className={`border-t p-4 flex flex-col md:flex-row items-center md:justify-between gap-3 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200 shadow-lg'}`}>
@@ -504,7 +501,7 @@ const WorkOrderPage: React.FC = () => {
             <span>entries</span>
           </div>
           <div>
-            Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, filteredWorkOrders.length)}</span> of <span className="font-medium">{filteredWorkOrders.length}</span> results
+            Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="font-medium">{Math.min(currentPage * itemsPerPage, funnel.filteredRows.length)}</span> of <span className="font-medium">{funnel.filteredRows.length}</span> results
           </div>
         </div>
         <div className="flex items-center flex-wrap justify-center gap-1">
@@ -735,8 +732,8 @@ const WorkOrderPage: React.FC = () => {
   }, []);
 
   const sortedWorkOrders = useMemo(() => {
-    if (!sortColumn) return filteredWorkOrders;
-    return [...filteredWorkOrders].sort((a, b) => {
+    if (!sortColumn) return funnel.filteredRows;
+    return [...funnel.filteredRows].sort((a, b) => {
       let aValue: any = (a as any)[sortColumn];
       let bValue: any = (b as any)[sortColumn];
       if (typeof aValue === 'string') aValue = aValue.toLowerCase();
@@ -745,10 +742,10 @@ const WorkOrderPage: React.FC = () => {
       if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [filteredWorkOrders, sortColumn, sortDirection]);
+  }, [funnel.filteredRows, sortColumn, sortDirection]);
 
   const handleExport = () => {
-    if (!filteredWorkOrders || filteredWorkOrders.length === 0) return;
+    if (!funnel.filteredRows || funnel.filteredRows.length === 0) return;
 
     const getExportValue = (record: WorkOrder, columnKey: string) => {
       switch (columnKey) {
@@ -756,18 +753,18 @@ const WorkOrderPage: React.FC = () => {
         case 'instructions': return record.instructions || '-';
         case 'work_category': return record.work_category || '-';
         case 'work_status': return record.work_status || '-';
-        case 'assign_to': return record.assign_to || '-';
-        case 'report_to': return record.report_to || '-';
-        case 'requested_by': return record.requested_by || '-';
+        case 'assign_to': return resolveUserDisplayName(record.assign_to, userDirectory, '-');
+        case 'report_to': return resolveUserDisplayName(record.report_to, userDirectory, '-');
+        case 'requested_by': return resolveUserDisplayName(record.requested_by, userDirectory, '-');
         case 'requested_date': return formatDate(record.requested_date);
         case 'remarks': return record.remarks || '-';
-        case 'updated_by': return record.updated_by || '-';
+        case 'updated_by': return resolveUserDisplayName(record.updated_by, userDirectory, '-');
         case 'updated_date': return formatDate(record.updated_date);
         default: return '-';
       }
     };
 
-    exportToCSV('work_orders_export', workOrderColumns, filteredWorkOrders, getExportValue);
+    exportToCSV('work_orders_export', workOrderColumns, funnel.filteredRows, getExportValue);
   };
 
   return (
@@ -788,6 +785,24 @@ const WorkOrderPage: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center space-x-2 flex-shrink-0">
+                <button
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                  className={`px-4 py-2 rounded text-sm transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                    ? 'text-white'
+                    : isDarkMode
+                      ? 'hover:bg-gray-800 text-white'
+                      : 'hover:bg-gray-100 text-gray-900'
+                    }`}
+                  style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                >
+                  <Filter className="h-5 w-5" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 {displayMode === 'table' && (
                   <div className="relative z-50 flex-shrink-0" ref={columnDropdownRef}>
                     <button
@@ -912,7 +927,7 @@ const WorkOrderPage: React.FC = () => {
                 )}
                 <button
                   onClick={handleExport}
-                  disabled={isLoading || filteredWorkOrders.length === 0}
+                  disabled={isLoading || funnel.filteredRows.length === 0}
                   title="Export to CSV"
                   className="relative flex-shrink-0 p-2 rounded-lg transition-all duration-200 flex items-center justify-center shadow-sm disabled:opacity-50 border"
                   style={{
@@ -921,12 +936,12 @@ const WorkOrderPage: React.FC = () => {
                     color: colorPalette?.primary || '#7c3aed'
                   }}
                   onMouseEnter={(e) => {
-                    if (!isLoading && filteredWorkOrders.length > 0 && colorPalette?.primary) {
+                    if (!isLoading && funnel.filteredRows.length > 0 && colorPalette?.primary) {
                       e.currentTarget.style.backgroundColor = hexToRgba(colorPalette.primary, 0.1);
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (!isLoading && filteredWorkOrders.length > 0) {
+                    if (!isLoading && funnel.filteredRows.length > 0) {
                       e.currentTarget.style.backgroundColor = '#ffffff';
                     }
                   }}
@@ -982,37 +997,23 @@ const WorkOrderPage: React.FC = () => {
               <div className="flex-1 overflow-auto custom-scrollbar" ref={scrollRef}>
                 {paginatedWorkOrders.length > 0 ? (
                   <div>
-                    {paginatedWorkOrders.map((wo) => {
-                      const locked = isWorkOrderLocked(wo);
-                      return (
+                    {paginatedWorkOrders.map((wo) => (
                       <div
                         key={wo.id}
-                        className={`border-b group transition-colors ${locked
-                          ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-200'}`
-                          : `cursor-pointer ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'}`}`}
-                        title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                        aria-disabled={locked}
-                        onClick={() => {
-                          if (locked) return;
-                          handleEdit(wo);
-                        }}
+                        className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'}`}
+                        onClick={() => handleEdit(wo)}
                       >
                         <div className="px-4 py-3 flex items-center justify-between">
                           <div className="flex-1 min-w-0 pr-4">
-                            <h3 className={`font-medium text-sm uppercase tracking-wide transition-transform duration-200 ${locked ? '' : 'group-hover:translate-x-1'} ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                            <h3 className={`font-medium text-sm uppercase tracking-wide group-hover:translate-x-1 transition-transform duration-200 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                               {wo.instructions || `WORK ORDER #${wo.id}`}
-                              {locked && (
-                                <span className={`ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                                  Locked
-                                </span>
-                              )}
                             </h3>
                             <div className={`flex items-center gap-4 mt-1 text-[10px] uppercase font-medium ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>
                               {wo.work_category && (
                                 <span>Category: {wo.work_category}</span>
                               )}
                               <span>Requested Date: {formatDate(wo.requested_date)}</span>
-                              <span>Report To: {wo.report_to || 'Pending'}</span>
+                              <span>Report To: {resolveUserDisplayName(wo.report_to, userDirectory, 'Pending')}</span>
                             </div>
                           </div>
                           <span className={`text-xs font-bold uppercase tracking-wide whitespace-nowrap ${
@@ -1028,8 +1029,7 @@ const WorkOrderPage: React.FC = () => {
                           </span>
                         </div>
                       </div>
-                      );
-                    })}
+                    ))}
                   </div>
                 ) : (
                   <div className={`text-center py-20 ${isDarkMode ? 'text-gray-500' : 'text-gray-600'}`}>
@@ -1078,21 +1078,13 @@ const WorkOrderPage: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedWorkOrders.map((wo) => {
-                        const locked = isWorkOrderLocked(wo);
-                        return (
+                      {sortedWorkOrders.map((wo) => (
                         <tr
                           key={wo.id}
-                          onClick={() => {
-                            if (locked) return;
-                            handleEdit(wo);
-                          }}
-                          title={locked ? TECHNICIAN_LOCKED_MESSAGE : undefined}
-                          aria-disabled={locked}
-                          className={`transition-colors border-b ${locked
-                            ? `cursor-not-allowed opacity-50 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`
-                            : `cursor-pointer ${isDarkMode ? 'hover:bg-gray-800/50 border-gray-800' : 'hover:bg-gray-50 border-gray-100'}`
-                          } ${selectedWorkOrder?.id === wo.id && !locked ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''}`}
+                          onClick={() => handleEdit(wo)}
+                          className={`transition-colors cursor-pointer border-b ${
+                            isDarkMode ? 'hover:bg-gray-800/50 border-gray-800' : 'hover:bg-gray-50 border-gray-100'
+                          } ${selectedWorkOrder?.id === wo.id ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''}`}
                         >
                           {filteredColumns.map((column) => (
                             <td
@@ -1107,6 +1099,7 @@ const WorkOrderPage: React.FC = () => {
                                 {(() => {
                                   const val = (wo as any)[column.key];
                                   if (column.key === 'requested_date' || column.key === 'updated_date') return formatDate(val);
+                                  if (USER_COLUMN_KEYS.includes(column.key)) return resolveUserDisplayName(val, userDirectory, '-');
                                   if (column.key === 'work_status') {
                                     return (
                                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
@@ -1125,15 +1118,14 @@ const WorkOrderPage: React.FC = () => {
                             </td>
                           ))}
                         </tr>
-                        );
-                      })}
+                      ))}
                     </tbody>
                   </table>
                 </div>
               </div>
             )}
           </div>
-          {!isLoading && filteredWorkOrders.length > 0 && <PaginationControls />}
+          {!isLoading && funnel.filteredRows.length > 0 && <PaginationControls />}
         </div>
       </div>
 
@@ -1174,6 +1166,12 @@ const WorkOrderPage: React.FC = () => {
         onCancel={closeGlobalModal}
         colorPalette={colorPalette}
         isDarkMode={isDarkMode}
+      />
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Work Order Filters"
+        subtitle="Refine your work order results"
       />
     </div>
   );

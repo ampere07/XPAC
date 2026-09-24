@@ -4,7 +4,6 @@ import GlobalSearch from './globalfunctions/GlobalSearch';
 import SMSBlastDetails from '../components/SMSBlastDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import AddSMSBlastModal from '../modals/AddSMSBlastModal';
-import { authFetch } from '../config/api';
 
 interface SMSBlastRecord {
   id: string;
@@ -90,7 +89,7 @@ const SMSBlast: React.FC = () => {
       setIsLoading(true);
       setError(null);
 
-      const response = await authFetch(`${API_BASE_URL}/sms-blast`);
+      const response = await fetch(`${API_BASE_URL}/sms-blast`);
       const result = await response.json();
 
       if (result.status === 'success') {

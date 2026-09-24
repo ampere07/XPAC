@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { View, Text, Pressable, useWindowDimensions, ActivityIndicator, TextInput, StyleSheet, Modal, Alert, ScrollView } from 'react-native';
 import { MapPin, Search, Plus, Navigation, Check, X } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ExpoLocation from 'expo-location';
-import { ensureLocationPermission } from '../services/locationConsent';
+import { getCurrentPosition, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 import MapView, { Marker, Circle, UrlTile } from 'react-native-maps';
 import { FlashList } from '@shopify/flash-list';
 import AddLcpNapLocationModal from '../modals/AddLcpNapLocationModal';
@@ -197,6 +196,9 @@ const LcpNapLocation: React.FC = () => {
   const [editLocation, setEditLocation] = useState<LocationMarker | null>(null);
   const [userRole, setUserRole] = useState<number | null>(null);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  // Build-time constant (see config/featureFlags) — read once so the map props and the
+  // centre-on-me control can never disagree about whether a device fix is obtainable.
+  const locationAvailable = isLocationAvailable();
   const [currentDelta, setCurrentDelta] = useState(12);
   const [pinLimit, setPinLimit] = useState<string>('25');
   const [currentRegion, setCurrentRegion] = useState({
@@ -245,10 +247,11 @@ const LcpNapLocation: React.FC = () => {
       }
     };
     initData();
-    // No location permission is requested on mount. Google Play requires a runtime
-    // permission request to be immediately preceded by a user action and an in-app
-    // disclosure, so location is only ever asked for from handleGetMyLocation(), which
-    // the user triggers themselves by pressing the locate button.
+    // Warms the permission so the map can open with a "you are here" marker. reAskIfDeclined:
+    // false because the user did not ask for this — it fires on mount — and re-showing the
+    // disclosure to someone who already declined would be nagging. The explicit "locate me"
+    // button below still re-asks.
+    requestForegroundPermission('LcpNapLocation', { reAskIfDeclined: false }).catch(() => { });
   }, []);
 
   // Combined search using local markers + Nominatim (free OSM geocoding)
@@ -497,13 +500,13 @@ const LcpNapLocation: React.FC = () => {
 
   const handleGetMyLocation = useCallback(async () => {
     try {
-      // Shows the in-app location disclosure before the OS prompt, then requests.
-      const granted = await ensureLocationPermission();
-      if (!granted) return Alert.alert('Permission denied', 'Location permission is required.');
-      const loc = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Balanced });
+      const status = await requestForegroundPermission('LcpNapLocation');
+      if (status !== 'granted') return Alert.alert('Permission denied', 'Location permission is required.');
+      const position = await getCurrentPosition('LcpNapLocation');
+      if (!position) return Alert.alert('Error', 'Unable to get location.');
       mapRef.current?.animateToRegion({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
+        latitude: position.latitude,
+        longitude: position.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01
       }, 1000);
@@ -616,7 +619,10 @@ const LcpNapLocation: React.FC = () => {
                 initialRegion={{ latitude: 12.8797, longitude: 121.7740, latitudeDelta: 12, longitudeDelta: 12 }}
                 minZoomLevel={5.8}
                 maxZoomLevel={19}
-                showsUserLocation
+                /* showsUserLocation makes react-native-maps ask the OS for a fix, so it is tied to
+                   the same switch as every other GPS read. Off means no blue dot and no accuracy
+                   circle; every other map feature is unaffected. */
+                showsUserLocation={locationAvailable}
                 showsMyLocationButton={false}
                 onUserLocationChange={e => e.nativeEvent.coordinate && setUserLocation(e.nativeEvent.coordinate)}
                 onRegionChangeComplete={r => {
@@ -810,9 +816,13 @@ const LcpNapLocation: React.FC = () => {
               <Pressable onPress={startPinPlacement} style={[styles.mapActionButton, { backgroundColor: primaryColor }]}>
                 <Plus size={24} color="white" />
               </Pressable>
-              <Pressable onPress={handleGetMyLocation} style={[styles.mapActionButton, { backgroundColor: '#ffffff', marginTop: 12 }]}>
-                <Navigation size={24} color={'#111827'} />
-              </Pressable>
+              {/* Centre-on-me is hidden if location services are ever switched off again; search
+                  and manual panning still reach any point on the map without it. */}
+              {locationAvailable && (
+                <Pressable onPress={handleGetMyLocation} style={[styles.mapActionButton, { backgroundColor: '#ffffff', marginTop: 12 }]}>
+                  <Navigation size={24} color={'#111827'} />
+                </Pressable>
+              )}
             </View>
 
             {/* Map attribution — required by tile provider */}

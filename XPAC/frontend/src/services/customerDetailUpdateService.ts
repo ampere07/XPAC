@@ -1,4 +1,4 @@
-import apiClient, { authFetch } from '../config/api';
+import apiClient from '../config/api';
 
 const API_URL = process.env.REACT_APP_API_BASE_URL;
 
@@ -29,6 +29,11 @@ export interface BillingDetailsUpdate {
   accountBalance?: number | string;
   vip_expiration?: string;
   vip_remarks?: string;
+  /** false = No VAT (bill the plan price). true = VAT Included (VAT added on top). */
+  vat_enabled?: boolean;
+  withholding_enabled?: boolean;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. */
+  withholding_percentage?: number | string;
 }
 
 export interface TechnicalDetailsUpdate {
@@ -75,8 +80,11 @@ export const customerDetailUpdateService = {
         headers['Content-Type'] = 'application/json';
       }
 
-      const response = await authFetch(`${API_URL}/customer-detail/${accountNo}`, {
+      const response = await fetch(`${API_URL}/customer-detail/${accountNo}`, {
         method,
+        // Send the session, as the shared API client does, so the API can tell
+        // who is asking (and records who made the change).
+        credentials: 'include',
         headers,
         body,
       });

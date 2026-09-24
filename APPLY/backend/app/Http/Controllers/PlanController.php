@@ -22,7 +22,10 @@ class PlanController extends Controller
             Log::info('=== PlanController index START ===');
             
             Log::info('Querying plan_list table');
-            $plans = Plan::orderBy('plan_name', 'asc')->get();
+            // This is the application form's plan list, so hidden plans are filtered out at the
+            // source. The form filters again on its side, but that is a convenience — a plan the
+            // applicant must not be able to pick never leaves the server in the first place.
+            $plans = Plan::visibleInApplication()->orderBy('plan_name', 'asc')->get();
             Log::info('Plans fetched', ['count' => $plans->count()]);
 
             Log::info('=== PlanController index SUCCESS ===');
@@ -81,6 +84,7 @@ class PlanController extends Controller
                 'plan_name' => 'required|string|max:255|unique:plan_list,plan_name',
                 'description' => 'nullable|string',
                 'price' => 'required|numeric|min:0',
+                'show_in_application' => 'nullable|boolean',
             ]);
 
             if ($validator->fails()) {
@@ -99,6 +103,8 @@ class PlanController extends Controller
                 'plan_name' => $request->plan_name,
                 'description' => $request->description,
                 'price' => $request->price,
+                // Visible unless explicitly hidden, matching the checkbox's default state.
+                'show_in_application' => $request->boolean('show_in_application', true),
                 'modified_by_user_id' => $currentUserId,
                 'modified_date' => now(),
             ]);
@@ -137,6 +143,7 @@ class PlanController extends Controller
                 'plan_name' => 'sometimes|required|string|max:255',
                 'description' => 'nullable|string',
                 'price' => 'sometimes|required|numeric|min:0',
+                'show_in_application' => 'sometimes|boolean',
             ]);
 
             if ($validator->fails()) {
@@ -152,6 +159,10 @@ class PlanController extends Controller
 
             $plan->update(array_merge(
                 $request->only(['plan_name', 'description', 'price']),
+                // Only when sent, so an update that never mentions it leaves a hidden plan hidden.
+                $request->has('show_in_application')
+                    ? ['show_in_application' => $request->boolean('show_in_application')]
+                    : [],
                 [
                     'modified_by_user_id' => $currentUserId,
                     'modified_date' => now()

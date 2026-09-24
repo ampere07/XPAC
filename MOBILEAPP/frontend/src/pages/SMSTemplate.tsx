@@ -70,6 +70,7 @@ const templateTypes = [
   'Welcome',
   'Paid',
   'Due',
+  'PrepaidPreExpiry',
 ];
 
 const availableVariables = [
@@ -85,6 +86,9 @@ const availableVariables = [
   '{{soa_date}}',
   '{{portal_url}}',
   '{{company_name}}',
+  // Substituted by BillingNotificationService for every billing-side template, including the
+  // prepaid pre-expiry notice — it just was never listed here to insert.
+  '{{payment_link}}',
 ];
 
 const formatDate = (dateString?: string): string => {

@@ -24,6 +24,7 @@ import { getCustomerDetail, CustomerDetailData } from '../services/customerDetai
 import { BillingDetailRecord } from '../types/billing';
 import BillingDetails from './CustomerDetails';
 import NotFoundModal from '../modals/NotFoundModal';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => {
   return {
@@ -36,9 +37,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     lastName: customerData.lastName,
     middleInitial: customerData.middleInitial,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusName || (customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive'),
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: (customerData as any).onlineSessionStatus || 'Empty',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -70,7 +71,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',

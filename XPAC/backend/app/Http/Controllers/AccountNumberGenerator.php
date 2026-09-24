@@ -52,7 +52,7 @@ trait AccountNumberGenerator
                 Log::error('Invalid starting_number format - does not match pattern', [
                     'starting_number' => $startingNumber,
                     'expected_pattern' => '^([A-Za-z]*)(\d+)$',
-                    'expected_examples' => ['ABC123', '0001', 'ATSS100']
+                    'expected_examples' => ['ABC123', '0001', 'GOWISER100']
                 ]);
                 return $this->generateDefaultAccountNumber();
             }

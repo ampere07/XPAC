@@ -36,12 +36,23 @@ return new class extends Migration
                 continue;
             }
 
+            $addedStatus = false;
+
             if (!Schema::hasColumn($table, 'status')) {
                 Schema::table($table, function (Blueprint $t) {
                     // Matches transactions.status: a short free-text state rather
                     // than an enum, so a new state needs no schema change.
-                    $t->string('status', 20)->nullable()->default('Pending');
+                    //
+                    // Added WITHOUT a default first. MySQL/MariaDB fill every
+                    // existing row with a new column's DEFAULT, so adding it as
+                    // DEFAULT 'Pending' made every historical (already applied)
+                    // payout read as Pending — the whereNull() backfill below
+                    // then matched nothing, and each old payout could be
+                    // approved, and its money moved, a second time. The default
+                    // is set after the backfill instead.
+                    $t->string('status', 20)->nullable();
                 });
+                $addedStatus = true;
             }
 
             // The approver column is expected to already exist; add it only if a
@@ -64,6 +75,13 @@ return new class extends Migration
             // Everything recorded before this migration has already been applied
             // to the agent's balance, so it is approved by definition.
             DB::table($table)->whereNull('status')->update(['status' => 'Approved']);
+
+            // Now that history is backfilled, new rows default to Pending (the
+            // controllers also set it explicitly). Plain SQL rather than
+            // ->change(), which would need doctrine/dbal.
+            if ($addedStatus && DB::getDriverName() === 'mysql') {
+                DB::statement("ALTER TABLE `{$table}` ALTER COLUMN `status` SET DEFAULT 'Pending'");
+            }
         }
     }
 

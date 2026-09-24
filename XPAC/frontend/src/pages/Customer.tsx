@@ -18,7 +18,15 @@ import { userService } from '../services/userService';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
-import { authFetch } from '../config/api';
+import {
+  deriveVipLabel,
+  deriveVatTypeLabel,
+  normalizeGenerationType,
+  isPrepaidGeneration,
+  VIP_BILLING_STATUS_ID
+} from '../utils/billingFilterOptions';
+import { mergeSavedColumns, BILLING_ATTRIBUTE_COLUMN_KEYS } from '../utils/tableColumnPrefs';
+import { getOnlineStatusInfo } from '../utils/onlineStatus';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -37,6 +45,44 @@ const formatDate = (dateString: string | null | undefined): string => {
   } catch (e) {
     return dateString;
   }
+};
+
+/**
+ * Prepaid expiry as a countdown, e.g. "30 days left".
+ *
+ * Counts whole CALENDAR days, deliberately ignoring the stored time-of-day:
+ * prepaid_expires_at inherits the clock time of the payment that set it, so a
+ * millisecond diff would report "29 days left" or "30 days left" for the same
+ * account depending on the hour it was viewed. Comparing dates keeps the label
+ * stable for the whole day.
+ *
+ * The +1 makes the expiry date itself count as a remaining day, matching
+ * AutoDisconnectService::processPrepaidRestrictions() — an account expiring 07/30
+ * keeps service all through 07/30 and is only restricted on 07/31. So on 07/30
+ * this reads "1 day left", not "Expired".
+ *
+ * @returns null when there is no expiry (postpaid, or a prepaid account that has
+ *          never paid), so the caller can omit the segment entirely.
+ */
+const formatPrepaidDaysLeft = (raw: string | null | undefined): string | null => {
+  if (!raw) return null;
+
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw).trim());
+  if (!parts) return null;
+
+  // Local midnight on both sides so the subtraction is a pure date difference.
+  const expiry = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (isNaN(expiry.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+  const daysLeft = Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1;
+
+  if (daysLeft <= 0) return 'Expired';
+
+  return `${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left`;
 };
 
 interface LocationItem {
@@ -161,6 +207,10 @@ const allColumns = [
   { key: 'emailAddress', label: 'Email Address', width: 'min-w-48' },
   { key: 'plan', label: 'Plan', width: 'min-w-40' },
   { key: 'balance', label: 'Account Balance', width: 'min-w-32' },
+  { key: 'vatType', label: 'VAT Type', width: 'min-w-32' },
+  { key: 'generationType', label: 'Generation Type', width: 'min-w-36' },
+  { key: 'expirationDate', label: 'Expiration Date', width: 'min-w-36' },
+  { key: 'vip', label: 'VIP', width: 'min-w-24' },
   { key: 'username', label: 'Username', width: 'min-w-32' },
   { key: 'connectionType', label: 'Connection Type', width: 'min-w-36' },
   { key: 'routerModel', label: 'Router Model', width: 'min-w-32' },
@@ -202,7 +252,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>(initialSearchQuery || '');
-  const { billingRecords, totalCount, isLoading: isTableLoading, error: contextError, fetchBillingRecords, refreshLatestData, applyOnlineStatusBatch } = useBillingStore();
+  const { billingRecords, totalCount, isLoading: isTableLoading, error: contextError, fetchBillingRecords, refreshLatestData } = useBillingStore();
   const isFullyLoaded = totalCount === 0 || billingRecords.length >= totalCount;
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetailData | null>(null);
   const selectedCustomerRef = useRef<CustomerDetailData | null>(null);
@@ -281,7 +331,15 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const saved = localStorage.getItem('customerTableVisibleColumns');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Merged rather than used as-is: a preference saved before a column existed omits it,
+        // which would hide newly added columns from every returning user. Only the new keys are
+        // merged in, so columns the user hid on purpose stay hidden.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'customerTableVisibleColumns:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column visibility:', err);
       }
@@ -299,7 +357,14 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const saved = localStorage.getItem('customerTableColumnOrder');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        // Without merging, a new column is missing from the saved order and indexOf returns -1,
+        // which would sort it ahead of every other column.
+        return mergeSavedColumns(
+          JSON.parse(saved),
+          BILLING_ATTRIBUTE_COLUMN_KEYS,
+          allColumns.map(col => col.key),
+          'customerTableColumnOrder:billingAttrs'
+        );
       } catch (err) {
         console.error('Failed to load column order:', err);
       }
@@ -451,22 +516,6 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       }
     };
 
-    /**
-     * RADIUS session changes, straight from the sync that just wrote them.
-     *
-     * Handled apart from handleDataChange because it must NOT re-fetch: the payload already carries
-     * the new values, and re-reading the table once a minute for every subscriber that connected or
-     * dropped is exactly the load this broadcast exists to avoid. It is applied to the store in
-     * place, so every screen reading these records updates without anyone refreshing.
-     */
-    const handleOnlineStatus = (payload: any) => {
-      const statuses = Array.isArray(payload) ? payload : (payload?.statuses ?? []);
-
-      if (Array.isArray(statuses) && statuses.length > 0) {
-        applyOnlineStatusBatch(statuses);
-      }
-    };
-
     const appChannel = pusher.subscribe('applications');
     const jobChannel = pusher.subscribe('job-orders');
     const customerChannel = pusher.subscribe('customers');
@@ -488,7 +537,6 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     appChannel.bind('new-application', handleDataChange);
     jobChannel.bind('job-order-done', handleDataChange);
     customerChannel.bind('customer-updated', handleDataChange);
-    customerChannel.bind('online-status-updated', handleOnlineStatus);
 
     // Re-subscribe on reconnection
     const stateHandler = (states: { previous: string; current: string }) => {
@@ -508,13 +556,12 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       appChannel.unbind('new-application', handleDataChange);
       jobChannel.unbind('job-order-done', handleDataChange);
       customerChannel.unbind('customer-updated', handleDataChange);
-      customerChannel.unbind('online-status-updated', handleOnlineStatus);
       pusher.connection.unbind('state_change', stateHandler);
       pusher.unsubscribe('applications');
       pusher.unsubscribe('job-orders');
       pusher.unsubscribe('customers');
     };
-  }, [refreshLatestData, applyOnlineStatusBatch]);
+  }, [refreshLatestData]);
 
   // Presence channel for knowing who's viewing what
   useEffect(() => {
@@ -765,28 +812,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     };
   }, [cities]);
 
-  const getStatusInfo = (record: any) => {
-    const accessStatus = record.status || '';
-    const lowerStatus = accessStatus.toLowerCase();
-    const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-    let bucket = 'offline';
-    if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-    else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-    else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-    else if (lowerStatus === 'inactive') bucket = 'offline';
-    else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-    else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') bucket = lowerOnlineStatus;
-
-    const lower = bucket.toLowerCase();
-    if (lower === 'online') return { label: 'ONLINE', color: 'text-green-500', hex: '#22c55e', fillColor: 'bg-green-500', hollow: false };
-    if (lower === 'offline') return { label: 'OFFLINE', color: 'text-yellow-400', hex: '#facc15', hollow: true };
-    if (lower === 'not found') return { label: 'NOT FOUND', color: 'text-red-600', hex: '#dc2626', fillColor: 'bg-red-600', hollow: false };
-    if (lower === 'disconnected') return { label: 'DISCONNECTED', color: 'text-gray-400', hex: '#9ca3af', fillColor: 'bg-gray-400', hollow: false };
-    if (lower === 'restricted') return { label: 'RESTRICTED', color: 'text-gray-400', hex: '#be6b33', fillColor: 'bg-orange-500', hollow: false };
-    if (lower === 'empty') return { label: 'EMPTY', color: 'text-slate-400', hex: '#94a3b8', hollow: true, hideCircle: true };
-    return { label: bucket.toUpperCase(), color: 'text-blue-500', hex: '#3b82f6', fillColor: 'bg-blue-500', hollow: false };
-  };
+  // Shared with CustomerDetails so the row and the panel it opens always agree.
+  const getStatusInfo = getOnlineStatusInfo;
 
   const getVal = (item: BillingRecord, key: string): any => {
     switch (key) {
@@ -849,6 +876,20 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       case 'groupName': return item.groupName || item.provider;
       case 'usernameStatus': return item.usernameStatus;
       case 'sessionGroup': return item.sessionGroup;
+      // A customer is VIP when their billing status is VIP — there is no vip flag on
+      // billing_accounts, and status id 7 is what CheckVipExpiration acts on.
+      case 'vip': return deriveVipLabel(
+        item.billing_status_id === VIP_BILLING_STATUS_ID ||
+        String(item.billingStatus || '').trim().toLowerCase() === 'vip'
+      );
+      // Matches the label CustomerDetails shows, so the filter never disagrees with the panel.
+      case 'vatType': return deriveVatTypeLabel(item.vatEnabled, item.vatType);
+      case 'generationType': return normalizeGenerationType(item.generationType);
+      case 'prepaidExpiration': return item.prepaidExpiration;
+      // Table column key. Sorts on the raw timestamp (not the formatted label) so the order is
+      // chronological, and only prepaid accounts contribute a value — matching what is rendered.
+      case 'expirationDate':
+        return isPrepaidGeneration(item.generationType) ? (item.prepaidExpiration || '') : '';
       default: return (item as any)[key];
     }
   };
@@ -860,6 +901,31 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     return records.filter(record => {
       return Object.entries(filters).every(([key, filter]: [string, any]) => {
         const recordValue = getVal(record, key);
+
+        // Prepaid Expiration needs its own handling, before the generic date branch:
+        //  1. It is only meaningful for Prepaid accounts — a postpaid customer has no expiry to
+        //     compare against, so it cannot satisfy a date range.
+        //  2. prepaid_expires_at is a datetime while the filter inputs are plain dates. The
+        //     generic branch feeds both to new Date(), which reads 'YYYY-MM-DD' as UTC midnight
+        //     but 'YYYY-MM-DD HH:mm:ss' as local — so an expiry at local midnight would fall
+        //     before a "from" of its own date and be dropped. Both sides are pinned to local
+        //     day boundaries here instead.
+        if (key === 'prepaidExpiration') {
+          if (!isPrepaidGeneration(record.generationType)) return false;
+          if (!recordValue) return false;
+
+          const toLocalTime = (raw: any, endOfDay = false): number => {
+            let s = String(raw).trim().replace(' ', 'T');
+            if (s.length === 10) s = endOfDay ? `${s}T23:59:59.999` : `${s}T00:00:00`;
+            return new Date(s).getTime();
+          };
+
+          const expiryTime = toLocalTime(recordValue);
+          if (isNaN(expiryTime)) return false;
+          if (filter.from && expiryTime < toLocalTime(filter.from)) return false;
+          if (filter.to && expiryTime > toLocalTime(filter.to, true)) return false;
+          return true;
+        }
 
         if (filter.type === 'checklist') {
           if (!filter.value || !Array.isArray(filter.value) || filter.value.length === 0) return true;
@@ -1271,10 +1337,12 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         );
       case 'dateInstalled':
         return formatDate(record.dateInstalled);
+      // Uppercased via CSS rather than .toUpperCase(): the underlying value is untouched, so
+      // sorting, filtering, the CSV export and the tooltip all keep the real casing.
       case 'customerName':
-        return record.customerName;
+        return <span className="uppercase" title={record.customerName}>{record.customerName}</span>;
       case 'address':
-        return <span title={record.address}>{record.address}</span>;
+        return <span className="uppercase" title={record.address}>{record.address}</span>;
       case 'contactNumber':
         return record.contactNumber || '-';
       case 'emailAddress':
@@ -1347,6 +1415,25 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       case 'techCreatedAt':
         return formatDate((record as any).techCreatedAt);
 
+      // Billing attributes. Derived through the same helpers the funnel filters use, so the
+      // column, the filter and the details panel can never disagree about a record.
+      case 'vatType':
+        // Boolean wins; the legacy free-text column is only a fallback for older accounts.
+        return deriveVatTypeLabel(record.vatEnabled, record.vatType) || '-';
+      case 'generationType':
+        return normalizeGenerationType(record.generationType) || '-';
+      case 'expirationDate':
+        // Prepaid only — a postpaid account has no rolling period to expire.
+        return isPrepaidGeneration(record.generationType)
+          ? (record.prepaidExpiration ? formatDate(record.prepaidExpiration) : '-')
+          : '-';
+      case 'vip':
+        // No VIP flag exists on billing_accounts; VIP is the billing status (id 7).
+        return deriveVipLabel(
+          record.billing_status_id === VIP_BILLING_STATUS_ID ||
+          String(record.billingStatus || '').trim().toLowerCase() === 'vip'
+        );
+
       // Related records - placeholders
       case 'relatedInvoices':
       case 'relatedStatementOfAccount':
@@ -1377,13 +1464,13 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       // Computed fields
       case 'computedAddress':
         return (record as any).computedAddress ||
-          (record.address ? (record.address.length > 25 ? `${record.address.substring(0, 25)}...` : record.address) : '-');
+          (record.address ? <span className="uppercase">{record.address.length > 25 ? `${record.address.substring(0, 25)}...` : record.address}</span> : '-');
       case 'computedStatus':
         return (record as any).computedStatus ||
           `${record.status || 'Disconnected Offline'} | ₱ ${record.balance.toFixed(2)}`;
       case 'computedAccountNo':
         return (record as any).computedAccountNo ||
-          `${record.applicationId} | ${record.customerName}${record.address ? (' | ' + record.address.substring(0, 10) + '...') : ''}`;
+          <span>{record.applicationId} | <span className="uppercase">{record.customerName}</span>{record.address ? <> | <span className="uppercase">{record.address.length > 10 ? `${record.address.substring(0, 10)}...` : record.address}</span></> : ''}</span>;
 
       default:
         return '-';
@@ -1407,8 +1494,16 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
           return getStatusInfo(record).label;
         case 'accountNo':
           return record.applicationId;
+        // Both of these render as JSX (uppercased spans), which would export as "[object
+        // Object]" — so the export reads the raw value, and keeps the original casing.
         case 'address':
           return record.address || '-';
+        case 'customerName':
+          return record.customerName || '-';
+        case 'balance':
+          return Number(record.balance ?? 0).toFixed(2);
+        case 'totalPaid':
+          return Number(record.totalPaid ?? 0).toFixed(2);
         default:
           return renderCellValue(record, columnKey);
       }
@@ -1447,7 +1542,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/cron-test/process-overdue-notifications`, {
+      const response = await fetch(`${API_BASE_URL}/cron-test/process-overdue-notifications`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -1485,7 +1580,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/cron-test/process-disconnection-notices`, {
+      const response = await fetch(`${API_BASE_URL}/cron-test/process-disconnection-notices`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -1529,7 +1624,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const generationDate = `${year}-${month}-${day}`;
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/billing-generation/force-generate-all`, {
+      const response = await fetch(`${API_BASE_URL}/billing-generation/force-generate-all`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2421,7 +2516,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               <div className="flex items-center justify-between">
                                 <div className="flex-1 min-w-0">
                                   <div className="text-red-400 font-medium text-sm mb-1 flex items-center flex-wrap gap-2">
-                                    <span>{record.applicationId} | {record.customerName} | {record.address}</span>
+                                    {/* Mobile card header — name and address uppercased to match the table view. */}
+                                    <span>{record.applicationId} | <span className="uppercase">{record.customerName}</span> | <span className="uppercase">{record.address}</span></span>
                                     {(() => {
                                       const viewersForCard = viewers[record.applicationId] || [];
                                       return viewersForCard.length > 0 && (
@@ -2444,7 +2540,24 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   </div>
                                   <div className={`text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                                     }`}>
-                                    {record.status} | ₱ {record.balance.toFixed(2)}
+                                    {/* Prepaid expiry sits between the status and the balance, shown
+                                        as a countdown ("30 days left") rather than a raw date — the
+                                        useful question is how long is left, not which date it lands on.
+                                        The exact date stays available on hover. Post Paid accounts have
+                                        no expiry, so the segment (and its separator) is omitted
+                                        entirely rather than showing a blank. */}
+                                    {record.status} | {(() => {
+                                      const daysLeft = formatPrepaidDaysLeft(record.prepaidExpiration);
+                                      if (!daysLeft) return null;
+                                      return (
+                                        <>
+                                          <span title={`Prepaid expires ${formatDate(record.prepaidExpiration)}`}>
+                                            {daysLeft}
+                                          </span>
+                                          {' | '}
+                                        </>
+                                      );
+                                    })()}₱ {record.balance.toFixed(2)}
                                   </div>
                                 </div>
                                 <div className="flex items-center space-x-2 ml-4 flex-shrink-0">

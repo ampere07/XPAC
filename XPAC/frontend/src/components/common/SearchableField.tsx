@@ -21,6 +21,13 @@ interface SearchableFieldProps {
   required?: boolean;
   isHeaderSelectable?: boolean;
   emptyMessage?: string;
+  /**
+   * Non-selectable hint shown at the top of the open list, e.g. "Select Concern".
+   * Deliberately not an option: it is a prompt, not a value, so picking it must be
+   * impossible — a selectable "None" row lets a required field be satisfied with
+   * nothing.
+   */
+  placeholderOption?: string;
 }
 
 const SearchableField: React.FC<SearchableFieldProps> = ({
@@ -37,7 +44,8 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
   colorPalette,
   required,
   isHeaderSelectable = false,
-  emptyMessage
+  emptyMessage,
+  placeholderOption
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -119,8 +127,21 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
       {isOpen && (
         <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-md shadow-2xl border overflow-hidden flex flex-col ${
           isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-        }`} style={{ width: '100%' }}>
+        }`} style={{ minWidth: '100vw', maxWidth: '300px', width: '100%' }}>
           <div className="max-h-60 overflow-y-auto custom-scrollbar">
+            {/* A prompt, not an option: no onClick, and pointer-events-none so it
+                cannot be clicked or hovered as though it were selectable. Hidden
+                while searching, where it would only be noise above the matches. */}
+            {placeholderOption && !searchTerm && (
+              <div
+                aria-disabled="true"
+                className={`px-4 py-2.5 text-sm italic select-none pointer-events-none border-b ${
+                  isDarkMode ? 'text-gray-500 border-gray-700' : 'text-gray-400 border-gray-100'
+                }`}
+              >
+                {placeholderOption}
+              </div>
+            )}
             {hasResults ? (
               groupedOptions ? (
                 (filteredData as GroupedOption[]).map((group, gIdx) => (

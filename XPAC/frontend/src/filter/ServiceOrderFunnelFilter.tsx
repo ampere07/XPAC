@@ -3,6 +3,7 @@ import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import apiClient from '../config/api';
 import { planService } from '../services/planService';
+import { dedupeConcerns } from '../utils/concernAliases';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -65,11 +66,7 @@ export const allColumns: Column[] = [
   { key: 'visitBy', label: 'Visit By', dataType: 'varchar' },
   { key: 'visitWith', label: 'Visit With', dataType: 'varchar' },
   { key: 'visitWithOther', label: 'Visit With Other', dataType: 'varchar' },
-  { key: 'visitStatus', label: 'Visit Status', dataType: 'checklist' },
-  // A DATE column, not a datetime — the API stores the day a technician moved the
-  // visit status and nothing finer, so a from/to pair of plain dates is the whole
-  // range anyone can ask for.
-  { key: 'visitStatusDate', label: 'Visit Status Date', dataType: 'date' },
+  { key: 'visitStatus', label: 'Onsite Status', dataType: 'checklist' },
   { key: 'routerModel', label: 'Router Model', dataType: 'checklist' },
   { key: 'dateInstalled', label: 'Date Installed', dataType: 'date' },
   { key: 'ipAddress', label: 'IP', dataType: 'varchar' },
@@ -84,6 +81,12 @@ export const allColumns: Column[] = [
   { key: 'duration', label: 'Duration', dataType: 'varchar' },
   { key: 'modifiedBy', label: 'Modified By', dataType: 'varchar' },
   { key: 'modifiedDate', label: 'Modified Date', dataType: 'datetime' },
+  // The remaining columns the Service Order table can show. ServiceOrder.tsx already resolves
+  // all three in getVal() — 'assignedEmail' and 'requestedBy' through the user directory, so a
+  // filter matches the NAME the cell displays rather than the raw email behind it.
+  { key: 'concernRemarks', label: 'Concern Remarks', dataType: 'varchar' },
+  { key: 'requestedBy', label: 'Requested By', dataType: 'varchar' },
+  { key: 'assignedEmail', label: 'Assigned Tech', dataType: 'varchar' },
 ];
 
 const ServiceOrderFunnelFilter: React.FC<ServiceOrderFunnelFilterProps> = ({
@@ -200,7 +203,9 @@ const ServiceOrderFunnelFilter: React.FC<ServiceOrderFunnelFilterProps> = ({
             setNewLcpnaps([...soRes.data.data.new_lcpnaps].sort((a, b) => String(a).localeCompare(String(b))));
             setRouterModels([...soRes.data.data.router_models].sort((a, b) => String(a).localeCompare(String(b))));
             setUsageTypes([...soRes.data.data.usage_types].sort((a, b) => String(a).localeCompare(String(b))));
-            setConcerns([...(soRes.data.data.concerns || [])].sort((a, b) => String(a).localeCompare(String(b))));
+            // Aliased concerns are folded together here, so the list offers one option
+            // per real concern rather than two that each return half the rows.
+            setConcerns(dedupeConcerns(soRes.data.data.concerns || []));
           }
         } catch (err) {
           console.error('Failed to fetch checklist data:', err);

@@ -6,6 +6,7 @@ use App\Models\AgentInvoice;
 use App\Models\User;
 use App\Services\AgentInvoicePdfService;
 use App\Services\AgentInvoiceService;
+use App\Support\AgentAccess;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -26,10 +27,14 @@ use Throwable;
  *
  * The scope is applied inside a single method used by every endpoint, so a new
  * endpoint cannot forget it.
+ *
+ * Authorisation is by permission key (App\Support\AgentAccess). Reading all
+ * invoices: AgentAccess::canReadAll(). Generating invoices needs
+ * agent-invoices.generate and changing a status agent-invoices.status (of the
+ * seeded roles, Administrator and SuperAdmin), 403 otherwise.
  */
 class AgentInvoiceController extends Controller
 {
-    private const ADMIN_ROLES = ['admin', 'administrator', 'billing', 'superadmin'];
 
     /** GET /api/agent-invoices */
     public function index(Request $request)
@@ -403,11 +408,8 @@ class AgentInvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            if (!$this->isAdminUser($user)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Only an administrator can generate agent invoices.',
-                ], 403);
+            if ($denied = AgentAccess::denyUnless($user, AgentAccess::KEY_GENERATE_INVOICES, 'generate agent invoices')) {
+                return $denied;
             }
 
             // Treated as the generation date: the seven days BEFORE it are
@@ -456,11 +458,8 @@ class AgentInvoiceController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            if (!$this->isAdminUser($user)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Only an administrator can change an invoice status.',
-                ], 403);
+            if ($denied = AgentAccess::denyUnless($user, AgentAccess::KEY_INVOICE_STATUS, 'change an invoice status')) {
+                return $denied;
             }
 
             // Built from the model's own list rather than spelled out again, so
@@ -515,7 +514,7 @@ class AgentInvoiceController extends Controller
     {
         $query = AgentInvoice::query();
 
-        if ($this->isAdminUser($user)) {
+        if (AgentAccess::canReadAll($user)) {
             // A superadmin sees everything; an organisation admin sees theirs.
             $roleId = $user->role_id ?? null;
             $orgId  = $user->organization_id ?? null;
@@ -537,15 +536,6 @@ class AgentInvoiceController extends Controller
         }
 
         return $query->where('owner_key', AgentInvoice::ownerKeyForAgent($user->id));
-    }
-
-    private function isAdminUser($user): bool
-    {
-        if (($user->role_id ?? null) == 7) {
-            return true;
-        }
-
-        return in_array(strtolower($user->role->role_name ?? ''), self::ADMIN_ROLES, true);
     }
 
     /** One invoice as the page renders it. */

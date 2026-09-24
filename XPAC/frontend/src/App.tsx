@@ -3,12 +3,12 @@ import './App.css';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import { UserData } from './types/api';
-import { initializeCsrf } from './config/api';
+import { initializeCsrf, revalidateSession } from './config/api';
+import apiClient from './config/api';
 import { userSettingsService } from './services/userSettingsService';
 import PaymentResultModal from './components/PaymentResultModal';
 import SplashScreen from './components/SplashScreen';
 import { resetAllStores } from './utils/resetAllStores';
-import { clearDashboardCache } from './utils/customerDashboardCache';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -54,8 +54,30 @@ function App() {
       if (authData) {
         try {
           const parsedUser = JSON.parse(authData);
+
+          // Restore optimistically from cache so a refresh does not flash the login screen,
+          // then confirm with the server below. Rendering first and verifying second is what
+          // keeps a valid session from ever being bounced to /login on reload.
           setUserData(parsedUser);
           setIsLoggedIn(true);
+
+          // Confirm the session is real. This also rebuilds a session that lapsed through
+          // inactivity, using the recaller cookie, so reopening the browser the next day
+          // signs the user straight back in instead of demanding credentials.
+          //
+          // Only an explicit "not authenticated" clears the session. An unreachable server
+          // leaves the cached login in place — being offline is not being logged out.
+          const sessionState = await revalidateSession();
+
+          if (sessionState === false) {
+            console.warn('[App] Stored session is no longer valid. Signing out.');
+            localStorage.removeItem('authData');
+            resetAllStores();
+            setUserData(null);
+            setIsLoggedIn(false);
+            setIsLoading(false);
+            return;
+          }
 
           // Load user's dark mode preference from database
           // User ID is at root level, not under user property
@@ -153,14 +175,17 @@ function App() {
     setIsLoggedIn(true);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Tell the server first. Clearing localStorage alone used to leave the session — and now
+    // the long-lived recaller cookie — alive, which would have meant "log out" did not log
+    // you out. Failure here must still clear the client, so the user is never stuck signed in.
+    try {
+      await apiClient.post('/logout');
+    } catch (error) {
+      console.error('[App] Server logout failed; clearing local session anyway:', error);
+    }
+
     resetAllStores();
-    // The dashboard keeps the last-known figures in storage so a returning customer is
-    // not left staring at a skeleton. Signing out is the point at which the device may
-    // change hands, so that snapshot should not outlive it. (Signing *in* deliberately
-    // leaves it: it is keyed by account, so a different customer cannot read it, and
-    // keeping it is what makes signing back in instant.)
-    clearDashboardCache();
     // Remove user data from localStorage
     localStorage.removeItem('authData');
     setUserData(null);

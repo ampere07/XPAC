@@ -6,7 +6,7 @@ echo "==================================="
 echo ""
 
 # Check if log file exists
-LOG_FILE="/home/atsscbms/web/backend.atssfiber.ph/public_html/storage/logs/paymentworker.log"
+LOG_FILE="/home/gowiser/web/backend.gowiser.ph/public_html/storage/logs/paymentworker.log"
 
 if [ -f "$LOG_FILE" ]; then
     echo "✓ Log file exists"

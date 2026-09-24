@@ -4,6 +4,7 @@ import LocationMap from './Map/LocationMap';
 import CameraFileInput from './Form/CameraFileInput';
 import TermsModal from './TermsModal';
 import SearchableSelect from './Form/SearchableSelect';
+import { trackPixelEvent } from '../utils/metaPixel';
 
 interface Region {
   id: number;
@@ -30,6 +31,8 @@ interface Plan {
   plan_name: string;
   description?: string;
   price: number;
+  /** Set per-plan in GOWISER. The API already filters on it; see the plan options below. */
+  show_in_application?: boolean;
 }
 
 interface Promo {
@@ -82,10 +85,10 @@ interface MultiStepFormProps {
 }
 
 const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEditButton = false, onLayoutChange, currentLayout = 'multistep', isEditMode: externalIsEditMode, onEditModeChange, requireFields = true }, ref) => {
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.atssfiber.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
-  const COVERAGE_CENTER = { lat: 14.6076, lng: 121.1521 }; // Norzagaray, Bulacan
-  const COVERAGE_RADIUS = 20000; // 25km in meters - covers Norzagaray area
+  const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
+  const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
 
   const [currentStep, setCurrentStep] = useState(1);
   const [showMapModal, setShowMapModal] = useState(false);
@@ -350,15 +353,10 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
       formData.append('contact_information', contactInformation);
       formData.append('submit_modal', submitModal);
 
-      // Saving the form's layout is an administrator action, and the endpoint
-      // now requires the token to prove it. Reading the settings stays public,
-      // because the form itself has to render for an applicant who is not
-      // signed in.
       const response = await fetch(`${apiBaseUrl}/api/form-ui/settings`, {
         method: 'POST',
         headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') ?? ''}`
+          'Accept': 'application/json'
         },
         body: formData
       });
@@ -703,14 +701,10 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
     try {
       setIsSubmitting(true);
 
-      // No `credentials: 'include'` on purpose. This endpoint is stateless —
-      // it reads no cookie and no session — so sending credentials achieved
-      // nothing except to promote the request to credentialed CORS, which is
-      // the stricter mode and the first thing an in-app browser (Messenger's
-      // above all) restricts. Plain CORS is what the request actually needs.
       const response = await fetch(`${apiBaseUrl}/api/application/store`, {
         method: 'POST',
         body: submissionData,
+        credentials: 'include',
         headers: {
           'Accept': 'application/json'
         }
@@ -723,6 +717,30 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
           throw new Error(errorMessages.join('\n'));
         }
         throw new Error(errorData.message || 'Failed to submit application');
+      }
+
+      /*
+       * Meta Pixel conversion — fired only once the application is actually in the
+       * database. ApplicationController::store returns 201 with the saved row (and
+       * its DB-assigned id) solely after $application->save() and DB::commit(); a
+       * 422 validation failure or a 500 rollback never carries an id. Requiring the
+       * id therefore means no event is reported for a submission that was not saved.
+       *
+       * Parsing is wrapped: a malformed body must not turn a submission the server
+       * did save into an error alert for the applicant.
+       */
+      let applicationId: number | undefined;
+      try {
+        const result = await response.json();
+        applicationId = result?.application?.id;
+      } catch (parseError) {
+        console.warn('Could not read saved application id from response:', parseError);
+      }
+
+      if (applicationId) {
+        trackPixelEvent('CompleteRegistration', {}, {
+          eventID: `application-${applicationId}`,
+        });
       }
 
       setShowSuccessModal(true);
@@ -1248,6 +1266,15 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
             placeholder="Select plan"
             options={plans
               .filter(plan => {
+                // Second line of defence: the API already excludes hidden plans, so this only
+                // matters if a stale response is in hand. Compared against false rather than
+                // truthiness, so a plan from an API that predates the column stays selectable
+                // instead of the list silently emptying.
+                if (plan.show_in_application === false) return false;
+
+                // Legacy name-based exclusion, kept until the internal plans have actually been
+                // unticked in GOWISER — dropping it now would surface every VIP/WFH plan, since
+                // show_in_application defaults to true for existing rows.
                 const planNameLower = plan.plan_name.toLowerCase();
                 return !planNameLower.includes('wfh') &&
                   !planNameLower.includes('vip') &&
@@ -2003,7 +2030,7 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
                 onClick={() => {
                   setShowSuccessModal(false);
                   handleReset();
-                  window.location.href = 'https://sync.atssfiber.ph';
+                  window.location.href = 'https://sync.gowiser.ph';
                 }}
                 className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >

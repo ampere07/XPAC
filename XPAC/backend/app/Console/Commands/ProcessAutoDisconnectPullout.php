@@ -69,6 +69,7 @@ class ProcessAutoDisconnectPullout extends Command
         try {
             $dcResult = null;
             $pulloutResult = null;
+            $prepaidPulloutResult = null;
 
             // Process Auto Disconnection
             if (!$pulloutOnly) {
@@ -98,9 +99,77 @@ class ProcessAutoDisconnectPullout extends Command
                         }
                     }
                 } else {
-                    // A DC failure (e.g. the worker lock is held/stale, or a config error)
-                    // must NOT prevent the pullout stage from running — log it and continue.
-                    $this->error("[FAILED] Auto Disconnection Failed: " . ($dcResult['error'] ?? 'Unknown error') . " — continuing to pullout stage");
+                    $this->error("[FAILED] Auto Disconnection Failed: " . ($dcResult['error'] ?? 'Unknown error'));
+                    return 1;
+                }
+
+                $this->newLine();
+
+                // Process Grace Period Charges (7-day delayed charging for DC'd accounts)
+                $this->info("─────────────────────────────────────────────────────────");
+                $this->info("[PROCESS] Processing Grace Period Charges...");
+                $this->info("─────────────────────────────────────────────────────────");
+
+                $graceResult = $this->autoDisconnectService->processGracePeriodCharge();
+
+                if ($graceResult['success']) {
+                    $this->newLine();
+                    $this->info("[SUCCESS] Grace Period Charging Complete:");
+                    $this->table(
+                        ['Metric', 'Count'],
+                        [
+                            ['Charged', $graceResult['charged']],
+                            ['Skipped', $graceResult['skipped']],
+                            ['Duration', $graceResult['duration'] . 's']
+                        ]
+                    );
+
+                    if (!empty($graceResult['errors'])) {
+                        $this->newLine();
+                        $this->warn("[WARNING] Errors encountered:");
+                        foreach ($graceResult['errors'] as $error) {
+                            $this->line("   - " . $error);
+                        }
+                    }
+                } else {
+                    $this->error("[FAILED] Grace Period Charging Failed: " . ($graceResult['error'] ?? 'Unknown error'));
+                    return 1;
+                }
+
+                $this->newLine();
+
+                // Process Prepaid Restrictions (prepaid customers are restricted once their
+                // rolling prepaid service period expires; they are never part of the
+                // overdue-based postpaid DC flow).
+                $this->info("─────────────────────────────────────────────────────────");
+                $this->info("[PROCESS] Processing Prepaid Period-Expiry Restrictions...");
+                $this->info("─────────────────────────────────────────────────────────");
+
+                $prepaidResult = $this->autoDisconnectService->processPrepaidRestrictions();
+
+                if ($prepaidResult['success']) {
+                    $this->newLine();
+                    $this->info("[SUCCESS] Prepaid Restriction Complete:");
+                    $this->table(
+                        ['Metric', 'Count'],
+                        [
+                            ['Restricted', $prepaidResult['restricted']],
+                            ['Queued', $prepaidResult['queued']],
+                            ['Skipped', $prepaidResult['skipped']],
+                            ['Duration', $prepaidResult['duration'] . 's']
+                        ]
+                    );
+
+                    if (!empty($prepaidResult['errors'])) {
+                        $this->newLine();
+                        $this->warn("[WARNING] Errors encountered:");
+                        foreach ($prepaidResult['errors'] as $error) {
+                            $this->line("   - " . $error);
+                        }
+                    }
+                } else {
+                    // Non-fatal: log and continue so the pullout step still runs.
+                    $this->warn("[WARNING] Prepaid Restriction reported a failure: " . ($prepaidResult['error'] ?? 'Unknown error'));
                 }
 
                 $this->newLine();
@@ -137,7 +206,41 @@ class ProcessAutoDisconnectPullout extends Command
                     $this->error("[FAILED] Auto Pullout Failed: " . ($pulloutResult['error'] ?? 'Unknown error'));
                     return 1;
                 }
-                
+
+                $this->newLine();
+
+                // Process Prepaid Auto Pullout (prepaid accounts left Inactive for pullout_day days
+                // past their expiry never renewed, so their equipment is scheduled for retrieval).
+                $this->info("─────────────────────────────────────────────────────────");
+                $this->info("[PROCESS] Processing Prepaid Auto Pullout...");
+                $this->info("─────────────────────────────────────────────────────────");
+
+                $prepaidPulloutResult = $this->autoDisconnectService->processPrepaidAutoPullout();
+
+                if ($prepaidPulloutResult['success']) {
+                    $this->newLine();
+                    $this->info("[SUCCESS] Prepaid Auto Pullout Complete:");
+                    $this->table(
+                        ['Metric', 'Count'],
+                        [
+                            ['Created', $prepaidPulloutResult['created']],
+                            ['Skipped', $prepaidPulloutResult['skipped']],
+                            ['Duration', $prepaidPulloutResult['duration'] . 's']
+                        ]
+                    );
+                } else {
+                    // Non-fatal: the postpaid pullout has already run, so report and carry on.
+                    $this->warn("[WARNING] Prepaid Auto Pullout reported a failure: " . ($prepaidPulloutResult['error'] ?? 'Unknown error'));
+                }
+
+                if (!empty($prepaidPulloutResult['errors'])) {
+                    $this->newLine();
+                    $this->warn("[WARNING] Errors encountered:");
+                    foreach ($prepaidPulloutResult['errors'] as $error) {
+                        $this->line("   - " . $error);
+                    }
+                }
+
                 $this->newLine();
             }
 
@@ -152,14 +255,20 @@ class ProcessAutoDisconnectPullout extends Command
             $this->info("Total Duration: {$totalDuration} seconds");
             
             if ($dcResult && $pulloutResult) {
+                $summaryRows = [
+                    ['Disconnections', $dcResult['processed'], $dcResult['skipped']],
+                    ['Pullout Requests', $pulloutResult['created'], $pulloutResult['skipped']]
+                ];
+
+                if ($prepaidPulloutResult) {
+                    $summaryRows[] = ['Prepaid Pullout Requests', $prepaidPulloutResult['created'], $prepaidPulloutResult['skipped']];
+                }
+
                 $this->newLine();
                 $this->info("[SUMMARY] Overall Results:");
                 $this->table(
                     ['Process', 'Success', 'Failed/Skipped'],
-                    [
-                        ['Disconnections', $dcResult['processed'], $dcResult['skipped']],
-                        ['Pullout Requests', $pulloutResult['created'], $pulloutResult['skipped']]
-                    ]
+                    $summaryRows
                 );
             }
             

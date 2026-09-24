@@ -32,6 +32,17 @@ class ResendEmailService
 
     public function send(array $data): array
     {
+        // Fail fast and legibly on a missing key. Without this the request still
+        // goes out with an empty bearer token, burns all three retries against a
+        // 401, and surfaces as an opaque API error on the queued email rather
+        // than as the configuration problem it actually is.
+        if (trim($this->apiKey) === '') {
+            $error = 'RESEND_API_KEY is not configured; cannot send email.';
+            Log::error($error, ['to' => $data['to'] ?? null]);
+
+            return ['success' => false, 'error' => $error];
+        }
+
         $fromEmail = $data['email_sender'] ?? $this->fromEmail;
         $fromName  = $data['sender_name']  ?? $this->fromName;
 
@@ -54,8 +65,28 @@ class ResendEmailService
             $payload['bcc'] = $this->parseEmails($data['bcc']);
         }
 
-        if (!empty($data['attachment_path']) && file_exists($data['attachment_path'])) {
-            $payload['attachments'] = [$this->prepareAttachment($data['attachment_path'])];
+        if (!empty($data['attachment_path'])) {
+            if (file_exists($data['attachment_path'])) {
+                $payload['attachments'] = [$this->prepareAttachment($data['attachment_path'])];
+            } else {
+                // The email is still worth sending, but this must not be silent:
+                // an attachment path that the sending host cannot see produces a
+                // perfectly "successful" send with the document missing. That
+                // happens whenever the process that generated the file and the
+                // process draining the queue are on different filesystems.
+                // Dedicated channel: the global LOG_LEVEL is `error` here, so a
+                // warning on the default stack would be dropped and this would
+                // stay invisible.
+                \App\Support\ChannelLogger::for('emailqueue')->warning(
+                    'Email attachment missing at send time — sending without it',
+                    [
+                        'to'              => $data['to'] ?? null,
+                        'subject'         => $data['subject'] ?? null,
+                        'attachment_path' => $data['attachment_path'],
+                        'host'            => gethostname(),
+                    ]
+                );
+            }
         }
 
         $jsonPayload = json_encode($payload);

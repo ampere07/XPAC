@@ -6,7 +6,6 @@ import { userService } from '../services/userService';
 import { API_BASE_URL } from '../config/api';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
 import ModalUITemplate from './ui-modal/ModalUITemplate';
-import { authFetch } from '../config/api';
 
 interface AssignWorkOrderModalProps {
   isOpen: boolean;
@@ -152,7 +151,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
     const fetchCategories = async () => {
       if (!isOpen) return;
       try {
-        const response = await authFetch(`${API_BASE_URL}/work-categories`);
+        const response = await fetch(`${API_BASE_URL}/work-categories`);
         const result = await response.json();
         if (result.success && result.data) {
           setCategories(result.data);
@@ -293,7 +292,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
         ? `${API_BASE_URL}/work-orders/${workOrder.id}`
         : `${API_BASE_URL}/work-orders`;
 
-      const response = await authFetch(url, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Accept': 'application/json' },
         body: submitData

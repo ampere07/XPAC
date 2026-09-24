@@ -707,7 +707,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
         }`}>
         {label}{required && <span className="text-red-500">*</span>}
       </label>
-      <div className={`relative w-full h-40 sm:h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode
+      <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode
         ? 'bg-gray-800 border-gray-700 hover:bg-gray-750'
         : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
         }`}>
@@ -749,17 +749,17 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
   return (
     <>
       {showLoadingModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center px-4">
-          <div className={`rounded-lg p-6 sm:p-8 flex flex-col items-center space-y-4 sm:space-y-6 w-full max-w-xs sm:max-w-sm ${isDarkMode ? 'bg-gray-800' : 'bg-white'
+        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center">
+          <div className={`rounded-lg p-8 flex flex-col items-center space-y-6 min-w-[320px] ${isDarkMode ? 'bg-gray-800' : 'bg-white'
             }`}>
             <Loader2
-              className="w-16 h-16 sm:w-20 sm:h-20 animate-spin"
+              className="w-20 h-20 animate-spin"
               style={{
                 color: colorPalette?.primary || '#7c3aed'
               }}
             />
             <div className="text-center">
-              <p className={`text-3xl sm:text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'
+              <p className={`text-4xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>{loadingPercentage}%</p>
             </div>
           </div>
@@ -767,8 +767,8 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
       )}
 
       {showResultModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center px-4">
-          <div className={`rounded-lg p-6 sm:p-8 flex flex-col items-center space-y-4 w-full max-w-md max-h-[85dvh] overflow-y-auto ${isDarkMode ? 'bg-gray-800' : 'bg-white'
+        <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center">
+          <div className={`rounded-lg p-8 flex flex-col items-center space-y-4 max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'
             }`}>
             {resultType === 'success' ? (
               <>
@@ -802,28 +802,20 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
         onClick={handleClose}
       />
 
-      {/* A full-screen sheet on a phone, the 600px drawer from the tablet
-          breakpoint up. 100dvh rather than 100vh so mobile browser chrome
-          cannot push the footer below the fold. */}
-      <div className={`fixed right-0 top-0 h-[100dvh] w-full sm:w-[600px] max-w-full shadow-2xl z-[9999] flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
+      <div className={`fixed right-0 top-0 h-full w-[600px] shadow-2xl z-[9999] flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
         }`}>
-        <div className={`flex items-center justify-between gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b flex-shrink-0 ${isDarkMode
+        <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode
           ? 'border-gray-800 bg-gray-800'
           : 'border-gray-300 bg-gray-100'
           }`}>
-          <h2 className={`text-base sm:text-xl font-semibold truncate ${isDarkMode ? 'text-white' : 'text-gray-900'
+          <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
             }`}>{editData ? 'Edit LCP NAP Location' : 'LCP NAP Location Form'}</h2>
-          {/* Padded out to a 44px touch target rather than the bare icon. */}
-          <button
-            onClick={handleClose}
-            aria-label="Close"
-            className={`-mr-2 p-2 rounded flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
-          >
+          <button onClick={handleClose} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}>
             <X size={24} />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain px-4 sm:px-6 py-5 sm:py-6">
+        <div className="flex-1 overflow-y-auto px-6 py-6">
           <div className="space-y-4">
             <ImageUploadField label="Reading Image" field="reading_image" />
 
@@ -1070,11 +1062,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
                 <button
                   type="button"
                   onClick={handleToggleMap}
-                  aria-label="Pick the location on a map"
-                  // p-2 around the icon gives a ~36px touch target instead of
-                  // the bare 20px glyph; centring on the input's midline keeps
-                  // it where it already appeared.
-                  className={`absolute right-1 top-1/2 -translate-y-1/2 p-2 rounded transition-colors ${isDarkMode
+                  className={`absolute right-3 top-2.5 transition-colors ${isDarkMode
                     ? 'text-gray-400 hover:text-white'
                     : 'text-gray-600 hover:text-gray-900'
                     }`}
@@ -1092,7 +1080,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
                   }`}>
                   <div
                     ref={mapRef}
-                    className={isDarkMode ? 'w-full h-[260px] sm:h-[400px] bg-gray-800' : 'w-full h-[260px] sm:h-[400px] bg-gray-100'}
+                    className={isDarkMode ? 'w-full h-[400px] bg-gray-800' : 'w-full h-[400px] bg-gray-100'}
                   />
                   <div className={`px-3 py-2 text-xs border-t ${isDarkMode
                     ? 'bg-gray-800 text-gray-400 border-gray-700'
@@ -1126,16 +1114,13 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
           </div>
         </div>
 
-        {/* Stacked and full-width on a phone, with the primary action on top
-            so it sits under the thumb; side by side and right-aligned from the
-            tablet breakpoint up. pb-safe keeps it clear of the iOS home bar. */}
-        <div className={`flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3 px-4 sm:px-6 py-3 sm:py-4 border-t flex-shrink-0 [padding-bottom:calc(0.75rem+env(safe-area-inset-bottom))] sm:[padding-bottom:1rem] ${isDarkMode
+        <div className={`flex items-center justify-end gap-3 px-6 py-4 border-t ${isDarkMode
           ? 'border-gray-800 bg-gray-800'
           : 'border-gray-300 bg-gray-100'
           }`}>
           <button
             onClick={handleClose}
-            className={`w-full sm:w-auto px-4 py-2.5 sm:py-2 border rounded ${isDarkMode
+            className={`px-4 py-2 border rounded ${isDarkMode
               ? 'text-orange-400 hover:text-orange-300 border-orange-600 hover:border-orange-500 bg-transparent'
               : 'text-orange-600 hover:text-orange-700 border-orange-600 hover:border-orange-700 bg-transparent'
               }`}
@@ -1145,7 +1130,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
           <button
             onClick={handleSubmit}
             disabled={loading}
-            className="w-full sm:w-auto px-4 py-2.5 sm:py-2 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               backgroundColor: colorPalette?.primary || '#7c3aed'
             }}

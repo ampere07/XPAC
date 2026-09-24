@@ -22,11 +22,10 @@ import {
   ChevronRight,
   Download,
   Filter,
-  SlidersHorizontal,
   RefreshCw,
   X,
 } from 'lucide-react-native';
-import { StandardPage } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import SOADetails from '../components/SOADetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { paymentService, PendingPayment } from '../services/paymentService';
@@ -35,8 +34,7 @@ import BillingDetails from '../components/CustomerDetails';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
 import { exportToCSV } from '../utils/exportUtils';
-import SOAFunnelFilter, { FilterValues, allColumns as filterColumns } from '../filter/SOAFunnelFilter';
-import { matchesFunnelFilters, activeFunnelKeys } from '../utils/funnelFilter';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 const isDarkMode = false;
@@ -45,7 +43,7 @@ const CARD = '#ffffff';
 const TEXT = '#111827';
 const MUTED = '#6b7280';
 const BORDER = '#e5e7eb';
-const DEFAULT_ITEMS_PER_PAGE = 25;
+const ITEMS_PER_PAGE = 25;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): BillingDetailRecord => ({
@@ -53,9 +51,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
   applicationId: customerData.billingAccount?.accountNo || '',
   customerName: customerData.fullName,
   address: customerData.address,
-  status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+  status: accountStatusFrom(customerData),
   balance: customerData.billingAccount?.accountBalance || 0,
-  onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+  onlineStatus: sessionStatusFrom(customerData),
   cityId: null,
   regionId: null,
   timestamp: customerData.updatedAt || '',
@@ -86,7 +84,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
   region: customerData.region || '',
   usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
   referredBy: customerData.referredBy || '',
-  referredByAgentId: customerData.referredByAgentId ?? null,
   referralContactNo: '',
   groupName: customerData.groupName || '',
   mikrotikId: '',
@@ -136,15 +133,12 @@ const SOA: React.FC = () => {
   const [statementDateTo, setStatementDateTo] = useState<string>('');
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState<boolean>(false);
   const [isSidebarVisible, setIsSidebarVisible] = useState<boolean>(false);
-  const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState<boolean>(false);
-  const [funnelFilters, setFunnelFilters] = useState<FilterValues>({});
 
   const [currentPage, setCurrentPage] = useState(1);
   const [sortColumn, setSortColumn] = useState<string | null>('id');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
-  const [itemsPerPage, setItemsPerPage] = useState(DEFAULT_ITEMS_PER_PAGE);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetailData | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState<boolean>(false);
 
@@ -253,56 +247,10 @@ const SOA: React.FC = () => {
     return { all: globalFilteredRecords.length, dates: sortedDates };
   }, [globalFilteredRecords]);
 
-  // SOAFunnelFilter names its columns exactly as SOARecordUI spells its fields,
-  // so a plain lookup covers almost everything. Statement date is the exception:
-  // the display value is already localised, and Date() cannot be trusted to parse
-  // that back, so the raw column is preferred when the store kept it.
-  const readFunnelValue = useCallback((record: any, key: string) => {
-    if (key === 'statementDate') return record.statementDateRaw ?? record.statementDate;
-    return record[key];
-  }, []);
-
-  const activeFilterKeys = useMemo(() => activeFunnelKeys(funnelFilters as any), [funnelFilters]);
-
-  // Same storage key as the web build's localStorage entry, so a filter set stays
-  // recognisable across the two clients.
-  useEffect(() => {
-    AsyncStorage.getItem('soaFunnelFilters')
-      .then(saved => { if (saved) setFunnelFilters(JSON.parse(saved)); })
-      .catch(() => { });
-  }, []);
-
-  const persistFunnelFilters = useCallback(async (next: FilterValues) => {
-    setFunnelFilters(next);
-    try { await AsyncStorage.setItem('soaFunnelFilters', JSON.stringify(next)); } catch { /* ignore */ }
-  }, []);
-
-  const removeFunnelFilter = useCallback((key: string) => {
-    const next = { ...funnelFilters };
-    delete next[key];
-    persistFunnelFilters(next);
-  }, [funnelFilters, persistFunnelFilters]);
-
-  const describeFilter = (filter: any): string => {
-    if (!filter) return '';
-    if (filter.type === 'checklist') return `${(filter.value || []).length} selected`;
-    if (filter.type === 'text') return String(filter.value ?? '');
-    const from = filter.from ?? '';
-    const to = filter.to ?? '';
-    if (from && to) return `${from} - ${to}`;
-    return String(from || to || '');
-  };
-
   const filteredRecords = useMemo(() => {
     let filtered = globalFilteredRecords.filter((r: SOARecordUI) =>
       selectedDate === 'All' || r.statementDate === selectedDate
     );
-
-    if (activeFilterKeys.length > 0) {
-      filtered = filtered.filter((r: SOARecordUI) =>
-        matchesFunnelFilters(r, funnelFilters as any, readFunnelValue)
-      );
-    }
     if (sortColumn) {
       filtered = [...filtered].sort((a, b) => {
         const numericCols = ['balanceFromPreviousBill','paymentReceivedPrevious','remainingBalancePrevious','monthlyServiceFee','serviceCharge','rebate','discounts','staggered','vat','amountDue','totalAmountDue'];
@@ -326,7 +274,14 @@ const SOA: React.FC = () => {
       });
     }
     return filtered;
-  }, [globalFilteredRecords, selectedDate, sortColumn, sortDirection, funnelFilters, activeFilterKeys, readFunnelValue]);
+  }, [globalFilteredRecords, selectedDate, sortColumn, sortDirection]);
+
+  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
+
+  const paginatedRecords = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredRecords.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredRecords, currentPage]);
 
   const currentSOAIndex = useMemo(() => {
     if (!selectedRecordId) return -1;
@@ -623,64 +578,144 @@ const SOA: React.FC = () => {
 
   // ── Main render ──
   return (
-    <StandardPage<SOARecordUI>
-      data={filteredRecords}
-      keyExtractor={(item) => item.id}
-      renderItem={(item) => renderSOACard({ item })}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search SOA records..."
-      // Two filters, the same split the web toolbar has: the drawer narrows by
-      // place, the funnel narrows by any column.
-      drawerContent={
-        userRole !== 'customer' ? (
-          <View style={{ flex: 1 }}>
-            <View style={[styles.sidebarDrawerHeader, { paddingTop: 60 }]}>
-              <Text style={styles.sidebarDrawerTitle}>Statements</Text>
-            </View>
-            <SidebarContent />
-          </View>
-        ) : undefined
-      }
-      onOpenFunnel={userRole !== 'customer' ? () => setIsFunnelFilterOpen(true) : undefined}
-      activeFilterCount={activeFilterKeys.length}
-      chips={activeFilterKeys.map((filterKey) => ({
-        key: filterKey,
-        label: (filterColumns.find((c: any) => c.key === filterKey) as any)?.label || filterKey,
-        value: describeFilter((funnelFilters as any)[filterKey]),
-      }))}
-      onRemoveChip={removeFunnelFilter}
-      onClearChips={() => persistFunnelFilters({})}
-      onExport={handleExport}
-      exportDisabled={isLoading || filteredRecords.length === 0}
-      onRefresh={handleRefresh}
-      refreshDisabled={isLoading || isRefreshingManual}
-      isRefreshing={isLoading || isRefreshingManual}
-      onPullRefresh={onRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading && soaRecords.length === 0}
-      loadingText="Loading SOA records..."
-      error={error}
-      onRetry={() => fetchSOARecords(true)}
-      emptyText="No SOA records found"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      toolbarActions={
-        userRole === 'customer' ? (
+    <View style={{ flex: 1, backgroundColor: BG, paddingTop: isTablet ? 16 : 60 }}>
+      {/* Header toolbar */}
+      <View style={styles.toolbar}>
+        <View style={{ flex: 1 }}>
+          <GlobalSearch
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            isDarkMode={isDarkMode}
+            colorPalette={colorPalette}
+            placeholder="Search SOA records..."
+          />
+        </View>
+
+        {/* Filter (sidebar) toggle */}
+        {userRole !== 'customer' && (
           <TouchableOpacity
-            style={[styles.payBtn, { height: 38, backgroundColor: isPaymentProcessing ? '#6b7280' : primary }]}
+            style={styles.toolBtn}
+            onPress={() => setIsSidebarVisible(true)}
+          >
+            <Filter size={18} color={TEXT} />
+          </TouchableOpacity>
+        )}
+
+        {/* Pay Now for customers */}
+        {userRole === 'customer' && (
+          <TouchableOpacity
+            style={[styles.payBtn, { backgroundColor: isPaymentProcessing ? '#6b7280' : primary }]}
             onPress={handlePayNow}
             disabled={isPaymentProcessing}
           >
             <Text style={styles.payBtnText}>{isPaymentProcessing ? 'Processing...' : 'Pay Now'}</Text>
           </TouchableOpacity>
-        ) : null
-      }
-    >
+        )}
+
+        {/* Export */}
+        <TouchableOpacity
+          style={[styles.toolBtn, { borderColor: primary }]}
+          onPress={handleExport}
+          disabled={isLoading || filteredRecords.length === 0}
+        >
+          <Download size={18} color={primary} />
+        </TouchableOpacity>
+
+        {/* Refresh */}
+        <TouchableOpacity
+          style={[styles.toolBtn, { borderColor: primary }]}
+          onPress={handleRefresh}
+          disabled={isLoading || isRefreshingManual}
+        >
+          {(isLoading || isRefreshingManual) ? (
+            <ActivityIndicator size="small" color={primary} />
+          ) : (
+            <RefreshCw size={18} color={primary} />
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Pagination info */}
+      {filteredRecords.length > 0 && (
+        <View style={styles.paginationBar}>
+          <Text style={styles.paginationText}>
+            Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1}–{Math.min(currentPage * ITEMS_PER_PAGE, filteredRecords.length)} of {filteredRecords.length}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={[styles.pageBtn, currentPage === 1 && { opacity: 0.4 }]}
+            >
+              <ChevronLeft size={16} color={TEXT} />
+            </TouchableOpacity>
+            <Text style={styles.paginationText}>
+              {currentPage}/{totalPages || 1}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              style={[styles.pageBtn, currentPage >= totalPages && { opacity: 0.4 }]}
+            >
+              <ChevronRight size={16} color={TEXT} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* List */}
+      {isLoading && soaRecords.length === 0 ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={primary} />
+          <Text style={styles.centerText}>Loading SOA records...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.center}>
+          <Text style={{ color: '#ef4444', marginBottom: 12 }}>{error}</Text>
+          <TouchableOpacity style={[styles.retryBtn, { backgroundColor: primary }]} onPress={() => fetchSOARecords(true)}>
+            <Text style={{ color: '#fff' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={paginatedRecords}
+          keyExtractor={item => item.id}
+          renderItem={renderSOACard}
+          contentContainerStyle={{ padding: 12, paddingBottom: 32 }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={primary} />
+          }
+          ListEmptyComponent={
+            <View style={styles.center}>
+              <Text style={styles.centerText}>No SOA records found</Text>
+            </View>
+          }
+        />
+      )}
+
+      {/* Sidebar modal (filter) */}
+      <Modal
+        visible={isSidebarVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsSidebarVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.sidebarOverlay}
+          activeOpacity={1}
+          onPress={() => setIsSidebarVisible(false)}
+        />
+        <View style={styles.sidebarDrawer}>
+          <View style={styles.sidebarDrawerHeader}>
+            <Text style={styles.sidebarDrawerTitle}>Statements</Text>
+            <TouchableOpacity onPress={() => setIsSidebarVisible(false)}>
+              <X size={20} color={MUTED} />
+            </TouchableOpacity>
+          </View>
+          <SidebarContent />
+        </View>
+      </Modal>
+
       {/* SOA Detail modal */}
       {selectedRecord && userRole !== 'customer' && (
         <SOADetails
@@ -822,18 +857,7 @@ const SOA: React.FC = () => {
           </View>
         </View>
       </Modal>
-      <SOAFunnelFilter
-        isOpen={isFunnelFilterOpen}
-        onClose={() => setIsFunnelFilterOpen(false)}
-        onApplyFilters={(next) => {
-          persistFunnelFilters(next);
-          setIsFunnelFilterOpen(false);
-          setCurrentPage(1);
-        }}
-        currentFilters={funnelFilters}
-        records={globalFilteredRecords}
-      />
-    </StandardPage>
+    </View>
   );
 };
 

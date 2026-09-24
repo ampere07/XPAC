@@ -13,18 +13,9 @@ import {
   Info,
   CheckCircle,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  XCircle,
-  RotateCcw,
-  Edit3,
-  Trash2,
 } from 'lucide-react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { transactionService } from '../services/transactionService';
-import TransactionFormModal from '../modals/TransactionFormModal';
-import TransactionRevertModal from '../modals/TransactionRevertModal';
-import { usePermissions } from '../hooks/usePermissions';
 import { relatedDataService } from '../services/relatedDataService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from './common/LoadingModalGlobal';
@@ -62,8 +53,6 @@ interface Transaction {
   };
   payment_method_info?: { payment_method: string };
   processor?: { email_address?: string };
-  /** Set once a revert request exists for this transaction; blocks filing a second. */
-  revert_request?: unknown;
 }
 
 interface TransactionListDetailsProps {
@@ -91,8 +80,6 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
-  const [showRevertRequestModal, setShowRevertRequestModal] = useState(false);
-  const { can } = usePermissions();
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [expandedInvoices, setExpandedInvoices] = useState(false);
   const [relatedInvoices, setRelatedInvoices] = useState<any[]>([]);
@@ -154,21 +141,6 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     return pm ? pm.payment_method : String(transaction.payment_method);
   };
 
-  /** The email the API records against approve/revert, same lookup as the web build. */
-  const getCurrentUserEmail = async (): Promise<string> => {
-    try {
-      const authData = await AsyncStorage.getItem('authData');
-      if (!authData) return '';
-      const parsed = JSON.parse(authData);
-      return parsed.email_address || parsed.email || parsed.user?.email_address || parsed.user?.email || '';
-    } catch (err) {
-      console.error('Error getting current user email:', err);
-      return '';
-    }
-  };
-
-  const [showEditModal, setShowEditModal] = useState(false);
-
   const handleApprove = () => {
     Alert.alert(
       'Confirm Approval',
@@ -181,7 +153,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             try {
               setLoading(true);
               setLoadingPercentage(30);
-              const result = await transactionService.approveTransaction(transaction.id, await getCurrentUserEmail());
+              const result = await transactionService.approveTransaction(transaction.id);
               setLoadingPercentage(80);
               if (result.success) {
                 setLoadingPercentage(100);
@@ -197,84 +169,6 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             } catch (err: any) {
               setLoading(false);
               Alert.alert('Error', `Failed to approve: ${err.message}`);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleMarkAsFailed = () => {
-    Alert.alert(
-      'Mark as Failed',
-      'Are you sure you want to mark this transaction as failed? This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Mark as Failed',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              setLoadingPercentage(40);
-              const result = await transactionService.updateStatus(transaction.id, 'Failed');
-              setLoadingPercentage(100);
-              setLoading(false);
-              if (result.success !== false) {
-                Alert.alert('Success', 'Transaction marked as failed');
-                onApprovalSuccess?.();
-              } else {
-                Alert.alert('Error', result.message || 'Failed to update transaction status');
-              }
-            } catch (err: any) {
-              setLoading(false);
-              Alert.alert('Error', `Failed to update status: ${err.message || err}`);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  /**
-   * Opens the revert request form.
-   *
-   * This used to call transactionService.revertTransaction() straight away, which
-   * reversed the payment on the spot and skipped the approval workflow the Revert
-   * Requests screen exists to serve. The web build routes the same button through
-   * this form — it files a request at status 'pending' for someone else to approve
-   * — and its direct-revert path is dead code, so the two now behave the same way.
-   */
-  const handleRevertRequest = () => {
-    setShowRevertRequestModal(true);
-  };
-
-  const handleDelete = () => {
-    Alert.alert(
-      'Delete Transaction',
-      'Are you sure you want to delete this transaction? This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              setLoadingPercentage(40);
-              const result = await transactionService.deleteTransaction(transaction.id);
-              setLoadingPercentage(100);
-              setLoading(false);
-              if ((result as any)?.success !== false) {
-                Alert.alert('Success', 'Transaction deleted successfully');
-                onApprovalSuccess?.();
-                onClose();
-              } else {
-                Alert.alert('Error', (result as any)?.message || 'Failed to delete transaction');
-              }
-            } catch (err: any) {
-              setLoading(false);
-              Alert.alert('Error', `Failed to delete: ${err.message || err}`);
             }
           },
         },
@@ -311,109 +205,64 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
     </View>
   );
 
-  // Header icons live here instead, as circle-and-label actions like ApplicationDetails.
-  // Availability mirrors the web screen: approve/fail only while pending, revert once done.
-  const quickActions: {
-    key: string;
-    label: string;
-    Icon: any;
-    onPress: () => void;
-    tone?: 'danger';
-  }[] = [
-    ...(onPrevious ? [{ key: 'prev', label: 'Previous', Icon: ChevronLeft, onPress: onPrevious }] : []),
-    ...(onNext ? [{ key: 'next', label: 'Next', Icon: ChevronRight, onPress: onNext }] : []),
-    ...(statusLower === 'pending'
-      ? [
-          { key: 'approve', label: 'Approve', Icon: CheckCircle, onPress: handleApprove },
-          { key: 'failed', label: 'Mark Failed', Icon: XCircle, onPress: handleMarkAsFailed, tone: 'danger' as const },
-        ]
-      : []),
-    // Same three conditions as the web: the permission key, a completed
-    // transaction, and no request already filed against it.
-    ...((statusLower === 'done' || statusLower === 'completed')
-      && can('transaction-list.revert-request')
-      && !transaction.revert_request
-      ? [{ key: 'revert', label: 'Revert Request', Icon: RotateCcw, onPress: handleRevertRequest, tone: 'danger' as const }]
-      : []),
-    { key: 'edit', label: 'Edit', Icon: Edit3, onPress: () => setShowEditModal(true) },
-    { key: 'delete', label: 'Delete', Icon: Trash2, onPress: handleDelete, tone: 'danger' as const },
-  ];
-
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
-        {/* Header — back arrow, centred name, same shape as ApplicationDetails */}
+        {/* Header */}
         <View
           style={{
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: 12,
+            paddingHorizontal: 16,
             paddingTop: 60,
+            paddingBottom: 12,
             backgroundColor: '#ffffff',
             borderBottomWidth: 1,
             borderBottomColor: '#e5e7eb',
+            gap: 8,
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, position: 'relative' }}>
-            <TouchableOpacity onPress={onClose} style={{ position: 'absolute', left: 0, zIndex: 10 }}>
-              <ChevronLeft size={28} color="#4b5563" />
+          <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
+            <X size={20} color="#374151" />
+          </TouchableOpacity>
+          {onPrevious && (
+            <TouchableOpacity
+              onPress={onPrevious}
+              style={{ padding: 4, marginLeft: 4 }}
+            >
+              <ChevronRight size={18} color="#374151" style={{ transform: [{ rotate: '180deg' }] }} />
             </TouchableOpacity>
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36 }}>
-              <Text
-                style={{ fontSize: 20, fontWeight: '500', color: '#111827', textAlign: 'center' }}
-                numberOfLines={1}
-              >
-                {transaction.account?.customer?.full_name || accountNo || '-'}
-              </Text>
-            </View>
-          </View>
-          {loading && <ActivityIndicator size="small" color={primary} />}
-        </View>
-
-        {/* Quick actions */}
-        {quickActions.length > 0 && (
-          <View
-            style={{
-              paddingVertical: 12,
-              backgroundColor: '#f3f4f6',
-              borderBottomWidth: 1,
-              borderBottomColor: '#e5e7eb',
-            }}
+          )}
+          {onNext && (
+            <TouchableOpacity onPress={onNext} style={{ padding: 4 }}>
+              <ChevronRight size={18} color="#374151" />
+            </TouchableOpacity>
+          )}
+          <Text
+            style={{ flex: 1, fontSize: 15, fontWeight: '600', color: '#111827' }}
+            numberOfLines={1}
           >
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{
+            {accountNo} | {transaction.account?.customer?.full_name || '-'}
+          </Text>
+          {statusLower === 'pending' && (
+            <TouchableOpacity
+              onPress={handleApprove}
+              disabled={loading}
+              style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                justifyContent: 'center',
-                paddingHorizontal: 8,
-                flexGrow: 1,
+                backgroundColor: primary,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 6,
+                gap: 4,
               }}
             >
-              {quickActions.map(({ key, label, Icon, onPress, tone }) => (
-                <TouchableOpacity
-                  key={key}
-                  style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6, minWidth: 76 }}
-                  onPress={onPress}
-                  disabled={loading}
-                >
-                  <View
-                    style={{
-                      padding: 8,
-                      borderRadius: 9999,
-                      backgroundColor: loading ? '#9ca3af' : tone === 'danger' ? '#dc2626' : primary,
-                    }}
-                  >
-                    <Icon size={18} color="#ffffff" />
-                  </View>
-                  <Text style={{ fontSize: 12, marginTop: 4, color: '#374151' }}>{label}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
+              <CheckCircle size={14} color="#ffffff" />
+              <Text style={{ color: '#ffffff', fontSize: 13 }}>Approve</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         <ScrollView
           style={{ flex: 1 }}
@@ -562,37 +411,6 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           loadingPercentage={loadingPercentage}
           isDarkMode={false}
           colorPalette={colorPalette}
-        />
-
-        {/* Edit — same record shape the web passes */}
-        {showEditModal && (
-          <TransactionFormModal
-            isOpen={showEditModal}
-            onClose={() => setShowEditModal(false)}
-            onSave={() => {
-              setShowEditModal(false);
-              onApprovalSuccess?.();
-            }}
-            billingRecord={{
-              applicationId: transaction.account?.account_no || transaction.account_no,
-              customerName: transaction.account?.customer?.full_name || '-',
-              contactNumber: transaction.account?.customer?.contact_number_primary || '-',
-              plan: transaction.account?.customer?.desired_plan || '-',
-              address: transaction.account?.customer?.address || '',
-              accountBalance: transaction.account?.account_balance || 0,
-            }}
-            initialTransactionData={transaction}
-          />
-        )}
-
-        <TransactionRevertModal
-          isOpen={showRevertRequestModal}
-          onClose={() => setShowRevertRequestModal(false)}
-          transactionId={transaction.id}
-          onSuccess={() => {
-            setShowRevertRequestModal(false);
-            onApprovalSuccess?.();
-          }}
         />
       </View>
     </Modal>

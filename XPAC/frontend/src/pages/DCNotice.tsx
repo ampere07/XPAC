@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight ,X, Menu, Globe, Calendar, ChevronDown, RefreshCw, ArrowUp, ArrowDown, Columns3, Download } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight ,X, Menu, Globe, Calendar, ChevronDown, RefreshCw, ArrowUp, ArrowDown, Columns3, Download, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useDCNoticeContext } from '../contexts/DCNoticeContext';
 import pusher from '../services/pusherService';
 import { DCNotice } from '../services/dcNoticeService';
 import { exportToCSV } from '../utils/exportUtils';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -22,6 +24,24 @@ const allColumns = [
   { key: 'contact_number', label: 'Contact', width: 'min-w-36' },
   { key: 'email_address', label: 'Email', width: 'min-w-48' },
   { key: 'address', label: 'Address', width: 'min-w-64' },
+];
+
+/**
+ * One filter entry per table column above, so every column the table can show is filterable.
+ * Keys match allColumns exactly — the table renders each cell from record[key] and the filter
+ * reads the same key, so the two cannot disagree. 'plan' offers the values present in the loaded
+ * records rather than requiring a lookup endpoint.
+ */
+const funnelColumns: FunnelColumn[] = [
+  { key: 'id', label: 'ID', dataType: 'varchar' },
+  { key: 'account_no', label: 'Account No', dataType: 'varchar' },
+  { key: 'full_name', label: 'Customer Name', dataType: 'varchar' },
+  { key: 'dc_notice_date', label: 'DC Notice Date', dataType: 'date' },
+  { key: 'invoice_id', label: 'Invoice ID', dataType: 'varchar' },
+  { key: 'plan', label: 'Plan', dataType: 'checklist' },
+  { key: 'contact_number', label: 'Contact', dataType: 'varchar' },
+  { key: 'email_address', label: 'Email', dataType: 'varchar' },
+  { key: 'address', label: 'Address', dataType: 'text' },
 ];
 
 const DCNoticePage: React.FC = () => {
@@ -185,12 +205,21 @@ const DCNoticePage: React.FC = () => {
     return filtered;
   }, [dcNoticeRecords, searchQuery, dcNoticeDateFrom, dcNoticeDateTo]);
 
+  // Applied here, on the search-narrowed set, so the sidebar counts, the tab counts and the
+  // table all describe the same rows. Customer.tsx applies its funnel at the same point; a
+  // filter applied further down would leave the counts describing the unfiltered set.
+  const funnel = useFunnelFilter({
+    storageKey: 'dcNoticeFunnelFilters',
+    columns: funnelColumns,
+    rows: globalFilteredRecords,
+  });
+
   // Derive date items from context data instead of fetching separately or static
   const dateItems = React.useMemo(() => {
     const dateCounts: Record<string, number> = {};
     const dates = new Map<string, string>(); // Formatted -> Raw
 
-    globalFilteredRecords.forEach(record => {
+    funnel.filteredRows.forEach(record => {
       if (record.dc_notice_date) {
         const date = new Date(record.dc_notice_date);
         const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -214,10 +243,10 @@ const DCNoticePage: React.FC = () => {
       }));
 
     return {
-      all: globalFilteredRecords.length,
+      all: funnel.filteredRows.length,
       dates: sortedDates
     };
-  }, [globalFilteredRecords]);
+  }, [funnel.filteredRows]);
 
   useEffect(() => {
     const checkDarkMode = () => {
@@ -534,8 +563,9 @@ const DCNoticePage: React.FC = () => {
     }
   };
 
+
   const filteredRecords = React.useMemo(() => {
-    let filtered = globalFilteredRecords.filter(record => {
+    let filtered = funnel.filteredRows.filter(record => {
       if (selectedDate === 'All') return true;
       if (!record.dc_notice_date) return false;
       const recordDateFormatted = new Date(record.dc_notice_date).toLocaleDateString('en-US', {
@@ -571,7 +601,7 @@ const DCNoticePage: React.FC = () => {
     }
 
     return filtered;
-  }, [globalFilteredRecords, selectedDate, sortColumn, sortDirection]);
+  }, [funnel.filteredRows, selectedDate, sortColumn, sortDirection]);
 
   const paginatedRecords = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -945,6 +975,24 @@ const DCNoticePage: React.FC = () => {
                   />
                 </div>
               </div>
+              <button
+                className={`flex-shrink-0 px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                  ? 'text-white'
+                  : isDarkMode
+                    ? 'hover:bg-gray-700 text-white bg-gray-800 border-gray-700'
+                    : 'hover:bg-gray-200 text-gray-900 bg-white border border-gray-300'
+                  }`}
+                style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                onClick={funnel.open}
+                title={funnel.activeCount > 0
+                  ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                  : 'Column Filters'}
+              >
+                <Filter className="h-5 w-5" />
+                {funnel.activeCount > 0 && (
+                  <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                )}
+              </button>
               <div className="relative z-50 flex-shrink-0" ref={filterDropdownRef}>
                 <button
                   className={`px-4 py-2 rounded text-sm transition-colors flex items-center ${isDarkMode
@@ -1175,6 +1223,12 @@ const DCNoticePage: React.FC = () => {
         </div>
       </div>
 
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="DC Notice Filters"
+        subtitle="Refine your DC notice results"
+      />
     </div>
   );
 };

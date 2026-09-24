@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, Alert, Linking, StyleSheet, ActivityIndicator, TextInput, useWindowDimensions } from 'react-native';
-import {
-  X, Phone, MessageSquare, Info, ExternalLink, Mail, ChevronDown,
-  ChevronLeft, ChevronRight as ChevronRightIcon, Ban, XCircle, RotateCw, CheckCircle,
-  Loader, Square, Settings, Copy
+import { View, Text, Pressable, ScrollView, Modal, Alert, Linking } from 'react-native';
+import { 
+  X, Phone, MessageSquare, Info, ExternalLink, Mail, ChevronDown, 
+  ChevronRight as ChevronRightIcon, Ban, XCircle, RotateCw, CheckCircle, 
+  Loader, Square, Settings
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getApplication, updateApplication, getRelatedDetailsUpdateLogs } from '../../services/applicationService';
+import { getApplication, updateApplication } from '../../services/applicationService';
 import ConfirmationModal from '../../modals/MoveToJoModal';
 import JOAssignFormModal from '../../modals/JOAssignFormModal';
 import ApplicationVisitFormModal from '../../modals/ApplicationVisitFormModal';
@@ -30,13 +30,14 @@ interface ApplicationDetailsProps {
   };
   onClose: () => void;
   onApplicationUpdate?: () => void;
-  /** Forced by the host screen; falls back to a width check, like JobOrderDetails. */
-  isMobile?: boolean;
 }
 
-const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, onClose, onApplicationUpdate, isMobile: propIsMobile }) => {
-  const { width } = useWindowDimensions();
-  const isMobile = propIsMobile !== undefined ? propIsMobile : width < 768;
+const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, onClose, onApplicationUpdate }) => {
+  // Move to JO and the quick status row each have their own key
+  // (application-management.move-to-jo / .quick-status).
+  const { can } = usePermissions();
+  const canMoveToJo = can('application-management.move-to-jo');
+  const canQuickStatus = can('application-management.quick-status');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailedApplication, setDetailedApplication] = useState<any>(null);
@@ -45,10 +46,6 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
   const [showVisitForm, setShowVisitForm] = useState(false);
   const [showStatusConfirmation, setShowStatusConfirmation] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string>('');
-  const [statusRemarks, setStatusRemarks] = useState<string>('');
-  const [relatedLogs, setRelatedLogs] = useState<any[]>([]);
-  const [relatedLogsCount, setRelatedLogsCount] = useState<number>(0);
-  const [relatedLogsExpanded, setRelatedLogsExpanded] = useState<boolean>(false);
   const [showVisitExistsConfirmation, setShowVisitExistsConfirmation] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -141,31 +138,12 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
     setShowJOAssignForm(true);
   };
 
-  // Related details update logs (audit trail for this application).
-  useEffect(() => {
-    let active = true;
-    if (!application.id) return;
-    getRelatedDetailsUpdateLogs(application.id)
-      .then((result) => {
-        if (!active) return;
-        setRelatedLogs(result.data || []);
-        setRelatedLogsCount(result.count || (result.data ? result.data.length : 0));
-      })
-      .catch((err) => console.error('Error fetching related details update logs:', err));
-    return () => { active = false; };
-  }, [application.id, detailedApplication]);
-
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
-
   const handleScheduleVisit = async () => {
     try {
       setLoading(true);
-
+      
       const existingVisitsResponse = await getApplicationVisits(application.id);
-
+      
       if (existingVisitsResponse.success && existingVisitsResponse.data && existingVisitsResponse.data.length > 0) {
         setShowVisitExistsConfirmation(true);
       } else {
@@ -196,19 +174,19 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
   const handleConfirmStatusChange = async () => {
     try {
       setLoading(true);
-
+      
       await updateApplication(application.id, { status: pendingStatus });
-
+      
       const updatedApplication = await getApplication(application.id);
       setDetailedApplication(updatedApplication);
-
+      
       setShowStatusConfirmation(false);
       setPendingStatus('');
-
+      
       if (onApplicationUpdate) {
         onApplicationUpdate();
       }
-
+      
       setSuccessMessage(`Status updated to ${pendingStatus}`);
       setShowSuccessModal(true);
     } catch (err: any) {
@@ -230,7 +208,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
 
   const handleSaveVisitForm = (formData: ApplicationVisitData) => {
     setShowVisitForm(false);
-
+    
     if (onApplicationUpdate) {
       onApplicationUpdate();
     }
@@ -241,7 +219,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
       try {
         setLoading(true);
         setError(null);
-
+        
         const result = await getApplication(application.id);
         setDetailedApplication(result);
       } catch (err: any) {
@@ -359,224 +337,427 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
     setFieldOrder(defaultFields);
   };
 
-  const valueColor = isDarkMode ? '#ffffff' : '#111827';
-
-  const textValue = (value: React.ReactNode) => (
-    <Text style={[st.valueText, { color: valueColor }]}>{value}</Text>
-  );
-
-  const linkValue = (url?: string | null, emptyLabel: string = 'No document available') => (
-    <View style={st.imageLinkRow}>
-      <Text style={[st.imageLinkText, { color: valueColor }]} numberOfLines={1}>
-        {url || emptyLabel}
-      </Text>
-      {url ? (
-        <Pressable onPress={() => Linking.openURL(url)}>
-          <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
-        </Pressable>
-      ) : null}
-    </View>
-  );
-
-  /** Value renderers only — the label/row chrome is shared by renderFieldContent. */
-  const fieldValueRenderers: Record<string, () => React.ReactNode> = {
-    timestamp: () =>
-      textValue(
-        detailedApplication?.create_date && detailedApplication?.create_time
-          ? `${detailedApplication.create_date} ${detailedApplication.create_time}`
-          : formatDate(application.timestamp)
-      ),
-    status: () => (
-      <Text style={[st.valueText, st.statusCapitalize, { color: getStatusColor(detailedApplication?.status) }]}>
-        {detailedApplication?.status || 'Pending'}
-      </Text>
-    ),
-    referredBy: () => textValue(detailedApplication?.referred_by || 'None'),
-    fullName: () => textValue(getClientFullName()),
-    fullAddress: () => textValue(getClientFullAddress()),
-    landmark: () => textValue(detailedApplication?.landmark || 'Not provided'),
-    contactNumber: () => textValue(detailedApplication?.mobile_number || application.mobile_number || 'Not provided'),
-    secondContactNumber: () => textValue(detailedApplication?.secondary_mobile_number || 'Not provided'),
-    emailAddress: () => textValue(detailedApplication?.email_address || application.email_address || 'Not provided'),
-    village: () => textValue(detailedApplication?.village || 'Not specified'),
-    barangay: () => textValue(detailedApplication?.barangay || application.barangay || 'Not specified'),
-    city: () => textValue(detailedApplication?.city || application.city || 'Not specified'),
-    region: () => textValue(detailedApplication?.region || application.region || 'Not specified'),
-    desiredPlan: () => textValue(detailedApplication?.desired_plan || 'Not specified'),
-    promo: () => textValue(detailedApplication?.promo || 'None'),
-    termsAgreed: () => textValue('Agreed'),
-    proofOfBilling: () => linkValue(detailedApplication?.proof_of_billing_url),
-    governmentValidId: () => linkValue(detailedApplication?.government_valid_id_url),
-    secondaryGovernmentValidId: () => linkValue(detailedApplication?.secondary_government_valid_id_url),
-    houseFrontPicture: () => linkValue(detailedApplication?.house_front_picture_url, 'No image available'),
-    promoImage: () => linkValue(detailedApplication?.promo_url, 'No image available'),
-    nearestLandmark1: () => linkValue(detailedApplication?.nearest_landmark1_url, 'No image available'),
-    nearestLandmark2: () => linkValue(detailedApplication?.nearest_landmark2_url, 'No image available'),
-    documentAttachment: () => linkValue(detailedApplication?.document_attachment_url),
-    otherIspBill: () => linkValue(detailedApplication?.other_isp_bill_url),
-  };
-
   const renderFieldContent = (fieldKey: string) => {
     if (!fieldVisibility[fieldKey]) return null;
-    // Terms only makes sense as a row once the applicant has actually agreed.
-    if (fieldKey === 'termsAgreed' && !detailedApplication?.terms_agreed) return null;
 
-    const renderer = fieldValueRenderers[fieldKey];
-    if (!renderer) return null;
+    const baseFieldStyle = { flexDirection: 'row' as const, borderBottomWidth: 1, paddingBottom: 16, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' };
+    const labelStyle = { width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' };
+    const valueStyle = { flex: 1, color: isDarkMode ? '#ffffff' : '#111827' };
 
-    return (
-      <View style={[st.fieldRow, { borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }]}>
-        <Text style={[st.fieldLabel, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]}>{getFieldLabel(fieldKey)}</Text>
-        <View style={st.fieldValueWrap}>{renderer()}</View>
-      </View>
-    );
-  };
-  
-  const primaryColor = colorPalette?.primary || '#7c3aed';
-  const canMoveToJo = hasPermission('application-management.move-to-jo');
-  const canQuickStatus = hasPermission('application-management.quick-status');
-
-  const quickActions = [
-    { key: 'noFacility', label: 'No Facility', Icon: Ban, onPress: () => handleStatusChange('No Facility') },
-    { key: 'cancelled', label: 'Cancelled', Icon: XCircle, onPress: () => handleStatusChange('Cancelled') },
-    { key: 'noSlot', label: 'No Slot', Icon: RotateCw, onPress: () => handleStatusChange('No Slot') },
-    { key: 'duplicate', label: 'Duplicate', Icon: Copy, onPress: () => handleStatusChange('Duplicate') },
-    { key: 'clearStatus', label: 'Clear Status', Icon: CheckCircle, onPress: () => handleStatusChange('In Progress') },
-  ];
-
-  return (
-    <View style={[st.container, {
-      borderLeftWidth: !isMobile ? 1 : 0,
-      backgroundColor: isDarkMode ? '#030712' : '#f9fafb',
-      borderLeftColor: isDarkMode ? 'rgba(255,255,255,0.3)' : '#d1d5db'
-    }]}>
-      <View style={[st.header, {
-        paddingTop: isMobile ? 60 : 12,
-        backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-        borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb'
-      }]}>
-        <View style={st.headerLeft}>
-          <Pressable onPress={onClose} style={st.backBtn}>
-            <ChevronLeft width={28} height={28} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
-          </Pressable>
-          <View style={st.headerNameContainer}>
-            <Text
-              style={[st.headerName, {
-                fontSize: isMobile ? 20 : 24,
-                color: isDarkMode ? '#ffffff' : '#111827'
-              }]}
-              numberOfLines={1}
-            >
-              {getClientFullName()}
+    switch (fieldKey) {
+      case 'timestamp':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Timestamp:</Text>
+            <Text style={valueStyle}>
+              {detailedApplication?.create_date && detailedApplication?.create_time 
+                ? `${detailedApplication.create_date} ${detailedApplication.create_time}` 
+                : formatDate(application.timestamp)}
             </Text>
           </View>
-        </View>
+        );
+      
+      case 'status':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Status:</Text>
+            <Text style={{ flex: 1, textTransform: 'capitalize', color: getStatusColor(detailedApplication?.status) }}>
+              {detailedApplication?.status || 'Pending'}
+            </Text>
+          </View>
+        );
 
-        <View style={st.headerActions}>
-          {loading && <ActivityIndicator size="small" color={primaryColor} />}
-        </View>
-      </View>
+      case 'referredBy':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Referred By:</Text>
+            <Text style={valueStyle}>{detailedApplication?.referred_by || 'None'}</Text>
+          </View>
+        );
 
-      {canMoveToJo && (
-        <View style={[st.primaryActions, { backgroundColor: isDarkMode ? '#111827' : '#f3f4f6' }]}>
-          <Pressable
-            style={[st.primaryBtn, { backgroundColor: primaryColor }]}
+      case 'fullName':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Full Name of Client:</Text>
+            <Text style={valueStyle}>{getClientFullName()}</Text>
+          </View>
+        );
+
+      case 'fullAddress':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Full Address of Client:</Text>
+            <Text style={valueStyle}>{getClientFullAddress()}</Text>
+          </View>
+        );
+
+      case 'landmark':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Landmark:</Text>
+            <Text style={valueStyle}>{detailedApplication?.landmark || 'Not provided'}</Text>
+          </View>
+        );
+
+      case 'contactNumber':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Contact Number:</Text>
+            <Text style={valueStyle}>
+              {detailedApplication?.mobile_number || application.mobile_number || 'Not provided'}
+            </Text>
+          </View>
+        );
+
+      case 'secondContactNumber':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Second Contact Number:</Text>
+            <Text style={valueStyle}>
+              {detailedApplication?.secondary_mobile_number || 'Not provided'}
+            </Text>
+          </View>
+        );
+
+      case 'emailAddress':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Email Address:</Text>
+            <Text style={valueStyle}>
+              {detailedApplication?.email_address || application.email_address || 'Not provided'}
+            </Text>
+          </View>
+        );
+
+      case 'village':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Village:</Text>
+            <Text style={valueStyle}>{detailedApplication?.village || 'Not specified'}</Text>
+          </View>
+        );
+
+      case 'barangay':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Barangay:</Text>
+            <Text style={valueStyle}>{detailedApplication?.barangay || application.barangay || 'Not specified'}</Text>
+          </View>
+        );
+
+      case 'city':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>City:</Text>
+            <Text style={valueStyle}>{detailedApplication?.city || application.city || 'Not specified'}</Text>
+          </View>
+        );
+
+      case 'region':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Region:</Text>
+            <Text style={valueStyle}>{detailedApplication?.region || application.region || 'Not specified'}</Text>
+          </View>
+        );
+
+      case 'desiredPlan':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Desired Plan:</Text>
+            <Text style={valueStyle}>
+              {detailedApplication?.desired_plan || 'Not specified'}
+            </Text>
+          </View>
+        );
+
+      case 'promo':
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Promo:</Text>
+            <Text style={valueStyle}>{detailedApplication?.promo || 'None'}</Text>
+          </View>
+        );
+
+      case 'termsAgreed':
+        if (!detailedApplication?.terms_agreed) return null;
+        return (
+          <View style={baseFieldStyle}>
+            <Text style={labelStyle}>Terms and Conditions:</Text>
+            <Text style={valueStyle}>Agreed</Text>
+          </View>
+        );
+
+      case 'proofOfBilling':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Proof of Billing</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.proof_of_billing_url || 'No document available'}
+              </Text>
+              {detailedApplication?.proof_of_billing_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.proof_of_billing_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'governmentValidId':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Government Valid ID</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.government_valid_id_url || 'No document available'}
+              </Text>
+              {detailedApplication?.government_valid_id_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.government_valid_id_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'secondaryGovernmentValidId':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <View style={{ width: 160 }}>
+              <Text style={{ fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Secondary Government</Text>
+              <Text style={{ fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Valid ID</Text>
+            </View>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.secondary_government_valid_id_url || 'No document available'}
+              </Text>
+              {detailedApplication?.secondary_government_valid_id_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.secondary_government_valid_id_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'houseFrontPicture':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>House Front Picture</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.house_front_picture_url || 'No image available'}
+              </Text>
+              {detailedApplication?.house_front_picture_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.house_front_picture_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'promoImage':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Promo Image</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.promo_url || 'No image available'}
+              </Text>
+              {detailedApplication?.promo_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.promo_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'nearestLandmark1':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Nearest Landmark 1</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.nearest_landmark1_url || 'No image available'}
+              </Text>
+              {detailedApplication?.nearest_landmark1_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.nearest_landmark1_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'nearestLandmark2':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Nearest Landmark 2</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.nearest_landmark2_url || 'No image available'}
+              </Text>
+              {detailedApplication?.nearest_landmark2_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.nearest_landmark2_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'documentAttachment':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Document Attachment</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.document_attachment_url || 'No document available'}
+              </Text>
+              {detailedApplication?.document_attachment_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.document_attachment_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      case 'otherIspBill':
+        return (
+          <View style={{ flexDirection: 'row', borderBottomWidth: 1, paddingVertical: 8, borderBottomColor: isDarkMode ? '#1f2937' : '#e5e7eb' }}>
+            <Text style={{ width: 160, fontSize: 14, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>Other ISP Bill</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ flex: 1, marginRight: 8, color: isDarkMode ? '#ffffff' : '#111827' }} numberOfLines={1}>
+                {detailedApplication?.other_isp_bill_url || 'No document available'}
+              </Text>
+              {detailedApplication?.other_isp_bill_url && (
+                <Pressable onPress={() => Linking.openURL(detailedApplication.other_isp_bill_url)}>
+                  <ExternalLink width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        );
+
+      default:
+        return null;
+    }
+  };
+  
+  return (
+    <View style={{ height: '100%', flexDirection: 'column', overflow: 'hidden', borderLeftWidth: 1, position: 'relative', backgroundColor: isDarkMode ? '#030712' : '#f9fafb', borderLeftColor: isDarkMode ? 'rgba(255,255,255,0.3)' : '#d1d5db' }}>
+      <View style={{ padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, backgroundColor: isDarkMode ? '#1f2937' : '#ffffff', borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ color: isDarkMode ? '#ffffff' : '#111827', fontWeight: '500' }}>{getClientFullName()}</Text>
+          {loading && <Text style={{ marginLeft: 12, fontSize: 14, color: isDarkMode ? '#fb923c' : '#7c3aed' }}>Loading...</Text>}
+        </View>
+        
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          {canMoveToJo && (
+          <Pressable 
+            style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 2, flexDirection: 'row', alignItems: 'center', backgroundColor: colorPalette?.primary || '#7c3aed' }}
             onPress={handleMoveToJO}
             disabled={loading}
           >
-            <Text style={st.primaryBtnText}>Move to JO</Text>
+            <Text style={{ color: '#ffffff' }}>Move to JO</Text>
+          </Pressable>
+          )}
+          <Pressable 
+            style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 2, flexDirection: 'row', alignItems: 'center', backgroundColor: colorPalette?.primary || '#7c3aed' }}
+            onPress={handleScheduleVisit}
+            disabled={loading}
+          >
+            <Text style={{ color: '#ffffff' }}>Schedule</Text>
+          </Pressable>
+          
+          <Pressable onPress={() => setShowFieldSettings(!showFieldSettings)}>
+            <Settings width={16} height={16} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
+          </Pressable>
+          
+          <Pressable onPress={onClose}>
+            <X width={18} height={18} color={isDarkMode ? '#9ca3af' : '#4b5563'} />
           </Pressable>
         </View>
-      )}
-
+      </View>
+      
       {canQuickStatus && (
-        <View style={[st.actionBar, {
-          backgroundColor: isDarkMode ? '#111827' : '#f3f4f6',
-          borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb'
-        }]}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.actionBarInner}>
-            {quickActions.map(({ key, label, Icon, onPress }) => (
-              <Pressable key={key} style={st.actionBtnWrap} onPress={onPress} disabled={loading}>
-                <View style={[st.actionIconCircle, { backgroundColor: loading ? '#9ca3af' : primaryColor }]}>
-                  <Icon width={18} height={18} color="#ffffff" />
-                </View>
-                <Text style={[st.actionLabel, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>{label}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
+      <View style={{ paddingVertical: 12, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, backgroundColor: isDarkMode ? '#111827' : '#f3f4f6', borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }}>
+        <Pressable 
+          style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
+          onPress={() => handleStatusChange('No Facility')}
+          disabled={loading}
+        >
+          <View style={{ padding: 8, borderRadius: 9999, backgroundColor: colorPalette?.primary || '#7c3aed' }}>
+            <Ban width={18} height={18} color="#ffffff" />
+          </View>
+          <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>No Facility</Text>
+        </Pressable>
+        
+        <Pressable 
+          style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
+          onPress={() => handleStatusChange('Cancelled')}
+          disabled={loading}
+        >
+          <View style={{ padding: 8, borderRadius: 9999, backgroundColor: colorPalette?.primary || '#7c3aed' }}>
+            <XCircle width={18} height={18} color="#ffffff" />
+          </View>
+          <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>Cancelled</Text>
+        </Pressable>
+        
+        <Pressable 
+          style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
+          onPress={() => handleStatusChange('No Slot')}
+          disabled={loading}
+        >
+          <View style={{ padding: 8, borderRadius: 9999, backgroundColor: colorPalette?.primary || '#7c3aed' }}>
+            <RotateCw width={18} height={18} color="#ffffff" />
+          </View>
+          <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>No Slot</Text>
+        </Pressable>
+        
+        <Pressable 
+          style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
+          onPress={() => handleStatusChange('Duplicate')}
+          disabled={loading}
+        >
+          <View style={{ padding: 8, borderRadius: 9999, backgroundColor: colorPalette?.primary || '#7c3aed' }}>
+            <Square width={18} height={18} color="#ffffff" />
+          </View>
+          <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>Duplicate</Text>
+        </Pressable>
+        
+        <Pressable 
+          style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}
+          onPress={() => handleStatusChange('In Progress')}
+          disabled={loading}
+        >
+          <View style={{ padding: 8, borderRadius: 9999, backgroundColor: colorPalette?.primary || '#7c3aed' }}>
+            <CheckCircle width={18} height={18} color="#ffffff" />
+          </View>
+          <Text style={{ fontSize: 12, marginTop: 4, color: isDarkMode ? '#d1d5db' : '#374151' }}>Clear Status</Text>
+        </Pressable>
+      </View>
       )}
-
+      
       {error && (
-        <View style={[st.errorBox, {
-          backgroundColor: isDarkMode ? 'rgba(127, 29, 29, 0.2)' : '#fef2f2',
-          borderColor: isDarkMode ? '#991b1b' : '#fca5a5'
-        }]}>
+        <View style={{ padding: 12, margin: 12, borderRadius: 4, backgroundColor: isDarkMode ? 'rgba(127, 29, 29, 0.2)' : '#fef2f2', borderWidth: 1, borderColor: isDarkMode ? '#991b1b' : '#fca5a5' }}>
           <Text style={{ color: isDarkMode ? '#fca5a5' : '#991b1b' }}>{error}</Text>
         </View>
       )}
-
-      <ScrollView style={st.flex1} showsVerticalScrollIndicator={false} contentContainerStyle={st.scrollContent}>
-        <View style={[st.fieldsContainer, { backgroundColor: isDarkMode ? '#030712' : '#f9fafb' }]}>
-          <View>
+      
+      <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+        <View style={{ maxWidth: 672, marginHorizontal: 'auto', paddingVertical: 24, paddingHorizontal: 16, backgroundColor: isDarkMode ? '#030712' : '#f9fafb' }}>
+          <View style={{ gap: 16 }}>
             {fieldOrder.map((fieldKey) => (
               <React.Fragment key={fieldKey}>
                 {renderFieldContent(fieldKey)}
               </React.Fragment>
             ))}
-          </View>
-
-          {/* Related Details Update Logs */}
-          <View style={[st.relatedSection, { borderTopColor: isDarkMode ? '#1f2937' : '#e5e7eb' }]}>
-            <Pressable
-              style={st.relatedHeader}
-              onPress={() => setRelatedLogsExpanded(!relatedLogsExpanded)}
-            >
-              <View style={st.relatedHeaderLeft}>
-                <Text style={[st.relatedTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]}>
-                  Related Details Update Logs
-                </Text>
-                <View style={[st.relatedBadge, { backgroundColor: isDarkMode ? '#4b5563' : '#d1d5db' }]}>
-                  <Text style={[st.relatedBadgeText, { color: isDarkMode ? '#ffffff' : '#111827' }]}>
-                    {relatedLogsCount}
-                  </Text>
-                </View>
-              </View>
-              {relatedLogsExpanded
-                ? <ChevronDown width={18} height={18} color="#6b7280" />
-                : <ChevronRightIcon width={18} height={18} color="#6b7280" />}
-            </Pressable>
-
-            {relatedLogsExpanded && (
-              relatedLogsCount > 0 ? (
-                <View>
-                  {relatedLogs.slice(0, 5).map((log: any, idx: number) => (
-                    <View
-                      key={log.id ?? idx}
-                      style={[st.relatedRow, { borderTopColor: isDarkMode ? '#1f2937' : '#f3f4f6' }]}
-                    >
-                      <Text style={[st.relatedRowTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]} numberOfLines={1}>
-                        {log.action || log.event || log.type || 'Update'}
-                      </Text>
-                      <Text style={[st.relatedRowMeta, { color: isDarkMode ? '#9ca3af' : '#6b7280' }]} numberOfLines={2}>
-                        {[log.modified_by || log.updated_by || log.user_email, formatDate(log.created_at || log.timestamp)]
-                          .filter(Boolean)
-                          .join(' • ')}
-                      </Text>
-                    </View>
-                  ))}
-                  {relatedLogsCount > 5 && (
-                    <Text style={[st.relatedMore, { color: primaryColor }]}>
-                      +{relatedLogsCount - 5} more items
-                    </Text>
-                  )}
-                </View>
-              ) : (
-                <Text style={[st.relatedEmpty, { color: isDarkMode ? '#6b7280' : '#9ca3af' }]}>
-                  No related details update logs found.
-                </Text>
-              )
-            )}
           </View>
         </View>
       </ScrollView>
@@ -643,71 +824,15 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         onCancel={() => setShowMoveConfirmation(false)}
       />
 
-      {/* Status change — remarks are captured here and sent with the update, and are
-          mandatory for Cancelled, same as the web screen. */}
-      <Modal
-        visible={showStatusConfirmation}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCancelStatusChange}
-      >
-        <View style={st.statusOverlay}>
-          <View style={[st.statusCard, { backgroundColor: isDarkMode ? '#111827' : '#ffffff', borderColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
-            <View style={[st.statusCardHeader, { borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
-              <Text style={[st.statusCardTitle, { color: isDarkMode ? '#ffffff' : '#111827' }]}>
-                Change Status to "{pendingStatus}"
-              </Text>
-            </View>
-
-            <View style={st.statusCardBody}>
-              <Text style={{ fontSize: 13, color: isDarkMode ? '#9ca3af' : '#4b5563' }}>
-                Are you sure you want to change the status of this application to{' '}
-                <Text style={{ fontWeight: '700' }}>{pendingStatus}</Text>?
-              </Text>
-              <View>
-                <Text style={[st.statusLabel, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                  Remarks {pendingStatus === 'Cancelled' && <Text style={{ color: '#ef4444' }}>*</Text>}
-                </Text>
-                <TextInput
-                  value={statusRemarks}
-                  onChangeText={setStatusRemarks}
-                  multiline
-                  numberOfLines={3}
-                  textAlignVertical="top"
-                  placeholder="Enter remarks for status change (required for Cancelled)..."
-                  placeholderTextColor={isDarkMode ? '#6b7280' : '#9ca3af'}
-                  style={[st.statusInput, {
-                    backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                    borderColor: isDarkMode ? '#4b5563' : '#d1d5db',
-                    color: isDarkMode ? '#ffffff' : '#111827'
-                  }]}
-                />
-              </View>
-            </View>
-
-            <View style={[st.statusCardFooter, { borderTopColor: isDarkMode ? '#374151' : '#e5e7eb' }]}>
-              <Pressable
-                onPress={handleCancelStatusChange}
-                disabled={loading}
-                style={[st.statusCancelBtn, { borderColor: isDarkMode ? '#4b5563' : '#d1d5db' }]}
-              >
-                <Text style={{ color: isDarkMode ? '#d1d5db' : '#374151', fontWeight: '500' }}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleConfirmStatusChange}
-                disabled={loading || (pendingStatus === 'Cancelled' && !statusRemarks.trim())}
-                style={[st.statusConfirmBtn, {
-                  backgroundColor: primaryColor,
-                  opacity: loading || (pendingStatus === 'Cancelled' && !statusRemarks.trim()) ? 0.5 : 1
-                }]}
-              >
-                {loading && <ActivityIndicator size="small" color="#ffffff" style={{ marginRight: 6 }} />}
-                <Text style={{ color: '#ffffff', fontWeight: '600' }}>Confirm</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmationModal
+        isOpen={showStatusConfirmation}
+        title="Confirm Status Change"
+        message={`Are you sure you want to change the status to "${pendingStatus}"?`}
+        confirmText="Change Status"
+        cancelText="Cancel"
+        onConfirm={handleConfirmStatusChange}
+        onCancel={handleCancelStatusChange}
+      />
 
       <JOAssignFormModal
         isOpen={showJOAssignForm}
@@ -715,6 +840,13 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         onSave={handleSaveJOForm}
         applicationData={{
           ...detailedApplication,
+          // The detail fetch may not have landed (or may have failed) when the
+          // form opens. Without these the form prefilled no referral, and saving
+          // wrote referred_by: null onto both the job order and the application.
+          id: detailedApplication?.id ?? application.id,
+          referred_by: detailedApplication?.referred_by ?? (application as any).referred_by ?? '',
+          referred_by_agent_id:
+            detailedApplication?.referred_by_agent_id ?? (application as any).referred_by_agent_id ?? null,
           installation_address: detailedApplication?.installation_address || application.address,
         }}
       />
@@ -752,57 +884,5 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
     </View>
   );
 };
-
-/** Layout mirrors JobOrderDetails so both detail screens read the same. */
-const st = StyleSheet.create({
-  container: { height: '100%', flexDirection: 'column', overflow: 'hidden', position: 'relative', width: '100%' },
-  header: { padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1 },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, position: 'relative' },
-  backBtn: { position: 'absolute', left: 0, zIndex: 10 },
-  // Padding keeps a long, centered name from running under the absolutely-placed back arrow.
-  headerNameContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36 },
-  headerName: { fontWeight: '500', textAlign: 'center' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  primaryActions: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingTop: 12 },
-  primaryBtn: { flex: 1, paddingVertical: 10, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-  primaryBtnText: { color: '#ffffff', fontWeight: '600' },
-  actionBar: { paddingVertical: 12, borderBottomWidth: 1 },
-  actionBarInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8, flexGrow: 1 },
-  actionBtnWrap: { flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6, minWidth: 76 },
-  actionIconCircle: { padding: 8, borderRadius: 9999 },
-  actionLabel: { fontSize: 12, marginTop: 4 },
-  errorBox: { padding: 12, margin: 12, borderRadius: 4, borderWidth: 1 },
-  flex1: { flex: 1 },
-  scrollContent: { flexGrow: 1, paddingBottom: 120 },
-  fieldsContainer: { width: '100%', minHeight: '100%', paddingVertical: 8, paddingHorizontal: 0 },
-  fieldRow: { flexDirection: 'column', borderBottomWidth: 1, paddingVertical: 4, paddingHorizontal: 16, alignItems: 'flex-start', gap: 2 },
-  fieldLabel: { fontSize: 14, fontWeight: '500' },
-  fieldValueWrap: { width: '100%' },
-  valueText: { fontSize: 16 },
-  statusCapitalize: { textTransform: 'capitalize' },
-  imageLinkRow: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  imageLinkText: { flex: 1, marginRight: 8, fontSize: 16 },
-  relatedSection: { marginTop: 24, borderTopWidth: 1, paddingHorizontal: 16, paddingTop: 8 },
-  relatedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 },
-  relatedHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  relatedTitle: { fontSize: 15, fontWeight: '500' },
-  relatedBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  relatedBadgeText: { fontSize: 11, fontWeight: '600' },
-  relatedRow: { paddingVertical: 10, borderTopWidth: 1, gap: 2 },
-  relatedRowTitle: { fontSize: 14, fontWeight: '500' },
-  relatedRowMeta: { fontSize: 12 },
-  relatedMore: { fontSize: 12, fontWeight: '600', paddingVertical: 10 },
-  relatedEmpty: { fontSize: 13, fontStyle: 'italic', paddingVertical: 12 },
-  statusOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 16 },
-  statusCard: { width: '100%', maxWidth: 420, borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
-  statusCardHeader: { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
-  statusCardTitle: { fontSize: 16, fontWeight: '600' },
-  statusCardBody: { paddingHorizontal: 20, paddingVertical: 14, gap: 12 },
-  statusLabel: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
-  statusInput: { borderWidth: 1, borderRadius: 6, padding: 10, minHeight: 76, fontSize: 14 },
-  statusCardFooter: { paddingHorizontal: 20, paddingVertical: 14, borderTopWidth: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
-  statusCancelBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6, borderWidth: 1 },
-  statusConfirmBtn: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 6, flexDirection: 'row', alignItems: 'center' },
-});
 
 export default ApplicationDetails;

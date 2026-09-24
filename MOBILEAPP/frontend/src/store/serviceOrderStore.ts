@@ -76,9 +76,6 @@ export interface ServiceOrder {
     start_time?: string | null;
     end_time?: string | null;
     organization_id?: number | null;
-    // Whether an administrator released this service order to the technician
-    // ahead of their queue. Locked (false) until they do.
-    technicianEnabled?: boolean;
 }
 
 export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
@@ -157,11 +154,6 @@ export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => 
         start_time: order.start_time || null,
         end_time: order.end_time || null,
         organization_id: (order as any).organization_id || null,
-        // Read straight off the column so the technician lock always reflects
-        // the database. MySQL hands tinyint back as 1/0 or "1"/"0".
-        technicianEnabled: (order as any).technician_enabled === true
-            || (order as any).technician_enabled === 1
-            || (order as any).technician_enabled === '1',
     };
 };
 

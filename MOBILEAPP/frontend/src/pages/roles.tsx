@@ -28,6 +28,8 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import RoleModal from '../modals/RoleModal';
 import { useRoleStore } from '../store/roleStore';
 import { roleService } from '../services/userService';
+import { usePermissions } from '../hooks/usePermissions';
+import { baseRoleLabel, isLockedRole } from '../config/permissions';
 
 const Roles: React.FC = () => {
   // App is forced light mode.
@@ -38,6 +40,11 @@ const Roles: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   const primaryColor = colorPalette?.primary || '#7c3aed';
+  // Each control is drawn only when the request behind it would succeed.
+  const { can } = usePermissions();
+  const canCreate = can('roles.create');
+  const canEdit = can('roles.edit');
+  const canDelete = can('roles.delete');
   const { width } = Dimensions.get('window');
   const isTablet = width >= 768;
 
@@ -143,7 +150,7 @@ const Roles: React.FC = () => {
               Alert.alert('Error', res.message || 'Failed to delete role');
             }
           } catch (err: any) {
-            Alert.alert('Error', err.message || 'An error occurred');
+            Alert.alert('Error', err?.response?.data?.message || err.message || 'An error occurred');
           }
         },
       },
@@ -155,7 +162,9 @@ const Roles: React.FC = () => {
   const showingEnd = Math.min(currentPage * itemsPerPage, filteredRoles.length);
 
   const renderItem = ({ item: role }: { item: Role }) => {
-    const isSystem = role.id <= 8;
+    const isSystem = isLockedRole(role.id) || role.id <= 8;
+    // A hybrid: a custom role built on one of the seeded roles.
+    const baseLabel = !isSystem ? baseRoleLabel(role.base_role_id) : '';
     return (
       <View
         style={{
@@ -191,23 +200,34 @@ const Roles: React.FC = () => {
                 </Text>
               </View>
             )}
+            {baseLabel ? (
+              <View style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: '#ede9fe' }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#7c3aed' }}>
+                  {baseLabel} +
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             {!isSystem ? (
               <>
-                <TouchableOpacity
-                  onPress={() => {
-                    setSelectedRole(role);
-                    setShowModal(true);
-                  }}
-                  style={{ padding: 8, borderRadius: 6 }}
-                >
-                  <Edit2 size={18} color={primaryColor} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleDeleteRole(role.id)} style={{ padding: 8, borderRadius: 6 }}>
-                  <Trash2 size={18} color="#ef4444" />
-                </TouchableOpacity>
+                {canEdit && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelectedRole(role);
+                      setShowModal(true);
+                    }}
+                    style={{ padding: 8, borderRadius: 6 }}
+                  >
+                    <Edit2 size={18} color={primaryColor} />
+                  </TouchableOpacity>
+                )}
+                {canDelete && (
+                  <TouchableOpacity onPress={() => handleDeleteRole(role.id)} style={{ padding: 8, borderRadius: 6 }}>
+                    <Trash2 size={18} color="#ef4444" />
+                  </TouchableOpacity>
+                )}
               </>
             ) : (
               <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#f3f4f6' }}>
@@ -265,15 +285,17 @@ const Roles: React.FC = () => {
                 <RefreshCw size={18} color="#6b7280" />
               )}
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => {
-                setSelectedRole(null);
-                setShowModal(true);
-              }}
-              style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor }}
-            >
-              <Plus size={20} color="#ffffff" />
-            </TouchableOpacity>
+            {canCreate && (
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedRole(null);
+                  setShowModal(true);
+                }}
+                style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor }}
+              >
+                <Plus size={20} color="#ffffff" />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 

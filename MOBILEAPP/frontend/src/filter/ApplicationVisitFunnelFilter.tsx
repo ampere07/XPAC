@@ -444,7 +444,7 @@ const ApplicationVisitFunnelFilter: React.FC<ApplicationVisitFunnelFilterProps> 
                 <Text style={{ fontSize: 11, fontWeight: '600', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 }}>
                   Application Visit Details
                 </Text>
-                {allColumns.map(column => {
+                {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map(column => {
                   const hasFilter = filterValues[column.key] && (
                     filterValues[column.key].value ||
                     filterValues[column.key].from !== undefined ||

@@ -5,11 +5,14 @@ import ModalUITemplate, { useModalTheme } from './ui-modal/ModalUITemplate';
 import {
   ACTIONS,
   BASE_ROLE_OPTIONS,
+  CURRENT_VERSION,
   WILDCARD,
   inheritedPermissions,
+  knownKeysOnly,
   labelFor,
-  parsePermissions,
   permissionGroups,
+  roleModalSeed,
+  withImpliedPages,
 } from '../config/permissions';
 
 interface RoleModalProps {
@@ -282,14 +285,12 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
         // Delete unticked for a role that has them, and the save below would
         // then revoke them from a screen that never showed them.
         //
-        // Falls back to the column for a caller that has not been given the
-        // resolved list — an array from Laravel's cast, or a JSON /
-        // comma-separated string on a row written before that cast existed.
-        setSelectedPermissions(
-          Array.isArray(role.effective_permissions)
-            ? role.effective_permissions
-            : parsePermissions(role.permissions)
-        );
+        // The server's resolved list when it sends one; otherwise the column,
+        // resolved here the same way (see roleModalSeed). Either way retired
+        // keys are replaced by the keys that took their place and anything the
+        // catalog does not offer is left out, so a save never sends back a key
+        // the server would refuse.
+        setSelectedPermissions(roleModalSeed(role));
       } else {
         setFormData({
           role_name: '',
@@ -385,15 +386,19 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
     setLoading(true);
 
     try {
+      // Extras only. The server merges these with the base role's keys on
+      // every read, so an inherited key sent back here would only go stale.
+      // Catalog keys only: nothing else can be ticked, but a seed from an
+      // older server could still carry one.
+      const ownKeys = inheritsEverything
+        ? []
+        : knownKeysOnly(selectedPermissions.filter(key => !inherited.has(key)));
+
       const payload = {
         role_name: formData.role_name,
         description: formData.description,
         base_role_id: baseRoleId === NO_BASE ? null : baseRoleId,
-        // Extras only. The server merges these with the base role's keys on
-        // every read, so an inherited key sent back here would only go stale.
-        permissions: inheritsEverything
-          ? []
-          : selectedPermissions.filter(key => !inherited.has(key)),
+        permissions: ownKeys,
       };
 
       const authData = localStorage.getItem('authData');
@@ -410,7 +415,19 @@ const RoleModal: React.FC<RoleModalProps> = ({ isOpen, onClose, onSave, role }) 
       }
 
       if (response.success && response.data) {
-        onSave(response.data);
+        // Saved from this modal, the ticks are now authoritative. A server
+        // that does not echo the resolved list back would leave the row
+        // looking unsaved-by-this-modal, and reopening it would seed from the
+        // raw column as if it were a legacy row, so the list just saved (and
+        // the version it was saved under) is filled in here.
+        const saved: Role = {
+          ...response.data,
+          effective_permissions: Array.isArray(response.data.effective_permissions)
+            ? response.data.effective_permissions
+            : withImpliedPages(ownKeys).filter(key => !inherited.has(key)),
+          permissions_version: response.data.permissions_version ?? CURRENT_VERSION,
+        };
+        onSave(saved);
         onClose();
       } else {
         setErrors({ general: response.message || 'Something went wrong' });

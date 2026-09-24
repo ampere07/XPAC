@@ -1112,7 +1112,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                   <option value={formData.assignedEmail}>{formData.assignedEmail}</option>
                 )}
                 {technicians.map((technician, index) => (
-                  <option key={index} value={technician.email}>{technician.email}</option>
+                  <option key={index} value={technician.email}>{technician?.name || technician.email}</option>
                 ))}
               </select>
               {errors.assignedEmail && <p className="text-red-500 text-xs mt-1">{errors.assignedEmail}</p>}

@@ -17,14 +17,11 @@ import {
   Info,
   CircleArrowRight,
   Loader,
-  Edit2,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { update } from '../services/discountService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
-import { usePermissions } from '../hooks/usePermissions';
-import DiscountFormModal from '../modals/DiscountFormModal';
 
 const isDarkMode = false;
 
@@ -83,8 +80,6 @@ interface DiscountDetailsProps {
   discountRecord: DiscountRecord;
   onClose?: () => void;
   onApproveSuccess?: () => void;
-  /** Called after an edit is saved, so the list behind can reload. */
-  onEditSuccess?: () => void;
   onViewCustomer?: (accountNo: string) => void;
   onPrevious?: () => void;
   onNext?: () => void;
@@ -94,17 +89,10 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
   discountRecord,
   onClose,
   onApproveSuccess,
-  onEditSuccess,
   onViewCustomer,
   onPrevious,
   onNext,
 }) => {
-  // Editing takes the same key as raising one — the API treats both as writing
-  // a discount, so offering Edit to someone who cannot write would be a button
-  // that is always refused.
-  const { can } = usePermissions();
-  const canEdit = can('discounts.add') && !!discountRecord.id;
-  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [showApproveButton, setShowApproveButton] = useState<boolean>(false);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
@@ -263,24 +251,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
           >
             <ChevronRight size={18} color="#6b7280" />
           </TouchableOpacity>
-          {canEdit && (
-            <TouchableOpacity
-              onPress={() => setIsEditModalOpen(true)}
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                borderRadius: 6,
-                borderWidth: 1,
-                borderColor: '#d1d5db',
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 4,
-              }}
-            >
-              <Edit2 size={14} color="#4b5563" />
-              <Text style={{ color: '#4b5563', fontSize: 13 }}>Edit</Text>
-            </TouchableOpacity>
-          )}
           {showApproveButton && (
             <TouchableOpacity
               onPress={handleApprove}
@@ -567,21 +537,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
           </View>
         </View>
       </Modal>
-
-      {/* Editing the record this panel is showing. Rendered only while open so
-          the form loads the discount fresh each time rather than holding a copy
-          that goes stale behind an approval. */}
-      {isEditModalOpen && (
-        <DiscountFormModal
-          isOpen={isEditModalOpen}
-          discountId={discountRecord.id}
-          onClose={() => setIsEditModalOpen(false)}
-          onSave={() => {
-            setIsEditModalOpen(false);
-            onEditSuccess?.();
-          }}
-        />
-      )}
     </View>
   );
 };

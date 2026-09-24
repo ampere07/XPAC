@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Receipt, ChevronRight, Tag, ChevronDown, Menu, X, ChevronsLeft, ChevronsRight, Globe, Calendar, RefreshCw, Plus, Download, Columns3, ArrowUp, ArrowDown, ChevronLeft } from 'lucide-react';
+import { Receipt, ChevronRight, Tag, ChevronDown, Menu, X, ChevronsLeft, ChevronsRight, Globe, Calendar, RefreshCw, Plus, Download, Columns3, ArrowUp, ArrowDown, ChevronLeft, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import DiscountDetails from '../components/DiscountDetails';
 import DiscountFormModal from '../modals/DiscountFormModal';
@@ -10,6 +10,8 @@ import { getCities, City } from '../services/cityService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import pusher from '../services/pusherService';
 import { exportToCSV } from '../utils/exportUtils';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 import { usePermissions } from '../hooks/usePermissions';
 
 const hexToRgba = (hex: string, opacity: number) => {
@@ -146,9 +148,6 @@ const Discounts: React.FC = () => {
   const [discountRecords, setDiscountRecords] = useState<DiscountRecord[]>([]);
   const [createdDateFrom, setCreatedDateFrom] = useState<string>('');
   const [createdDateTo, setCreatedDateTo] = useState<string>('');
-  const [userRole, setUserRole] = useState<string>('');
-  const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
 
@@ -172,38 +171,12 @@ const Discounts: React.FC = () => {
     }
   }, [selectedLocation, createdDateFrom, createdDateTo, isMobile]);
 
-  useEffect(() => {
-    const authData = localStorage.getItem('authData');
-    if (authData) {
-      try {
-        const userData = JSON.parse(authData);
-        setUserRole(userData.role || '');
-        setRoleId(userData.role_id || null);
-        
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
-      } catch (error) {
-        console.error('Error parsing auth data in Discounts:', error);
-      }
-    }
-  }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     selectedDiscountRef.current = selectedDiscount;
@@ -513,8 +486,42 @@ const Discounts: React.FC = () => {
     };
   }, [regions, cities, barangays, searchFilteredRecords]);
 
+  /**
+   * One filter entry per table column, so every column the table can show is filterable. Keys
+   * match discountColumns exactly - the table renders each cell from record[key] and the filter
+   * reads the same key. Status, plan and location columns offer the values present in the loaded
+   * records rather than requiring a lookup endpoint.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'id', label: 'ID', dataType: 'varchar' },
+    { key: 'fullName', label: 'Customer Name', dataType: 'varchar' },
+    { key: 'accountNo', label: 'Account No', dataType: 'varchar' },
+    { key: 'contactNumber', label: 'Contact Number', dataType: 'varchar' },
+    { key: 'emailAddress', label: 'Email Address', dataType: 'varchar' },
+    { key: 'address', label: 'Address', dataType: 'text' },
+    { key: 'plan', label: 'Plan', dataType: 'checklist' },
+    { key: 'discountAmount', label: 'Discount Amount', dataType: 'decimal' },
+    { key: 'discountStatus', label: 'Status', dataType: 'checklist' },
+    { key: 'dateCreated', label: 'Date Created', dataType: 'date' },
+    { key: 'processedBy', label: 'Processed By', dataType: 'varchar' },
+    { key: 'processedDate', label: 'Processed Date', dataType: 'date' },
+    { key: 'approvedBy', label: 'Approved By', dataType: 'varchar' },
+    { key: 'remarks', label: 'Remarks', dataType: 'text' },
+    { key: 'barangay', label: 'Barangay', dataType: 'checklist' },
+    { key: 'city', label: 'City', dataType: 'checklist' },
+    { key: 'region', label: 'Region', dataType: 'checklist' },
+  ];
+
+  // Applied on the search-narrowed set so the sidebar counts and the table describe the same
+  // rows - the point Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'discountsFunnelFilters',
+    columns: funnelColumns,
+    rows: searchFilteredRecords,
+  });
+
   const filteredDiscountRecords = useMemo(() => {
-    return searchFilteredRecords.filter(record => {
+    return funnel.filteredRows.filter(record => {
       if (selectedLocation === 'all') return true;
 
       if (selectedLocation.startsWith('reg:')) {
@@ -531,7 +538,7 @@ const Discounts: React.FC = () => {
 
       return record.cityId === Number(selectedLocation);
     });
-  }, [searchFilteredRecords, selectedLocation]);
+  }, [funnel.filteredRows, selectedLocation]);
 
   const currentDiscountIndex = useMemo(() => {
     if (!selectedDiscount || !filteredDiscountRecords) return -1;
@@ -749,7 +756,7 @@ const Discounts: React.FC = () => {
         case 'emailAddress': return record.emailAddress || '-';
         case 'address': return record.address || '-';
         case 'plan': return record.plan || '-';
-        case 'discountAmount': return `₱ ${(record.discountAmount ?? 0).toFixed(2)}`;
+        case 'discountAmount': return Number(record.discountAmount ?? 0).toFixed(2);
         case 'discountStatus': return record.discountStatus || '-';
         case 'dateCreated': return formatDate(record.dateCreated);
         case 'processedBy': return record.processedBy || '-';
@@ -1113,6 +1120,24 @@ const Discounts: React.FC = () => {
                   {displayMode === 'card' ? 'Table View' : 'Card View'}
                 </button>
 
+                <button
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                  className={`px-4 py-2 rounded text-sm transition-colors flex items-center flex-shrink-0 ${funnel.activeCount > 0
+                    ? 'text-white'
+                    : isDarkMode
+                      ? 'hover:bg-gray-800 text-white'
+                      : 'hover:bg-gray-100 text-gray-900'
+                    }`}
+                  style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                >
+                  <Filter className="h-5 w-5" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 {displayMode === 'table' && (
                   <div className="relative z-[100] flex-shrink-0" ref={columnDropdownRef}>
                     <button
@@ -1432,7 +1457,6 @@ const Discounts: React.FC = () => {
             discountRecord={selectedDiscount}
             onClose={handleCloseDetails}
             onApproveSuccess={handleRefresh}
-            onEditSuccess={handleRefresh}
             onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
             onNext={currentDiscountIndex < filteredDiscountRecords.length - 1 ? handleNextRecord : undefined}
           />
@@ -1444,6 +1468,12 @@ const Discounts: React.FC = () => {
         isOpen={isDiscountFormModalOpen}
         onClose={handleCloseDiscountFormModal}
         onSave={handleSaveDiscount}
+      />
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Discount Filters"
+        subtitle="Refine your discount results"
       />
     </div>
   );

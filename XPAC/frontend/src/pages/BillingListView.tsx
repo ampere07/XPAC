@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { CreditCard, Search, Circle } from 'lucide-react';
+import { CreditCard, Search, Circle, Filter } from 'lucide-react';
 import BillingDetails from '../components/CustomerDetails';
 import { useBillingStore } from '../store/billingStore';
 import { BillingRecord } from '../services/billingService';
 import { getCustomerDetail, CustomerDetailData, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import { getCities, City } from '../services/cityService';
 import { getRegions, Region } from '../services/regionService';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 interface LocationItem {
   id: string;
@@ -55,6 +58,35 @@ const BillingListView: React.FC = () => {
     { key: 'billingDay', label: 'Billing Day', width: 'min-w-28' },
     { key: 'totalPaid', label: 'Total Paid', width: 'min-w-28' },
     { key: 'provider', label: 'Provider', width: 'min-w-24' }
+  ];
+
+  /**
+   * One filter entry per table column above, so every column the table can show is filterable.
+   * Keys match allColumns exactly - the table renders each cell from record[key] and the filter
+   * reads the same key. The status and equipment columns offer the values present in the loaded
+   * records rather than requiring a lookup endpoint.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'status', label: 'Status', dataType: 'checklist' },
+    { key: 'billingStatus', label: 'Billing Status', dataType: 'checklist' },
+    { key: 'accountNo', label: 'Account No.', dataType: 'varchar' },
+    { key: 'dateInstalled', label: 'Date Installed', dataType: 'date' },
+    { key: 'customerName', label: 'Full Name', dataType: 'varchar' },
+    { key: 'address', label: 'Address', dataType: 'text' },
+    { key: 'contactNumber', label: 'Contact Number', dataType: 'varchar' },
+    { key: 'emailAddress', label: 'Email Address', dataType: 'varchar' },
+    { key: 'plan', label: 'Plan', dataType: 'checklist' },
+    { key: 'balance', label: 'Account Balance', dataType: 'decimal' },
+    { key: 'username', label: 'Username', dataType: 'varchar' },
+    { key: 'connectionType', label: 'Connection Type', dataType: 'checklist' },
+    { key: 'routerModel', label: 'Router Model', dataType: 'checklist' },
+    { key: 'routerModemSN', label: 'Router/Modem SN', dataType: 'varchar' },
+    { key: 'lcpnap', label: 'LCPNAP', dataType: 'checklist' },
+    { key: 'port', label: 'PORT', dataType: 'checklist' },
+    { key: 'vlan', label: 'VLAN', dataType: 'checklist' },
+    { key: 'billingDay', label: 'Billing Day', dataType: 'int' },
+    { key: 'totalPaid', label: 'Total Paid', dataType: 'decimal' },
+    { key: 'provider', label: 'Provider', dataType: 'checklist' },
   ];
 
   // Handle click outside to close dropdown
@@ -130,7 +162,7 @@ const BillingListView: React.FC = () => {
   }, [cities, billingRecords]);
 
   // Memoize filtered records for performance
-  const filteredBillingRecords = useMemo(() => {
+  const searchedBillingRecords = useMemo(() => {
     return billingRecords.filter(record => {
       const matchesLocation = selectedLocation === 'all' ||
         record.cityId === Number(selectedLocation);
@@ -143,6 +175,16 @@ const BillingListView: React.FC = () => {
       return matchesLocation && matchesSearch;
     });
   }, [billingRecords, selectedLocation, searchQuery]);
+
+  // Applied on the search-narrowed set so the sidebar counts and the table describe the same
+  // rows - the point Customer.tsx applies its own funnel.
+  const funnel = useFunnelFilter({
+    storageKey: 'billingListViewFunnelFilters',
+    columns: funnelColumns,
+    rows: searchedBillingRecords,
+  });
+
+  const filteredBillingRecords = funnel.filteredRows;
 
   const handleRowClick = async (record: BillingRecord) => {
     try {
@@ -286,6 +328,21 @@ const BillingListView: React.FC = () => {
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
               </div>
               <div className="flex space-x-2">
+                <button
+                  onClick={funnel.open}
+                  title={funnel.activeCount > 0
+                    ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                    : 'Column Filters'}
+                  className={`px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                    ? 'bg-orange-500 text-white'
+                    : 'bg-gray-800 text-white border border-gray-700 hover:bg-gray-700'
+                    }`}
+                >
+                  <Filter className="h-4 w-4" />
+                  {funnel.activeCount > 0 && (
+                    <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                  )}
+                </button>
                 <div className="relative" ref={dropdownRef}>
                   <button
                     className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded text-sm transition-colors flex items-center"
@@ -418,6 +475,12 @@ const BillingListView: React.FC = () => {
           ) : null}
         </div>
       )}
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Billing Filters"
+        subtitle="Refine your billing results"
+      />
     </div>
   );
 };

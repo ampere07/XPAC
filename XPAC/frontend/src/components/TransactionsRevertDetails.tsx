@@ -4,7 +4,9 @@ import { TransactionRevert, transactionRevertService } from '../services/transac
 import { ColorPalette } from '../services/settingsColorPaletteService';
 
 import { useBillingStore } from '../store/billingStore';
+import { getUserDisplayName } from '../utils/userDisplay';
 import LoadingModal from './common/LoadingModalGlobal';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface TransactionsRevertDetailsProps {
     revert: TransactionRevert;
@@ -23,6 +25,7 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
     colorPalette,
     onUpdate,
 }) => {
+    const { can } = usePermissions();
     const [detailsWidth, setDetailsWidth] = useState<number>(600);
     const [isResizing, setIsResizing] = useState<boolean>(false);
     const startXRef = useRef<number>(0);
@@ -127,28 +130,6 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
         return '';
     };
 
-    const getCurrentUserRole = () => {
-        try {
-            const authData = localStorage.getItem('authData');
-            if (authData) {
-                const parsed = JSON.parse(authData);
-                return parsed.role_name || '';
-            }
-        } catch (e) { }
-        return '';
-    };
-
-    const getCurrentUserRoleId = () => {
-        try {
-            const authData = localStorage.getItem('authData');
-            if (authData) {
-                const parsed = JSON.parse(authData);
-                return String(parsed.role_id || '');
-            }
-        } catch (e) { }
-        return '';
-    };
-
     const handleRevertConfirm = async () => {
         setShowConfirmRevert(false);
         setLoading(true);
@@ -232,8 +213,8 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
                     </div>
 
                     <div className="flex items-center space-x-3">
-                        {/* Show Revert button only if status is pending and user is a superadmin or role_id 7 */}
-                        {isPending && (getCurrentUserRole().toLowerCase() === 'superadmin' || getCurrentUserRoleId() === '7') && (
+                        {/* Show Revert button only while pending, to a role holding transactions-revert.approve (SuperAdmin among the seeded roles). */}
+                        {isPending && can('transactions-revert.approve') && (
                             <button
                                 onClick={() => setShowConfirmRevert(true)}
                                 disabled={loading}
@@ -272,8 +253,8 @@ const TransactionsRevertDetails: React.FC<TransactionsRevertDetailsProps> = ({
                                 <div className={`w-40 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Status</div>
                                 <div className="flex-1">{getStatusBadge(currentRevert.status)}</div>
                             </div>
-                            {renderField('Requested By', currentRevert.requester?.email_address || `User ID: ${currentRevert.requested_by}` || '-')}
-                            {renderField('Updated By', currentRevert.updater?.email_address || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
+                            {renderField('Requested By', getUserDisplayName(currentRevert.requester, currentRevert.requester?.email_address) || `User ID: ${currentRevert.requested_by}` || '-')}
+                            {renderField('Updated By', getUserDisplayName(currentRevert.updater, currentRevert.updater?.email_address) || (currentRevert.updated_by ? `User ID: ${currentRevert.updated_by}` : '-'))}
                             {renderField('Remarks', currentRevert.remarks || 'No remarks')}
                             <div className={`flex py-2 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-300'}`}>
                                 <div className={`w-40 text-sm flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>Reason</div>

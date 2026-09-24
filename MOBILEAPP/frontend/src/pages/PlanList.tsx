@@ -1,13 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Dimensions } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Dimensions,
+} from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Plus, Edit2, Trash2 } from 'lucide-react-native';
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+} from 'lucide-react-native';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
 import AddPlanModal from '../modals/AddPlanModal';
 import PlanListDetails from '../components/PlanListDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
-import { StandardPage, RecordCard } from '../components/common';
 
 interface Plan {
   id: number;
@@ -232,6 +250,12 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
     return plan.name.toLowerCase().includes(query) || (plan.description ? plan.description.toLowerCase().includes(query) : false);
   });
 
+  const totalPages = Math.ceil(filteredPlans.length / itemsPerPage);
+  const paginatedPlans = filteredPlans.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, itemsPerPage]);
@@ -244,79 +268,115 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
     }
   }, [plans]);
 
-  const rowActions = (plan: Plan) => (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      <TouchableOpacity onPress={() => handleEdit(plan)} style={{ padding: 8, borderRadius: 6 }}>
-        <Edit2 size={18} color="#4b5563" />
-      </TouchableOpacity>
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
+
+  const renderListItem = ({ item: plan }: { item: Plan }) => {
+    const isActive = plan.is_active !== undefined ? plan.is_active : true;
+    return (
       <TouchableOpacity
-        onPress={() => handleDelete(plan)}
-        disabled={deletingItems.has(plan.id)}
-        style={{ padding: 8, borderRadius: 6, opacity: deletingItems.has(plan.id) ? 0.5 : 1 }}
+        onPress={() => setSelectedPlan(plan)}
+        activeOpacity={0.7}
+        style={{
+          paddingHorizontal: 16,
+          paddingVertical: 14,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottomWidth: 1,
+          borderBottomColor: '#f1f5f9',
+          backgroundColor: selectedPlan?.id === plan.id ? '#eff6ff' : '#ffffff',
+        }}
       >
-        {deletingItems.has(plan.id) ? (
-          <ActivityIndicator size="small" color="#ef4444" />
-        ) : (
-          <Trash2 size={18} color="#ef4444" />
-        )}
+        <View style={{ flex: 1, minWidth: 0, paddingRight: 16 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <Text style={{ fontSize: 14, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5, color: '#111827' }}>
+              {plan.name}
+            </Text>
+            <Text style={{ color: '#16a34a', fontWeight: '700', fontSize: 14 }}>{formatPrice(plan.price)}</Text>
+            {isActive && (
+              <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: '#dcfce7' }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', color: '#15803d' }}>Active</Text>
+              </View>
+            )}
+          </View>
+          {!!plan.description && (
+            <Text style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }} numberOfLines={1}>{plan.description}</Text>
+          )}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
+            <Text style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: '500', color: '#9ca3af' }}>
+              Modified: {formatDate(plan.modified_date)}
+            </Text>
+            <Text style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: '500', color: '#9ca3af' }}>
+              By: {plan.modified_by || 'System'}
+            </Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <TouchableOpacity onPress={() => handleEdit(plan)} style={{ padding: 8, borderRadius: 6 }}>
+            <Edit2 size={18} color="#4b5563" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => handleDelete(plan)}
+            disabled={deletingItems.has(plan.id)}
+            style={{ padding: 8, borderRadius: 6, opacity: deletingItems.has(plan.id) ? 0.5 : 1 }}
+          >
+            {deletingItems.has(plan.id) ? (
+              <ActivityIndicator size="small" color="#ef4444" />
+            ) : (
+              <Trash2 size={18} color="#ef4444" />
+            )}
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
-    </View>
-  );
+    );
+  };
+
+  // Detail overlay takes over the screen when a plan is selected.
+  if (selectedPlan) {
+    return (
+      <View style={{ flex: 1 }}>
+        <PlanListDetails
+          plan={selectedPlan}
+          onClose={() => setSelectedPlan(null)}
+          isMobile={!isTablet}
+          onNavigate={onNavigate}
+        />
+      </View>
+    );
+  }
 
   return (
-    <StandardPage<Plan>
-      data={filteredPlans}
-      keyExtractor={(item) => String(item.id)}
-      renderItem={(plan) => (
-        <RecordCard
-          title={plan.name}
-          normalizeTitle={false}
-          titleStyle={{ textTransform: 'uppercase', letterSpacing: 0.5 }}
-          subtitle={[formatPrice(plan.price), plan.description].filter(Boolean).join('  |  ')}
-          status={(plan.is_active !== undefined ? plan.is_active : true) ? 'Active' : 'Inactive'}
-          selected={selectedPlan?.id === plan.id}
-          onPress={() => setSelectedPlan(plan)}
-          disabled={deletingItems.has(plan.id)}
-          right={rowActions(plan)}
-        >
-          <Text style={{ fontSize: 10, textTransform: 'uppercase', fontWeight: '500', color: '#9ca3af', marginTop: 4 }}>
-            Modified: {formatDate(plan.modified_date)}  |  By: {plan.modified_by || 'System'}
-          </Text>
-        </RecordCard>
-      )}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search Plans"
-      isLoading={isLoading && plans.length === 0}
-      emptyText="No plans found"
-      onRefresh={() => loadPlans()}
-      isRefreshing={isLoading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={setItemsPerPage}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      // The detail is passed in rather than returned early, so the list keeps
-      // its scroll position and page while a plan is open.
-      detail={
-        selectedPlan ? (
-          <PlanListDetails
-            plan={selectedPlan}
-            onClose={() => setSelectedPlan(null)}
-            isMobile={!isTablet}
-            onNavigate={onNavigate}
-          />
-        ) : null
-      }
-      toolbarActions={
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: isTablet ? 16 : 60,
+          paddingBottom: 16,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          backgroundColor: '#ffffff',
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <GlobalSearch
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          isDarkMode={isDarkMode}
+          colorPalette={colorPalette}
+          placeholder="Search Plans"
+        />
         <TouchableOpacity
           onPress={handleAddNew}
           style={{
-            height: 38,
-            paddingHorizontal: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
             borderRadius: 8,
             backgroundColor: primaryColor,
             flexDirection: 'row',
@@ -327,8 +387,78 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
           <Plus size={16} color="#ffffff" />
           {isTablet && <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '500' }}>Add Plan</Text>}
         </TouchableOpacity>
-      }
-    >
+        <TouchableOpacity
+          onPress={() => loadPlans()}
+          style={{ padding: 10, borderRadius: 8, backgroundColor: primaryColor, alignItems: 'center', justifyContent: 'center' }}
+        >
+          {isLoading ? <ActivityIndicator size="small" color="#ffffff" /> : <RefreshCw size={16} color="#ffffff" />}
+        </TouchableOpacity>
+      </View>
+
+      {/* List */}
+      {isLoading && plans.length === 0 ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+        </View>
+      ) : (
+        <FlatList
+          data={paginatedPlans}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={renderListItem}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} colors={[primaryColor]} />
+          }
+          ListEmptyComponent={
+            <View style={{ paddingVertical: 80, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280' }}>No plans found</Text>
+            </View>
+          }
+        />
+      )}
+
+      {/* Pagination */}
+      {!isLoading && filteredPlans.length > 0 && totalPages > 1 && (
+        <View
+          style={{
+            borderTopWidth: 1,
+            borderTopColor: '#e5e7eb',
+            padding: 12,
+            backgroundColor: '#ffffff',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={{ fontSize: 12, color: '#6b7280' }}>Show</Text>
+            <View style={{ borderWidth: 1, borderColor: '#d1d5db', borderRadius: 6, overflow: 'hidden', height: 36, justifyContent: 'center' }}>
+              <Picker
+                selectedValue={itemsPerPage}
+                onValueChange={(v) => setItemsPerPage(Number(v))}
+                style={{ width: 90, color: '#111827' }}
+                dropdownIconColor="#6b7280"
+              >
+                {[10, 25, 50, 100].map((v) => (
+                  <Picker.Item key={v} label={String(v)} value={v} />
+                ))}
+              </Picker>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <PageBtn disabled={currentPage === 1} onPress={() => handlePageChange(1)} icon={<ChevronsLeft size={14} color={currentPage === 1 ? '#9ca3af' : '#111827'} />} />
+            <PageBtn disabled={currentPage === 1} onPress={() => handlePageChange(currentPage - 1)} icon={<ChevronLeft size={14} color={currentPage === 1 ? '#9ca3af' : '#111827'} />} />
+            <Text style={{ fontSize: 12, fontWeight: '700', color: '#111827', paddingHorizontal: 6 }}>
+              Page {currentPage} of {totalPages}
+            </Text>
+            <PageBtn disabled={currentPage === totalPages} onPress={() => handlePageChange(currentPage + 1)} icon={<ChevronRight size={14} color={currentPage === totalPages ? '#9ca3af' : '#111827'} />} />
+            <PageBtn disabled={currentPage === totalPages} onPress={() => handlePageChange(totalPages)} icon={<ChevronsRight size={14} color={currentPage === totalPages ? '#9ca3af' : '#111827'} />} />
+          </View>
+        </View>
+      )}
+
       <AddPlanModal
         isOpen={isModalOpen}
         onClose={handleModalClose}
@@ -346,8 +476,24 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
         colorPalette={colorPalette}
         isDarkMode={isDarkMode}
       />
-    </StandardPage>
+    </View>
   );
 };
+
+const PageBtn: React.FC<{ disabled: boolean; onPress: () => void; icon: React.ReactNode }> = ({ disabled, onPress, icon }) => (
+  <TouchableOpacity
+    onPress={onPress}
+    disabled={disabled}
+    style={{
+      padding: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: disabled ? '#e5e7eb' : '#d1d5db',
+      backgroundColor: disabled ? '#f3f4f6' : '#ffffff',
+    }}
+  >
+    {icon}
+  </TouchableOpacity>
+);
 
 export default PlanList;

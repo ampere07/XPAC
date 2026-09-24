@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronDown, Minus, Plus, Loader2 } from 'lucide-react';
 import { UserData } from '../types/api';
-import { updateJobOrder } from '../services/jobOrderService';
+import { updateJobOrder, logBlockedTechnicianTransfer } from '../services/jobOrderService';
 import { updateApplication } from '../services/applicationService';
 import { userService } from '../services/userService';
 
@@ -71,7 +71,18 @@ interface JOFormData {
   remarks: string;
   installationFee: number | string;
   billingDay: string;
+  /** 'Prepaid' | 'Postpaid'. Prepaid bills on a rolling period, so it has no billing day. */
+  generationType: string;
   isLastDayOfMonth: boolean;
+  /** Unchecked = No VAT (bill the plan price). Checked = VAT Included (VAT added on top). */
+  vatEnabled: boolean;
+  withholdingEnabled: boolean;
+  /** Percent of the VAT-inclusive subtotal, e.g. 5 / 10 / 15. Only used when withholding is on. */
+  withholdingPercentage: number | string;
+  /** Approves the account straight into the VIP billing status. Excludes VAT and withholding. */
+  vipEnabled: boolean;
+  /** yyyy-MM-dd. Copied to billing_accounts.vip_expiration, the existing VIP expiry. */
+  vipExpiration: string;
   onsiteStatus: string;
   assignedEmail: string;
   modifiedBy: string;
@@ -122,7 +133,13 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     remarks: '',
     installationFee: 0,
     billingDay: '',
+    generationType: '',
     isLastDayOfMonth: false,
+    vatEnabled: false,
+    withholdingEnabled: false,
+    withholdingPercentage: '',
+    vipEnabled: false,
+    vipExpiration: '',
     onsiteStatus: 'In Progress',
     assignedEmail: '',
     modifiedBy: currentUserEmail,
@@ -349,6 +366,26 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         installationFee: jobOrderData.installation_fee || jobOrderData.Installation_Fee || 0,
         billingDay: (jobOrderData.billing_day !== undefined && jobOrderData.billing_day !== null) ? String(jobOrderData.billing_day) : (jobOrderData.Billing_Day !== undefined && jobOrderData.Billing_Day !== null) ? String(jobOrderData.Billing_Day) : '',
         isLastDayOfMonth: jobOrderData.billing_day === 0 || jobOrderData.Billing_Day === 0,
+        // Billing Type set at assignment. Normalised to the canonical spelling so the <select>
+        // still matches for rows written by older builds as 'Pre Paid' / 'Post Paid'.
+        generationType: (() => {
+          const raw = String(jobOrderData.generation_type ?? jobOrderData.Generation_Type ?? '');
+          const letters = raw.toLowerCase().replace(/[^a-z]/g, '');
+          if (letters === 'prepaid') return 'Prepaid';
+          if (letters === 'postpaid') return 'Postpaid';
+          return '';
+        })(),
+        // Preserve the VAT / withholding / VIP configuration set when the job order was assigned.
+        vatEnabled: Boolean(jobOrderData.vat_enabled ?? jobOrderData.Vat_Enabled ?? false),
+        withholdingEnabled: Boolean(jobOrderData.withholding_enabled ?? jobOrderData.Withholding_Enabled ?? false),
+        withholdingPercentage: (jobOrderData.withholding_percentage ?? jobOrderData.Withholding_Percentage) != null
+          ? String(jobOrderData.withholding_percentage ?? jobOrderData.Withholding_Percentage)
+          : '',
+        vipEnabled: Boolean(jobOrderData.vip_enabled ?? jobOrderData.Vip_Enabled ?? false),
+        vipExpiration: (() => {
+          const raw = jobOrderData.vip_expiration ?? jobOrderData.Vip_Expiration;
+          return raw ? String(raw).slice(0, 10) : '';
+        })(),
         onsiteStatus: jobOrderData.Onsite_Status || jobOrderData.onsite_status || 'In Progress',
         assignedEmail: jobOrderData.Assigned_Email || jobOrderData.assigned_email || '',
         installationLandmark: jobOrderData.installation_landmark || jobOrderData.Installation_Landmark || '',
@@ -381,7 +418,13 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         remarks: '',
         installationFee: 0,
         billingDay: '',
+        generationType: '',
         isLastDayOfMonth: false,
+        vatEnabled: false,
+        withholdingEnabled: false,
+        withholdingPercentage: '',
+        vipEnabled: false,
+        vipExpiration: '',
         onsiteStatus: 'In Progress',
         assignedEmail: '',
         modifiedBy: currentUserEmail,
@@ -482,6 +525,20 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       if (field === 'isLastDayOfMonth' && value === true) newData.billingDay = '0';
       if (field === 'region') { newData.city = ''; newData.barangay = ''; }
       else if (field === 'city') { newData.barangay = ''; }
+      else if (field === 'withholdingEnabled' && value === false) {
+        // Clear the hidden input so an unchecked box never submits a stale percentage.
+        newData.withholdingPercentage = '';
+      } else if (field === 'vipEnabled') {
+        if (value === true) {
+          // A VIP is comped — never billed — so VAT and withholding cannot apply. Clearing them
+          // here means ticking VIP after configuring VAT/withholding leaves no stale values.
+          newData.vatEnabled = false;
+          newData.withholdingEnabled = false;
+          newData.withholdingPercentage = '';
+        } else {
+          newData.vipExpiration = '';
+        }
+      }
       return newData;
     });
 
@@ -492,6 +549,14 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+    // A dependent field is hidden once its checkbox is cleared (or VIP is turned on), so drop any
+    // error it left behind — otherwise submission is blocked by a message the user cannot fix.
+    if ((field === 'withholdingEnabled' && value === false) || (field === 'vipEnabled' && value === true)) {
+      setErrors(prev => ({ ...prev, withholdingPercentage: '' }));
+    }
+    if (field === 'vipEnabled' && value === false) {
+      setErrors(prev => ({ ...prev, vipExpiration: '' }));
     }
   };
 
@@ -517,6 +582,18 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       }
     });
   };
+
+  /**
+   * Prepaid accounts have no billing day: they bill on a rolling 30-day period that starts when
+   * they pay, and are excluded from the fixed-billing-day generator entirely. So the Billing Day
+   * field is hidden and not required for them — same rule as the JO Assign Form.
+   *
+   * Letters-only compare so a job order still holding the older 'Pre Paid' also resolves.
+   */
+  const isPrepaidGenerationType = (generationType?: string | null): boolean =>
+    String(generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
+
+  const isPrepaidBillingType = isPrepaidGenerationType(formData.generationType);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -545,13 +622,34 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     if (!formData.choosePlan.trim()) newErrors.choosePlan = 'Choose Plan is required';
     if (Number(formData.installationFee) < 0) newErrors.installationFee = 'Installation fee cannot be negative';
 
+    if (!formData.generationType.trim()) newErrors.generationType = 'Billing Type is required';
+
+    // Skipped for prepaid: the field is hidden, so requiring it would block submission with an
+    // error the user cannot see or fix.
     const billingDayNum = parseInt(formData.billingDay);
-    if (!formData.isLastDayOfMonth) {
+    if (!isPrepaidBillingType && !formData.isLastDayOfMonth) {
       if (isNaN(billingDayNum) || billingDayNum < 1) {
         newErrors.billingDay = 'Billing Day must be at least 1';
       } else if (billingDayNum > 30) {
         newErrors.billingDay = 'Billing Day cannot exceed 30';
       }
+    }
+
+    // Only validated when the checkbox is on (the inputs are hidden otherwise). VIP suppresses
+    // withholding entirely, so its percentage is not validated in that case.
+    if (formData.withholdingEnabled && !formData.vipEnabled) {
+      const withholdingPercentage = parseFloat(String(formData.withholdingPercentage));
+      if (isNaN(withholdingPercentage)) {
+        newErrors.withholdingPercentage = 'Withholding Percentage is required';
+      } else if (withholdingPercentage <= 0) {
+        newErrors.withholdingPercentage = 'Withholding Percentage must be greater than 0';
+      } else if (withholdingPercentage > 100) {
+        newErrors.withholdingPercentage = 'Withholding Percentage cannot exceed 100';
+      }
+    }
+
+    if (formData.vipEnabled && !formData.vipExpiration.trim()) {
+      newErrors.vipExpiration = 'Expiration Date is required when VIP is enabled';
     }
 
     if (formData.status === 'Confirmed') {
@@ -640,12 +738,52 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
   };
 
   const handleSave = async () => {
-    // ── Technician reassignment: allowed at any time. When the assigned tech
-    //    changes, the on-site visit is reset so the new technician starts fresh
-    //    (start_time / end_time are cleared below in the job order update). ──
+    // ── Block technician reassignment once the job is actively in progress ──
+    const isRealTs = (v: any) => {
+      const s = (v == null ? '' : String(v)).trim();
+      return s !== '' && s.toLowerCase() !== 'null' && !/^0000-00-00/.test(s);
+    };
+    const rawStart = jobOrderData?.start_time ?? jobOrderData?.startTime ?? jobOrderData?.Start_Time ?? null;
+    const startTime = (rawStart == null ? '' : String(rawStart)).trim();
+    const hasStartTime = isRealTs(rawStart);
+    const hasEndTime = isRealTs(jobOrderData?.end_time ?? jobOrderData?.endTime ?? jobOrderData?.End_Time ?? null);
+
+    const rawOnsiteStatus = (formData.onsiteStatus || jobOrderData?.onsite_status || jobOrderData?.Onsite_Status || jobOrderData?.status || jobOrderData?.Status || '').toString().trim().toLowerCase();
+    const isVisitInProgress = rawOnsiteStatus === 'in progress' || rawOnsiteStatus === 'in-progress' || rawOnsiteStatus === 'inprogress' || rawOnsiteStatus === 'ongoing';
+
     const currentAssigned = (formData.assignedEmail || '').trim();
     const originalAssigned = (originalAssignedEmail || '').trim();
     const technicianChanged = !!originalAssigned && currentAssigned !== originalAssigned;
+
+    // Only block while the tech is actively on the job: visit status In Progress, a real
+    // start time, and no end time yet. Reschedule (not In Progress) and finished tickets
+    // (an end time exists) are always transferable, as is a ticket that never started.
+    if (technicianChanged && isVisitInProgress && hasStartTime && !hasEndTime) {
+      const originalTechName = technicians.find(t => t.email === originalAssigned)?.name || originalAssigned;
+      const newTechName = technicians.find(t => t.email === currentAssigned)?.name || currentAssigned;
+      const jobOrderId = jobOrderData?.id || jobOrderData?.JobOrder_ID;
+
+      // Record the blocked attempt in the audit trail (fire-and-forget; never blocks the UI)
+      if (jobOrderId) {
+        logBlockedTechnicianTransfer(jobOrderId, {
+          performed_by: currentUserEmail,
+          original_technician_name: originalTechName,
+          original_technician_email: originalAssigned,
+          new_technician_name: newTechName,
+          new_technician_email: currentAssigned,
+          start_time: startTime
+        });
+      }
+
+      setModal({
+        isOpen: true,
+        type: 'error',
+        title: 'Transfer Not Allowed',
+        message: `This ticket has already been started by ${originalTechName}. Technician reassignment is no longer allowed because the assigned technician is already dispatched and working on-site.`
+      });
+      return;
+    }
+    // ── End reassignment block ──────────────────────────────────────────────
 
     const updatedFormData = {
       ...formData,
@@ -699,7 +837,26 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         assigned_email: updatedFormData.assignedEmail,
         onsite_remarks: updatedFormData.remarks,
         installation_fee: Number(updatedFormData.installationFee) || 0,
-        billing_day: updatedFormData.isLastDayOfMonth ? 0 : (parseInt(updatedFormData.billingDay) || 30),
+        generation_type: updatedFormData.generationType || null,
+        // NULL for prepaid: the field is hidden for them, so `parseInt('') || 30` would store a
+        // fictional billing day of 30. Prepaid bills on a rolling period from the payment date.
+        billing_day: isPrepaidGenerationType(updatedFormData.generationType)
+          ? null
+          : (updatedFormData.isLastDayOfMonth ? 0 : (parseInt(updatedFormData.billingDay) || 30)),
+        // A VIP is comped and never billed, so VAT and withholding are forced off for it. The
+        // backend applies the same rule, so a direct API caller cannot bypass it either.
+        vat_enabled: !updatedFormData.vipEnabled && Boolean(updatedFormData.vatEnabled),
+        // Legacy text column, kept in sync with the boolean for older readers of vat_type.
+        // 'Excluded Vat' is the OLD three-mode vocabulary for "VAT is added on top" — not a label
+        // any more (the UI says "VAT Included"), written only so existing consumers of this column
+        // keep resolving the right computation.
+        vat_type: !updatedFormData.vipEnabled && updatedFormData.vatEnabled ? 'Excluded Vat' : 'No Vat',
+        withholding_enabled: !updatedFormData.vipEnabled && Boolean(updatedFormData.withholdingEnabled),
+        withholding_percentage: !updatedFormData.vipEnabled && updatedFormData.withholdingEnabled
+          ? Number(updatedFormData.withholdingPercentage) || 0
+          : null,
+        vip_enabled: Boolean(updatedFormData.vipEnabled),
+        vip_expiration: updatedFormData.vipEnabled ? (updatedFormData.vipExpiration || null) : null,
         installation_landmark: updatedFormData.installationLandmark || null,
         referred_by: referredByForSave(
           { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
@@ -740,14 +897,8 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         jobOrderUpdateData.visit_by = null;
         jobOrderUpdateData.visit_with = null;
         jobOrderUpdateData.visit_with_other = null;
-        // The remarks deliberately survive. Setting a job order back to In
-        // Progress clears the technical and installation data because the
-        // install is being redone — but onsite_remarks and status_remarks are
-        // the written record of what happened last time, and that is exactly
-        // what whoever picks the job up next needs to read.
-        // status_remarks is simply left out of the payload, so the value
-        // already on the row stays untouched; onsite_remarks is sent from the
-        // form, which loaded it from the record.
+        jobOrderUpdateData.onsite_remarks = null;
+        jobOrderUpdateData.status_remarks = null;
         jobOrderUpdateData.setup_image_url = null;
         jobOrderUpdateData.speedtest_image_url = null;
         jobOrderUpdateData.box_reading_image_url = null;
@@ -759,18 +910,13 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
         jobOrderUpdateData.end_time = null;
       }
 
-      // Clear visit data when rescheduling so it can be reassigned fresh
-      if (updatedFormData.onsiteStatus === 'Reschedule') {
+      // Clear visit data and timings when rescheduling or reassigning to a new technician so Tech 1 starts fresh
+      if (updatedFormData.onsiteStatus === 'Reschedule' || technicianChanged) {
+        jobOrderUpdateData.start_time = null;
+        jobOrderUpdateData.end_time = null;
         jobOrderUpdateData.visit_by = null;
         jobOrderUpdateData.visit_with = null;
         jobOrderUpdateData.visit_with_other = null;
-      }
-
-      // Reset the on-site timers when the technician is reassigned so the new
-      // technician starts a fresh visit (no inherited start/end time).
-      if (technicianChanged) {
-        jobOrderUpdateData.start_time = null;
-        jobOrderUpdateData.end_time = null;
       }
       const jobOrderResponse = await updateJobOrder(jobOrderId, jobOrderUpdateData);
       if (!jobOrderResponse.success) throw new Error(jobOrderResponse.message || 'Job order update failed');
@@ -1284,6 +1430,37 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  Billing Type<span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <select
+                    value={formData.generationType}
+                    onChange={(e) => handleInputChange('generationType', e.target.value)}
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.generationType ? 'border-red-500' : ''}`}
+                  >
+                    <option value="" disabled>Select Billing Type</option>
+                    <option value="Prepaid">Prepaid</option>
+                    <option value="Postpaid">Postpaid</option>
+                  </select>
+                  <ChevronDown className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} size={20} />
+                </div>
+                {errors.generationType && <p className="text-red-500 text-xs mt-1">{errors.generationType}</p>}
+              </div>
+
+              {/* Hidden for prepaid — they bill on a rolling period, not a fixed day. */}
+              {isPrepaidBillingType ? (
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Billing Day
+                  </label>
+                  <p className={`text-xs px-3 py-2 rounded border ${isDarkMode ? 'text-gray-400 border-gray-700 bg-gray-800' : 'text-gray-500 border-gray-300 bg-gray-50'}`}>
+                    Not applicable to prepaid accounts — billing runs on a rolling 30-day period
+                    that starts when the customer pays.
+                  </p>
+                </div>
+              ) : (
+              <div>
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   Billing Day<span className="text-red-500">*</span>
                 </label>
                 <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
@@ -1335,6 +1512,106 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   </p>
                 )}
                 {errors.billingDay && <p className="text-red-500 text-xs mt-1">{errors.billingDay}</p>}
+              </div>
+              )}
+
+              <div>
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    checked={formData.vatEnabled}
+                    onChange={(e) => handleInputChange('vatEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>VAT</span>
+                </label>
+                <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {formData.vipEnabled
+                    ? 'Not applicable to VIP accounts — they are not billed.'
+                    : formData.vatEnabled
+                      ? 'VAT Included — VAT is added on top of the plan price.'
+                      : 'No VAT — the customer is billed the plan price.'}
+                </p>
+              </div>
+
+              <div>
+                <label className={`flex items-center ${formData.vipEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    checked={formData.withholdingEnabled}
+                    onChange={(e) => handleInputChange('withholdingEnabled', e.target.checked)}
+                    disabled={formData.vipEnabled}
+                    className="w-4 h-4 rounded cursor-pointer disabled:cursor-not-allowed"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Withholding</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Not applicable to VIP accounts — they are not billed.
+                  </p>
+                )}
+
+                {formData.withholdingEnabled && !formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Withholding Percentage<span className="text-red-500">*</span>
+                    </label>
+                    <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'} ${errors.withholdingPercentage ? 'border-red-500' : ''}`}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.withholdingPercentage}
+                        onChange={(e) => handleInputChange('withholdingPercentage', e.target.value)}
+                        placeholder="e.g. 5"
+                        className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
+                      />
+                      <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>%</span>
+                    </div>
+                    {errors.withholdingPercentage && <p className="text-red-500 text-xs mt-1">{errors.withholdingPercentage}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.vipEnabled}
+                    onChange={(e) => handleInputChange('vipEnabled', e.target.checked)}
+                    className="w-4 h-4 rounded cursor-pointer"
+                    style={{ accentColor: colorPalette?.primary || '#7c3aed' }}
+                  />
+                  <span className={`ml-2 text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>VIP</span>
+                </label>
+
+                {formData.vipEnabled && (
+                  <div className="mt-3">
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Expiration Date<span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="date"
+                        value={formData.vipExpiration}
+                        onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
+                        className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.vipExpiration ? 'border-red-500' : ''}`}
+                      />
+                      <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} size={20} />
+                    </div>
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Approving this job order creates the account with the VIP billing status, so
+                      it is not billed. On this date the VIP check restricts the account, exactly
+                      as it does for a VIP set from Customer Details.
+                    </p>
+                    {errors.vipExpiration && <p className="text-red-500 text-xs mt-1">{errors.vipExpiration}</p>}
+                  </div>
+                )}
               </div>
             </div>
 

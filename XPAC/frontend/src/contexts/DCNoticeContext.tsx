@@ -27,15 +27,6 @@ interface DCNoticeProviderProps {
 }
 
 export const DCNoticeProvider: React.FC<DCNoticeProviderProps> = ({ children }) => {
-    const { can } = usePermissions();
-
-    // This provider wraps the whole app shell in Dashboard.tsx, so it mounts for
-    // every role — including a customer, who has no DC Notice page to open and
-    // whose request comes back 403. Ask before fetching rather than fetching and
-    // swallowing the failure: the call pulls the entire table, and a role that
-    // cannot open the page has no use for a row of it.
-    const canRead = can('dc-notice');
-
     const [dcNoticeRecords, setDCNoticeRecords] = useState<DCNotice[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
@@ -43,10 +34,6 @@ export const DCNoticeProvider: React.FC<DCNoticeProviderProps> = ({ children }) 
     const [isFullyLoaded, setIsFullyLoaded] = useState<boolean>(false);
 
     const fetchDCNoticeRecords = useCallback(async (force = false, silent = false) => {
-        if (!canRead) {
-            return;
-        }
-
         // If we have data and not forced, skip fetching
         if (!force && dcNoticeRecords.length > 0) {
             return;
@@ -117,7 +104,7 @@ export const DCNoticeProvider: React.FC<DCNoticeProviderProps> = ({ children }) 
         } finally {
             setIsLoading(false);
         }
-    }, [dcNoticeRecords.length, canRead]);
+    }, [dcNoticeRecords.length]);
 
     const refreshDCNoticeRecords = useCallback(async () => {
         await fetchDCNoticeRecords(true, false);
@@ -127,13 +114,22 @@ export const DCNoticeProvider: React.FC<DCNoticeProviderProps> = ({ children }) 
         await fetchDCNoticeRecords(true, true);
     }, [fetchDCNoticeRecords]);
 
+    // This provider wraps the whole signed-in app, so the prefetch below would
+    // run for every role. Only a role that can open DC Notice (the only reader
+    // of this context) fetches; for anyone else GET dc-notices is refused by
+    // the API, or logged as a would-be refusal. A role that gains the key
+    // mid-session fetches when it does.
+    const { can } = usePermissions();
+    const mayRead = can('dc-notice');
+
     // Initial fetch effect
     useEffect(() => {
+        if (!mayRead) return;
         // Only fetch if empty, otherwise let the logic decide
         if (dcNoticeRecords.length === 0) {
             fetchDCNoticeRecords(false, false);
         }
-    }, [fetchDCNoticeRecords, dcNoticeRecords.length]);
+    }, [fetchDCNoticeRecords, dcNoticeRecords.length, mayRead]);
 
     return (
         <DCNoticeContext.Provider

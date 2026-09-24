@@ -311,6 +311,7 @@ export const relatedDataColumns = {
     { key: 'plan', label: 'Plan', render: (val: any) => val || '-' },
     { key: 'provider', label: 'Provider', render: (val: any) => val || '-' },
     { key: 'username', label: 'Username', render: (val: any) => val || '-' },
+    { key: 'pppoe_password', label: 'PPPOE Password', render: (val: any) => val || '-' },
     { key: 'connection_type', label: 'Connection Type', render: (val: any) => val || '-' },
     { key: 'old_router_modem_sn', label: 'Router/Modem SN', render: (val: any) => val || '-' },
     { key: 'old_lcp', label: 'LCP', render: (val: any) => val || '-' },

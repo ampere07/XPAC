@@ -22,6 +22,8 @@ import {
 } from 'lucide-react-native';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { relatedDataService } from '../services/relatedDataService';
+import RelatedDataTable from './RelatedDataTable';
+import { relatedDataColumns } from '../config/relatedDataColumns';
 import InventoryLogsFormModal from '../modals/InventoryLogsFormModal';
 import { useInventoryContext } from '../contexts/InventoryContext';
 

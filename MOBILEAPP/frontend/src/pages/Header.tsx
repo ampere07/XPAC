@@ -3,7 +3,6 @@ import { View, Text, Pressable, Image, ScrollView, Alert, Dimensions } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { clearDashboardCache } from '../utils/customerDashboardCache';
 import { notificationService, type Notification as AppNotification } from '../services/notificationService';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -203,12 +202,6 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
   const handleLogoutPress = async () => {
     await AsyncStorage.removeItem('token');
     await AsyncStorage.removeItem('authData');
-    // The dashboard keeps the last-known figures in storage so a cold start is not a
-    // skeleton. Signing out is the point at which a handset may change hands, so that
-    // snapshot should not outlive it. (Signing *in* deliberately leaves it: it is keyed by
-    // account, so another customer cannot read it, and keeping it makes signing back in
-    // instant.)
-    await clearDashboardCache();
     if (onLogout) {
       onLogout();
     }
@@ -259,10 +252,10 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   justifyContent: 'center',
                   marginRight: 8
                 }}>
-                  <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>X</Text>
+                  <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>A</Text>
                 </View>
                 <Text style={{ color: '#0f172a', fontWeight: 'bold', fontSize: 18, letterSpacing: 0.5 }}>
-                  XPAC <Text style={{ fontWeight: '800', color: '#0f172a' }}>PORTAL</Text>
+                  GOWISER <Text style={{ fontWeight: '800', color: '#0f172a' }}>PORTAL</Text>
                 </Text>
               </View>
             )}

@@ -71,15 +71,6 @@ interface StaggeredPaymentProviderProps {
 }
 
 export const StaggeredPaymentProvider: React.FC<StaggeredPaymentProviderProps> = ({ children }) => {
-    const { can } = usePermissions();
-
-    // This provider wraps the whole app shell in Dashboard.tsx, so it mounts for
-    // every role — including a customer, who has no Staggered Payment page to open and
-    // whose request comes back 403. Ask before fetching rather than fetching and
-    // swallowing the failure: the call pulls the entire table, and a role that
-    // cannot open the page has no use for a row of it.
-    const canRead = can('staggered-payment');
-
     const [staggeredRecords, setStaggeredRecords] = useState<StaggeredInstallation[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
@@ -87,10 +78,6 @@ export const StaggeredPaymentProvider: React.FC<StaggeredPaymentProviderProps> =
     const [isFullyLoaded, setIsFullyLoaded] = useState<boolean>(false);
 
     const fetchStaggeredRecords = useCallback(async (force = false, silent = false) => {
-        if (!canRead) {
-            return;
-        }
-
         // If we have data and not forced, skip fetching
         if (!force && staggeredRecords.length > 0) {
             return;
@@ -123,7 +110,7 @@ export const StaggeredPaymentProvider: React.FC<StaggeredPaymentProviderProps> =
         } finally {
             setIsLoading(false);
         }
-    }, [staggeredRecords.length, canRead]);
+    }, [staggeredRecords.length]);
 
     const refreshStaggeredRecords = useCallback(async () => {
         await fetchStaggeredRecords(true, false);
@@ -133,13 +120,22 @@ export const StaggeredPaymentProvider: React.FC<StaggeredPaymentProviderProps> =
         await fetchStaggeredRecords(true, true);
     }, [fetchStaggeredRecords]);
 
+    // This provider wraps the whole signed-in app, so the prefetch below would
+    // run for every role. Only a role that can open Staggered (the only reader
+    // of this context) fetches; for anyone else GET staggered-installations is
+    // refused by the API, or logged as a would-be refusal. A role that gains
+    // the key mid-session fetches when it does.
+    const { can } = usePermissions();
+    const mayRead = can('staggered-payment');
+
     // Initial fetch effect
     useEffect(() => {
+        if (!mayRead) return;
         // Only fetch if empty, otherwise let the logic decide
         if (staggeredRecords.length === 0) {
             fetchStaggeredRecords(false, false);
         }
-    }, [fetchStaggeredRecords, staggeredRecords.length]);
+    }, [fetchStaggeredRecords, staggeredRecords.length, mayRead]);
 
     return (
         <StaggeredPaymentContext.Provider

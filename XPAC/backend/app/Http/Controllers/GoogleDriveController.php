@@ -21,7 +21,7 @@ class GoogleDriveController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'file' => 'required|file|mimes:jpg,jpeg,png,gif,webp|max:10240'
+                'file' => 'required|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240'
             ]);
 
             if ($validator->fails()) {

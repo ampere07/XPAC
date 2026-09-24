@@ -1,24 +1,21 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, Modal, Linking, Platform, useWindowDimensions, StyleSheet, Alert, DeviceEventEmitter, ActivityIndicator } from 'react-native';
-import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin, Lock } from 'lucide-react-native';
+import { View, Text, Pressable, ScrollView, Modal, Linking, Platform, useWindowDimensions, StyleSheet, Alert, DeviceEventEmitter } from 'react-native';
+import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ContactActions from './common/ContactActions';
 import ServiceOrderEditModal from '../modals/ServiceOrderEditModal';
 import ConfirmationModal from '../modals/MoveToJoModal';
 import StartTimerModal from '../modals/StartTimerModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useServiceOrderContext } from '../contexts/ServiceOrderContext';
 import { useJobOrderContext } from '../contexts/JobOrderContext';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { resolveUserDisplayName } from '../utils/userDisplay';
 import { useWorkOrderStore } from '../store/workOrderStore';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
-import { updateServiceOrder, enableServiceOrderForTechnician } from '../services/serviceOrderService';
+import { updateServiceOrder } from '../services/serviceOrderService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { techInOutService } from '../services/techInOutService';
-import {
-  buildTechnicianLockedServiceOrderIds,
-  isClosedForTechnicianQueue,
-  isTechnicianEnabled,
-  TECHNICIAN_LOCKED_MESSAGE,
-} from '../utils/technicianServiceOrderAccess';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -43,6 +40,8 @@ interface ServiceOrderDetailsProps {
     plan: string;
     affiliate?: string;
     username: string;
+    /** From technical_details, falling back to the account's install job order. */
+    pppoePassword?: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -120,6 +119,7 @@ const defaultFields = [
   'emailAddress',
   'plan',
   'username',
+  'pppoePassword',
   'connectionType',
   'routerModemSN',
   'lcp',
@@ -173,6 +173,35 @@ const defaultFields = [
 ];
 
 const initialVisibility = defaultFields.reduce((acc: Record<string, boolean>, field) => ({ ...acc, [field]: true }), {});
+
+/**
+ * Folds fields added to defaultFields since the user last reordered back into their saved order.
+ *
+ * Without this, a saved order replaces the defaults wholesale and a newly added field — PPPOE
+ * Password, say — is simply absent from the panel forever for anyone who had ever opened the
+ * field settings. Each missing field is spliced in after its nearest preceding default neighbour
+ * that survived in the saved order, so it lands where the default layout puts it rather than at
+ * the bottom. Saved entries are never dropped, so the user's own ordering is preserved.
+ */
+const mergeFieldOrder = (saved: string[]): string[] => {
+  const result = [...saved];
+
+  defaultFields.forEach((field, index) => {
+    if (result.includes(field)) return;
+
+    let insertAt = result.length;
+    for (let i = index - 1; i >= 0; i--) {
+      const anchor = result.indexOf(defaultFields[i]);
+      if (anchor !== -1) {
+        insertAt = anchor + 1;
+        break;
+      }
+    }
+    result.splice(insertAt, 0, field);
+  });
+
+  return result;
+};
 
 const formatDate = (dateStr?: string | null): string => {
   if (!dateStr) return 'Not set';
@@ -230,6 +259,7 @@ const getFieldLabel = (fieldKey: string): string => {
     emailAddress: 'Email Address',
     plan: 'Plan',
     username: 'Username',
+    pppoePassword: 'PPPOE Password',
     connectionType: 'Connection Type',
     routerModemSN: 'Router/Modem SN',
     lcp: 'LCP',
@@ -293,6 +323,10 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
 }) => {
   const { width } = useWindowDimensions();
   const isMobile = propIsMobile || width < 768;
+  // Actors are persisted as email strings, so names come from the shared (cached)
+  // user directory rather than a per-record lookup.
+  const userDirectory = useUserDirectory();
+
   const { silentRefresh, serviceOrders } = useServiceOrderContext();
   const { jobOrders } = useJobOrderContext();
   const { workOrders } = useWorkOrderStore();
@@ -332,89 +366,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
   const [now, setNow] = useState(dayjs().tz('Asia/Manila').add(8, 'hour'));
   const [techStatus, setTechStatus] = useState<'online' | 'offline'>('offline');
   const [showTimeInWarning, setShowTimeInWarning] = useState(false);
-  const [isEnablingTechnician, setIsEnablingTechnician] = useState(false);
-  /**
-   * Local echo of technician_enabled after a successful enable.
-   *
-   * The list refresh is what makes the change permanent everywhere; this only
-   * keeps the button honest in the moment between the two. Cleared whenever a
-   * different service order is opened so it can never leak across records.
-   */
-  const [technicianEnabledOverride, setTechnicianEnabledOverride] = useState<boolean | null>(null);
-
-  // ── Technician queue release ────────────────────────────────────────────────
-  // Technicians work their service orders In Progress first and oldest first
-  // within that: everything else active is greyed out until either the work
-  // ahead of it moves forward or an administrator releases one early.
-
-  const isAdminUser = (userRole || '').toLowerCase() === 'administrator'
-    || (userRole || '').toLowerCase() === 'superadmin'
-    || userRoleId === 1 || userRoleId === 7;
-
-  const technicianEnabled = technicianEnabledOverride ?? isTechnicianEnabled(serviceOrder);
-
-  const isTechnicianViewer = userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2';
-
-  /**
-   * Is this service order still waiting its turn in the technician's queue?
-   *
-   * The same rule the list greys rows out with, asked again here because the
-   * actions live in this view. A technician may read any service order assigned
-   * to them; starting it and editing it wait until it is their next visit or an
-   * administrator releases it. Built from the whole assigned set out of the
-   * context — the API already scopes that to them — so a filtered or paged view
-   * can never change which service order counts as next.
-   *
-   * ServiceOrderApiController::isServiceOrderLockedForTechnician() enforces the
-   * same rule on update, so what happens here is the message, not the lock.
-   */
-  const technicianLocked = useMemo(() => {
-    if (!isTechnicianViewer || technicianEnabled) return false;
-    return buildTechnicianLockedServiceOrderIds(serviceOrders).has(String(serviceOrder.id));
-  }, [isTechnicianViewer, technicianEnabled, serviceOrders, serviceOrder.id]);
-
-  // Offered for administrators on any service order a technician still owes work
-  // on, including a rescheduled one — that is precisely the case where they
-  // cannot pick it back up without being released. A service order that is
-  // finished, resolved, failed or cancelled has nothing left to release.
-  const shouldShowEnableTechnicianButton = () =>
-    isAdminUser && !isClosedForTechnicianQueue(serviceOrder);
-
-  const handleEnableTechnicianClick = async () => {
-    if (isEnablingTechnician || technicianEnabled) return;
-
-    if (!serviceOrder.id) {
-      setError('Cannot enable service order: Missing ID');
-      return;
-    }
-
-    setError(null);
-    setIsEnablingTechnician(true);
-
-    try {
-      const response = await enableServiceOrderForTechnician(serviceOrder.id);
-
-      if (response?.success) {
-        setTechnicianEnabledOverride(true);
-        setSuccessMessage('Service order enabled. The technician can now start it.');
-        setShowSuccessModal(true);
-        silentRefresh();
-      } else {
-        setError((response as any)?.message || 'Failed to enable service order for the technician');
-      }
-    } catch (err: any) {
-      setError(
-        err.response?.data?.message || err.message || 'Failed to enable service order for the technician'
-      );
-    } finally {
-      setIsEnablingTechnician(false);
-    }
-  };
-
-  // A different record is a different lock state.
-  useEffect(() => {
-    setTechnicianEnabledOverride(null);
-  }, [serviceOrder.id]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -498,8 +449,25 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
         AsyncStorage.getItem(FIELD_ORDER_KEY)
       ]);
 
-      if (savedVisibility) setFieldVisibility(JSON.parse(savedVisibility));
-      if (savedOrder) setFieldOrder(JSON.parse(savedOrder));
+      // Both are MERGED onto the defaults rather than replacing them: a stored blob only knows
+      // about the fields that existed when it was written, so assigning it straight through hides
+      // every field added since — the saved order omits them, and the saved visibility map has no
+      // key for them, which reads as false.
+      if (savedVisibility) {
+        try {
+          setFieldVisibility({ ...initialVisibility, ...JSON.parse(savedVisibility) });
+        } catch (e) {
+          setFieldVisibility(initialVisibility);
+        }
+      }
+      if (savedOrder) {
+        try {
+          const parsedOrder = JSON.parse(savedOrder);
+          setFieldOrder(Array.isArray(parsedOrder) ? mergeFieldOrder(parsedOrder) : defaultFields);
+        } catch (e) {
+          setFieldOrder(defaultFields);
+        }
+      }
     };
     loadSettings();
 
@@ -526,16 +494,32 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     AsyncStorage.setItem(FIELD_ORDER_KEY, JSON.stringify(fieldOrder));
   }, [fieldOrder]);
 
+  const isTechnician = useMemo(
+    () => userRole?.toLowerCase() === 'technician' || String(userRoleId) === '2',
+    [userRole, userRoleId]
+  );
+
+  // Technicians lose edit access once support has marked the order Resolved.
+  const isLockedForTechnician = useMemo(() => {
+    if (!isTechnician) return false;
+    const supportStatus = (
+      (serviceOrder as any).supportStatus ||
+      (serviceOrder as any).support_status ||
+      ''
+    ).toLowerCase().trim();
+    return supportStatus === 'resolved';
+  }, [isTechnician, serviceOrder]);
+
   const handleEditClick = useCallback(() => {
-    // A locked service order opens for reading, but not for editing: this form is
-    // how the visit gets recorded, so letting it open would hand back everything
-    // the locked Start button withholds.
-    if (technicianLocked) {
-      Alert.alert('Service Order Locked', TECHNICIAN_LOCKED_MESSAGE, [{ text: 'OK' }]);
+    if (isLockedForTechnician) {
+      Alert.alert(
+        'Editing Locked',
+        'This service order has been marked Resolved and can no longer be edited.',
+        [{ text: 'OK' }]
+      );
       return;
     }
-
-    if (userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2') {
+    if (isTechnician) {
       if (!isStarted) {
         Alert.alert(
           'Action Required',
@@ -546,7 +530,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
       }
     }
     setIsEditModalOpen(true);
-  }, [isStarted, userRole, userRoleId, technicianLocked]);
+  }, [isStarted, isTechnician, isLockedForTechnician]);
 
   const handleCloseEditModal = useCallback(() => setIsEditModalOpen(false), []);
   const handleSaveEdit = useCallback(() => {
@@ -564,13 +548,6 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     try {
       const isTechnician = userRole === 'technician' || userRoleId === 2 || String(userRoleId) === '2';
       if (isTechnician) {
-        // Reading the service order is always allowed; starting it waits until
-        // this one is their next visit or an administrator releases it.
-        if (technicianLocked) {
-          Alert.alert('Service Order Locked', TECHNICIAN_LOCKED_MESSAGE, [{ text: 'OK' }]);
-          return;
-        }
-
         if (techStatus === 'offline') {
           setShowTimeInWarning(true);
           return;
@@ -799,7 +776,10 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     endTime: () => <Text style={valStyle} selectable={true}>{formatDate((serviceOrder as any).end_time)}</Text>,
     duration: () => <Text style={valStyle} selectable={true}>{getDurationString((serviceOrder as any).start_time, (serviceOrder as any).end_time)}</Text>,
     fullName: () => <Text style={valStyle} selectable={true}>{serviceOrder.fullName}</Text>,
-    contactNumber: () => <Text style={valStyle} selectable={true}>{serviceOrder.contactNumber}</Text>,
+    // Same quick actions as the job order view: a service visit starts with the
+    // same "are you home?" call, and the technician should not have to leave the
+    // app to make it.
+    contactNumber: () => <ContactActions value={serviceOrder.contactNumber} valueStyle={valStyle} />,
     fullAddress: () => <Text style={valStyle} selectable={true}>{serviceOrder.fullAddress}</Text>,
     addressCoordinates: () => {
       const coords = customerDetail?.addressCoordinates;
@@ -818,6 +798,8 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     emailAddress: () => <Text style={valStyle} selectable={true}>{serviceOrder.emailAddress}</Text>,
     plan: () => <Text style={valStyle} selectable={true}>{serviceOrder.plan}</Text>,
     username: () => <Text style={valStyle} selectable={true}>{serviceOrder.username}</Text>,
+    // selectable so a technician on site can copy the password straight out of the app.
+    pppoePassword: () => <Text style={valStyle} selectable={true}>{serviceOrder.pppoePassword || '-'}</Text>,
     connectionType: () => <Text style={valStyle} selectable={true}>{serviceOrder.connectionType}</Text>,
     routerModemSN: () => <Text style={valStyle} selectable={true}>{serviceOrder.routerModemSN}</Text>,
     lcp: () => <Text style={valStyle} selectable={true}>{serviceOrder.lcp}</Text>,
@@ -837,7 +819,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
     visitRemarks: () => <Text style={valStyle} selectable={true}>{serviceOrder.visitRemarks || 'No remarks'}</Text>,
     modifiedBy: () => <Text style={valStyle} selectable={true}>{serviceOrder.modifiedBy || 'System'}</Text>,
     modifiedDate: () => <Text style={valStyle} selectable={true}>{formatDate(serviceOrder.modifiedDate)}</Text>,
-    requestedBy: () => <Text style={valStyle} selectable={true}>{serviceOrder.requestedBy}</Text>,
+    requestedBy: () => <Text style={valStyle} selectable={true}>{resolveUserDisplayName(serviceOrder.requestedBy, userDirectory, serviceOrder.requestedBy)}</Text>,
     assignedEmail: () => <Text style={valStyle} selectable={true}>{serviceOrder.assignedEmail || 'Not assigned'}</Text>,
     supportRemarks: () => <Text style={valStyle} selectable={true}>{serviceOrder.supportRemarks || 'No remarks'}</Text>,
     supportStatus: () => (
@@ -988,43 +970,18 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
            ['in progress', 'inprogress', 'reschedule'].includes(((serviceOrder as any).visitStatus || '').toLowerCase().trim() || ((serviceOrder as any).visit_status || '').toLowerCase().trim() || '') && 
            (userRoleId === 2 || userRole?.toLowerCase() === 'technician') && (
             <Pressable
-              style={[styles.iconBtn, {
-                backgroundColor: technicianLocked ? '#d1d5db' : (colorPalette?.primary || '#10b981'),
-              }]}
+              style={[styles.iconBtn, { backgroundColor: colorPalette?.primary || '#10b981' }]}
               onPress={handleStartTimer}
-              disabled={loading || technicianLocked}
+              disabled={loading}
             >
-              {technicianLocked
-                ? <Lock width={18} height={18} color="#6b7280" />
-                : <Play width={18} height={18} color="#ffffff" />}
+              <Play width={18} height={18} color="#ffffff" />
             </Pressable>
           )}
 
-          {shouldShowEnableTechnicianButton() && (
-            <Pressable
-              style={[styles.headerButton, { backgroundColor: technicianEnabled ? '#e5e7eb' : '#059669' }]}
-              onPress={handleEnableTechnicianClick}
-              disabled={technicianEnabled || isEnablingTechnician}
-            >
-              {isEnablingTechnician && (
-                <ActivityIndicator size="small" color="#ffffff" style={styles.headerButtonIcon} />
-              )}
-              <Text style={[styles.headerButtonText, { color: technicianEnabled ? '#6b7280' : '#ffffff' }]}>
-                {technicianEnabled ? 'Enabled' : (isEnablingTechnician ? 'Enabling...' : 'Enable')}
-              </Text>
-            </Pressable>
-          )}
-
-          {userRole !== 'agent' && userRoleId !== 4 && ['in progress', 'reschedule'].includes(serviceOrder.visitStatus?.toLowerCase().trim() || '') && (
-            <Pressable
-              style={[styles.headerButton, { backgroundColor: technicianLocked ? '#d1d5db' : (colorPalette?.primary || '#7c3aed') }]}
-              onPress={handleEditClick}
-              disabled={technicianLocked}
-            >
-              {technicianLocked
-                ? <Lock width={16} height={16} color="#6b7280" style={styles.headerButtonIcon} />
-                : <Edit width={16} height={16} color="#ffffff" style={styles.headerButtonIcon} />}
-              <Text style={[styles.headerButtonText, technicianLocked ? { color: '#6b7280' } : null]}>Edit</Text>
+          {userRole !== 'agent' && userRoleId !== 4 && !isLockedForTechnician && ['in progress', 'reschedule'].includes(serviceOrder.visitStatus?.toLowerCase().trim() || '') && (
+            <Pressable style={[styles.headerButton, { backgroundColor: colorPalette?.primary || '#7c3aed' }]} onPress={handleEditClick}>
+              <Edit width={16} height={16} color="#ffffff" style={styles.headerButtonIcon} />
+              <Text style={styles.headerButtonText}>Edit</Text>
             </Pressable>
           )}
           {/* Symmetric placeholder if no actions are visible */}

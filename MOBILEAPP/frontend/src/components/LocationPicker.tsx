@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, Pressable, Alert, ActivityIndicator } from 'react-native';
 import MapView, { Marker, MapPressEvent } from 'react-native-maps';
 import { MapPin, Navigation } from 'lucide-react-native';
-import * as Location from 'expo-location';
-import { ensureLocationPermission } from '../services/locationConsent';
+import { getCurrentPosition, hasLocationServicesEnabled, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 
 interface LocationPickerProps {
   value: string;
@@ -131,41 +130,30 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
   const handleGetCurrentLocation = async () => {
     setIsGettingLocation(true);
     try {
-      // 1) permission — shows the in-app disclosure before the OS prompt, then requests.
-      const granted = await ensureLocationPermission();
-      if (!granted) {
+      const status = await requestForegroundPermission('LocationPicker');
+      if (status !== 'granted') {
         Alert.alert('Permission Denied', 'Permission to access location was denied. Please enable it in settings.');
-        setIsGettingLocation(false);
         return;
       }
 
-      // 2) services enabled?
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
+      // Checked separately from the permission: a granted app can still get nothing because the
+      // user has GPS switched off system-wide, and "turn on location services" is a different
+      // instruction from "grant this app permission".
+      if (!(await hasLocationServicesEnabled())) {
         Alert.alert('Location Services Off', 'Location services are OFF (GPS disabled). Please turn them on in settings.');
-        setIsGettingLocation(false);
         return;
       }
 
-      // 3) try last known first (fast, more reliable)
-      let location = await Location.getLastKnownPositionAsync({});
-
-      // 4) if no last known, then current position with balanced accuracy
-      if (!location) {
-        location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-      }
-
-      if (location) {
-        const { latitude, longitude } = location.coords;
-        const roundedLat = parseFloat(latitude.toFixed(6));
-        const roundedLng = parseFloat(longitude.toFixed(6));
-        updateCoordinates(roundedLat, roundedLng);
-      } else {
+      const position = await getCurrentPosition('LocationPicker');
+      if (!position) {
         Alert.alert('Location Error', 'Current location is unavailable. Check signal or map settings.');
+        return;
       }
 
+      updateCoordinates(
+        parseFloat(position.latitude.toFixed(6)),
+        parseFloat(position.longitude.toFixed(6))
+      );
     } catch (error: any) {
       console.log("Error getting location:", error);
       Alert.alert('Error', error.message || 'Unable to get your current location.');
@@ -217,23 +205,28 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
               />
             )}
           </MapView>
-          <Pressable
-            onPress={handleGetCurrentLocation}
-            disabled={isGettingLocation}
-            className={`absolute top-2 right-2 px-3 py-2 rounded shadow-lg flex-row items-center z-10 ${isDarkMode
-              ? 'bg-gray-800'
-              : 'bg-white'
-              }`}
-          >
-            {isGettingLocation ? (
-              <ActivityIndicator size="small" color={isDarkMode ? '#fff' : '#000'} />
-            ) : (
-              <Navigation size={16} color={isDarkMode ? 'white' : 'black'} />
-            )}
-            <Text className={`text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'} ml-2`}>
-              {isGettingLocation ? 'Getting...' : 'Get My Location'}
-            </Text>
-          </Pressable>
+          {/* Hidden if location services are ever switched off again (config/featureFlags). The
+              map, tap-to-place, marker drag and the manual lat/lng fields below do not depend on
+              GPS, so the location stays settable either way — just not readable off the device. */}
+          {isLocationAvailable() && (
+            <Pressable
+              onPress={handleGetCurrentLocation}
+              disabled={isGettingLocation}
+              className={`absolute top-2 right-2 px-3 py-2 rounded shadow-lg flex-row items-center z-10 ${isDarkMode
+                ? 'bg-gray-800'
+                : 'bg-white'
+                }`}
+            >
+              {isGettingLocation ? (
+                <ActivityIndicator size="small" color={isDarkMode ? '#fff' : '#000'} />
+              ) : (
+                <Navigation size={16} color={isDarkMode ? 'white' : 'black'} />
+              )}
+              <Text className={`text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'} ml-2`}>
+                {isGettingLocation ? 'Getting...' : 'Get My Location'}
+              </Text>
+            </Pressable>
+          )}
         </View>
 
         <View className={`p-3 border-t flex-row items-center space-x-2 ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'

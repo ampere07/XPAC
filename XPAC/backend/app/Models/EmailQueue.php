@@ -15,6 +15,9 @@ class EmailQueue extends Model
         'cc',
         'bcc',
         'subject',
+        // Idempotency key for scheduled notifications, UNIQUE. NULL for ad-hoc sends, which stay
+        // repeatable. Built by EmailQueueService::dedupeKeyFor().
+        'dedupe_key',
         'body_html',
         'attachment_path',
         'status',

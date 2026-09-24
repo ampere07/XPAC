@@ -4,16 +4,14 @@ import { commissionService } from '../services/commissionService';
 
 interface CommissionState {
     earnings: CommissionData[];
-    // The whole of agent_commission_history the signed-in user may see, which is
-    // the single list Agent Payout reads.
-    //
-    // The incentive and bonus lists that used to sit beside it are gone: nothing
-    // read them, and both endpoints were swept on every load of this store for
-    // nothing. Bonus History reads /commissions/bonus-history for itself.
     payoutHistory: PayoutHistoryData[];
+    incentiveHistory: any[];
+    bonusHistory: any[];
     stats: CommissionStats | null;
     totalEarnings: number;
     totalPayouts: number;
+    totalIncentives: number;
+    totalBonus: number;
     isLoading: boolean;
     lastUpdated: Date | null;
     currentFetchId: number | null;
@@ -22,21 +20,29 @@ interface CommissionState {
     fetchUpdates: () => Promise<void>;
     setData: (data: CommissionData[]) => void;
     setPayoutHistory: (history: PayoutHistoryData[]) => void;
+    setIncentiveHistory: (history: any[]) => void;
+    setBonusHistory: (history: any[]) => void;
     setStats: (stats: CommissionStats) => void;
 }
 
 export const useCommissionStore = create<CommissionState>((set, get) => ({
     earnings: [],
     payoutHistory: [],
+    incentiveHistory: [],
+    bonusHistory: [],
     stats: null,
     totalEarnings: 0,
     totalPayouts: 0,
+    totalIncentives: 0,
+    totalBonus: 0,
     isLoading: false,
     lastUpdated: null,
     currentFetchId: null,
 
     setData: (data) => set({ earnings: data }),
     setPayoutHistory: (history) => set({ payoutHistory: history }),
+    setIncentiveHistory: (history) => set({ incentiveHistory: history }),
+    setBonusHistory: (history) => set({ bonusHistory: history }),
     setStats: (stats) => set({ stats }),
 
     fetchCommissions: async (force = false) => {
@@ -108,6 +114,62 @@ export const useCommissionStore = create<CommissionState>((set, get) => ({
                 }
             }
 
+            // 3. Fetch Incentive History (auto-awarded quota incentives) progressively
+            let allIncentives: any[] = [];
+            let incentivesOffset = 0;
+            let hasMoreIncentives = true;
+
+            while (hasMoreIncentives) {
+                if (get().currentFetchId !== fetchId) return;
+
+                const res = await commissionService.getIncentiveHistory(CHUNK_SIZE, incentivesOffset) as any;
+                if (res.success) {
+                    const newRecords = res.data;
+                    allIncentives = [...allIncentives, ...newRecords];
+
+                    const totalServer = res.total || 0;
+                    set({
+                        incentiveHistory: [...allIncentives],
+                        totalIncentives: totalServer
+                    });
+
+                    hasMoreIncentives = allIncentives.length < totalServer && newRecords.length > 0;
+                    incentivesOffset = allIncentives.length;
+
+                    set({ isLoading: false });
+                } else {
+                    hasMoreIncentives = false;
+                }
+            }
+
+            // 4. Fetch Bonus History (manual bonus add / payout) progressively
+            let allBonus: any[] = [];
+            let bonusOffset = 0;
+            let hasMoreBonus = true;
+
+            while (hasMoreBonus) {
+                if (get().currentFetchId !== fetchId) return;
+
+                const res = await commissionService.getBonusHistory(CHUNK_SIZE, bonusOffset) as any;
+                if (res.success) {
+                    const newRecords = res.data;
+                    allBonus = [...allBonus, ...newRecords];
+
+                    const totalServer = res.total || 0;
+                    set({
+                        bonusHistory: [...allBonus],
+                        totalBonus: totalServer
+                    });
+
+                    hasMoreBonus = allBonus.length < totalServer && newRecords.length > 0;
+                    bonusOffset = allBonus.length;
+
+                    set({ isLoading: false });
+                } else {
+                    hasMoreBonus = false;
+                }
+            }
+
             set({ lastUpdated: new Date() });
         } catch (error) {
             console.error('[CommissionStore] Fetch failed:', error);
@@ -119,7 +181,7 @@ export const useCommissionStore = create<CommissionState>((set, get) => ({
     },
 
     fetchUpdates: async () => {
-        const { lastUpdated, totalEarnings, totalPayouts } = get();
+        const { lastUpdated, totalEarnings, totalPayouts, totalIncentives, totalBonus } = get();
         if (!lastUpdated) {
             await get().fetchCommissions(true);
             return;
@@ -128,13 +190,17 @@ export const useCommissionStore = create<CommissionState>((set, get) => ({
         try {
             const formattedDate = lastUpdated.toISOString().slice(0, 19).replace('T', ' ');
 
-            const [earningResRaw, historyResRaw] = await Promise.all([
+            const [earningResRaw, historyResRaw, incentiveResRaw, bonusResRaw] = await Promise.all([
                 commissionService.getEarnings(1000, 0, formattedDate),
-                commissionService.getPayoutHistory(1000, 0, formattedDate)
+                commissionService.getPayoutHistory(1000, 0, formattedDate),
+                commissionService.getIncentiveHistory(1000, 0, formattedDate),
+                commissionService.getBonusHistory(1000, 0, formattedDate)
             ]);
 
             const earningRes = earningResRaw as any;
             const historyRes = historyResRaw as any;
+            const incentiveRes = incentiveResRaw as any;
+            const bonusRes = bonusResRaw as any;
 
             if (earningRes.success && earningRes.data.length > 0) {
                 const updates = earningRes.data;
@@ -161,11 +227,30 @@ export const useCommissionStore = create<CommissionState>((set, get) => ({
                 });
             }
 
-            // The cursor always advances, including on a tick that found
-            // nothing. It must never be left null: fetchUpdates() treats a null
-            // cursor as "never loaded" and falls back to a full fetchCommissions
-            // with its loading spinner, so a cursor that stops advancing turns
-            // the 3-second poll into a 3-second full reload.
+            if (incentiveRes.success && incentiveRes.data.length > 0) {
+                const updates = incentiveRes.data;
+                set((state) => {
+                    const map = new Map(state.incentiveHistory.map((i: any) => [i.id, i]));
+                    updates.forEach((u: any) => map.set(u.id, u));
+                    return {
+                        incentiveHistory: Array.from(map.values()).sort((a: any, b: any) => new Date(b.processed_at || b.created_at || 0).getTime() - new Date(a.processed_at || a.created_at || 0).getTime()),
+                        totalIncentives: incentiveRes.total || totalIncentives
+                    };
+                });
+            }
+
+            if (bonusRes.success && bonusRes.data.length > 0) {
+                const updates = bonusRes.data;
+                set((state) => {
+                    const map = new Map(state.bonusHistory.map((i: any) => [i.id, i]));
+                    updates.forEach((u: any) => map.set(u.id, u));
+                    return {
+                        bonusHistory: Array.from(map.values()).sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()),
+                        totalBonus: bonusRes.total || totalBonus
+                    };
+                });
+            }
+
             set({ lastUpdated: new Date() });
         } catch (error) {
             console.error('[CommissionStore] Update failed:', error);

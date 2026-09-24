@@ -52,6 +52,26 @@ export const allColumns: Column[] = [
     { key: 'orNo', label: 'OR No', dataType: 'varchar' },
     { key: 'modifiedBy', label: 'Modified By', dataType: 'checklist' },
     { key: 'transactionId', label: 'Transaction ID', dataType: 'varchar' },
+    // Every remaining column the SOA table can show. Each key matches the key the table renders
+    // the cell from, and the page resolves a filter value with `item[key]`, so the two stay in
+    // step by construction. The statement's money lines are 'decimal' (from/to ranges), which is
+    // what makes "show me every statement over 5,000" answerable without exporting.
+    { key: 'statementNo', label: 'Statement No', dataType: 'varchar' },
+    { key: 'dateInstalled', label: 'Date Installed', dataType: 'date' },
+    { key: 'disconnectionDate', label: 'Disconnection Date', dataType: 'date' },
+    { key: 'balanceFromPreviousBill', label: 'Balance From Previous Bill', dataType: 'decimal' },
+    { key: 'paymentReceivedPrevious', label: 'Payment Received From Previous Bill', dataType: 'decimal' },
+    { key: 'remainingBalancePrevious', label: 'Remaining Balance From Previous Bill', dataType: 'decimal' },
+    { key: 'monthlyServiceFee', label: 'Monthly Service Fee', dataType: 'decimal' },
+    { key: 'staggered', label: 'Staggered Installation', dataType: 'decimal' },
+    { key: 'serviceCharge', label: 'Service Charge', dataType: 'decimal' },
+    { key: 'discounts', label: 'Discounts', dataType: 'decimal' },
+    { key: 'rebate', label: 'Rebates', dataType: 'decimal' },
+    { key: 'vat', label: 'VAT', dataType: 'decimal' },
+    { key: 'amountDue', label: 'Amount Due', dataType: 'decimal' },
+    { key: 'totalAmountDue', label: 'Total Amount Due', dataType: 'decimal' },
+    { key: 'printLink', label: 'Print Link', dataType: 'varchar' },
+    { key: 'updatedAt', label: 'Modified Date', dataType: 'datetime' },
 ];
 
 const SOAFunnelFilter: React.FC<SOAFunnelFilterProps> = ({

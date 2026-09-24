@@ -15,6 +15,7 @@ import {
     AchievementTier,
     clockSkewFrom,
     createAgentReferralMatcher,
+    storedReferralOf,
     formatCountdown,
     getOnsiteStatus,
     isDoneOnsiteStatus,
@@ -244,7 +245,7 @@ const DashboardAgent: React.FC<DashboardAgentProps> = ({ onNavigate }) => {
         let reschedule = 0;
 
         for (const jo of jobOrders) {
-            if (!ownsReferral(jo.Referred_By || jo.referred_by || '')) continue;
+            if (!ownsReferral(storedReferralOf(jo))) continue;
             if (!isOnOrAfterAgentStartDate(jo)) continue;
 
             const status = getOnsiteStatus(jo);

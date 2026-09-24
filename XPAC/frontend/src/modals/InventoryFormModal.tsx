@@ -3,7 +3,6 @@ import { X, Minus, Plus, Camera, Calendar, Loader2 } from 'lucide-react';
 import apiClient, { API_BASE_URL } from '../config/api';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { authFetch } from '../config/api';
 
 interface InventoryFormModalProps {
   isOpen: boolean;
@@ -143,7 +142,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const response = await authFetch(`${API_BASE_URL}/inventory-categories`);
+        const response = await fetch(`${API_BASE_URL}/inventory-categories`);
         const data = await response.json();
         if (data.success) {
           const categoryNames = data.data.map((cat: { id: number; name: string }) => cat.name);

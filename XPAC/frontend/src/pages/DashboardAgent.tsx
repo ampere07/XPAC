@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Eye, EyeOff, RefreshCw, Loader2, Timer } from 'lucide-react';
 import { agentPortalService } from '../services/commissionService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { usePermissions } from '../hooks/usePermissions';
 import { useJobOrderStore } from '../store/jobOrderStore';
 import {
     ACHIEVEMENT_TIERS,
@@ -175,6 +176,11 @@ const AchievementGauge: React.FC<{ value: number; target: number; color: string 
 const DashboardAgent: React.FC<DashboardAgentProps> = ({ onNavigate }) => {
     const [identity] = useState<AgentIdentity>(() => getStoredAgentIdentity());
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
+    // The application form is its own page (agent-application). The Agent holds
+    // it; a custom role given this dashboard may not, and the button would only
+    // open the access-denied screen.
+    const { canOpen } = usePermissions();
+    const canOpenApplicationForm = canOpen('agent-application');
 
     const { jobOrders, silentRefresh } = useJobOrderStore();
 
@@ -713,7 +719,7 @@ const DashboardAgent: React.FC<DashboardAgentProps> = ({ onNavigate }) => {
                                         className={`transition-transform duration-200 ${isCardExpanded ? 'rotate-180' : ''}`}
                                     />
                                 </button>
-                            ) : (
+                            ) : canOpenApplicationForm ? (
                                 /* The count has no parts to show, so the tab offers
                                    the way to add to it instead. */
                                 <button
@@ -722,7 +728,7 @@ const DashboardAgent: React.FC<DashboardAgentProps> = ({ onNavigate }) => {
                                 >
                                     Form
                                 </button>
-                            )}
+                            ) : null}
                         </div>
 
                         {/* Height is animated through a grid row rather than a

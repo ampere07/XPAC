@@ -9,9 +9,7 @@ export interface LoginResponse {
       full_name: string;
       role: string;
       role_id: number;
-      /** The role's effective permission keys. `['*']` for a SuperAdmin. */
       permissions?: string[] | null;
-      /** The section this role lands on after signing in. */
       home?: string | null;
       organization?: {
         id: number;
@@ -20,6 +18,16 @@ export interface LoginResponse {
     };
     token: string;
   };
+}
+
+/**
+ * Body of the 409 the login endpoint returns when a technician is already signed in on
+ * another device. The login is not completed until it is re-submitted with force_login.
+ */
+export interface SessionConflictResponse {
+  status: string;
+  require_confirmation?: boolean;
+  message: string;
 }
 
 export interface ForgotPasswordResponse {
@@ -50,11 +58,11 @@ export interface UserData {
   role: string;
   role_id: number;
   /**
-   * The role's effective permission keys, resolved server side — see
-   * ATSS2_0/backend/app/Support/Permissions.php. `['*']` for a SuperAdmin.
+   * The role's effective permission keys, resolved server side (see
+   * backend/app/Support/Permissions.php). `['*']` for a SuperAdmin.
    */
   permissions?: string[] | null;
-  /** The section this role lands on after signing in, e.g. "job-order". */
+  /** The page this role lands on, as a permission key, e.g. "job-order". */
   home?: string | null;
   organization?: {
     id: number;
@@ -68,6 +76,8 @@ export interface User {
   first_name: string;
   middle_initial?: string;
   last_name: string;
+  // Appended by the backend User model (first + middle initial + last).
+  full_name?: string;
   username: string;
   email_address: string;
   contact_number?: string;
@@ -105,6 +115,14 @@ export interface Role {
   id: number;
   role_name: string;
   description?: string;
+  organization_id?: number | null;
+  /** The seeded role (1-8) a hybrid custom role builds on, or null. */
+  base_role_id?: number | null;
+  /** The role's own stored keys (a hybrid's extras only). */
+  permissions?: string[] | string | null;
+  /** What the role grants, legacy rules applied, minus the inherited half. */
+  effective_permissions?: string[] | null;
+  users_count?: number;
   created_at: string;
   updated_at: string;
   users?: User[];

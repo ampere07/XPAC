@@ -5,7 +5,6 @@ import { API_BASE_URL } from '../config/api';
 import AddVlanModal from '../modals/AddVlanModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
-import { authFetch } from '../config/api';
 import { usePageActions } from '../hooks/usePageActions';
 
 interface Vlan {
@@ -147,7 +146,7 @@ const VlanList: React.FC = () => {
   const loadVlans = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const response = await authFetch(`${API_BASE_URL}/vlans`, {
+      const response = await fetch(`${API_BASE_URL}/vlans`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -197,7 +196,7 @@ const VlanList: React.FC = () => {
     showGlobalModal('loading', 'Deleting', `Removing VLAN "${vlan.value}"...`);
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/vlans/${vlan.id}`, {
+      const response = await fetch(`${API_BASE_URL}/vlans/${vlan.id}`, {
         method: 'DELETE',
         headers: {
           'Accept': 'application/json',

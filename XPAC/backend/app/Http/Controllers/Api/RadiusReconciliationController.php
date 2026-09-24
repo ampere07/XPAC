@@ -87,25 +87,6 @@ class RadiusReconciliationController extends Controller
     }
 
     /**
-     * POST /api/radius-reconciliation/align-username
-     */
-    public function alignUsername(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'current_username' => ['required', 'string', 'max:191'],
-            'new_username'     => ['required', 'string', 'max:191'],
-            'server_id'        => ['nullable', 'integer'],
-        ]);
-
-        return $this->respond($this->service->alignUsername(
-            $validated['current_username'],
-            $validated['new_username'],
-            $this->organizationId($request),
-            $validated['server_id'] ?? null
-        ));
-    }
-
-    /**
      * POST /api/radius-reconciliation/sync-group-mikrotik
      */
     public function syncGroupMikrotik(Request $request): JsonResponse
@@ -247,9 +228,8 @@ class RadiusReconciliationController extends Controller
             'users.*.server_id'      => ['nullable', 'integer'],
             'users.*.rad_id'         => ['nullable', 'string', 'max:64'],
             'users.*.rad_group'      => ['nullable', 'string', 'max:191'],
-            'users.*.target_group'       => ['nullable', 'string', 'max:191'],
-            'users.*.rad_password'       => ['nullable', 'string', 'max:191'],
-            'users.*.suggested_username' => ['nullable', 'string', 'max:191'],
+            'users.*.target_group'   => ['nullable', 'string', 'max:191'],
+            'users.*.rad_password'   => ['nullable', 'string', 'max:191'],
         ]);
 
         $result = $this->service->bulkAction(

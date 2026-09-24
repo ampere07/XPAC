@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Loader2 } from 'lucide-react';
 import { transactionRevertService } from '../services/transactionRevertService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -138,10 +139,15 @@ const TransactionRevertModal: React.FC<TransactionRevertModalProps> = ({
 
     if (!isOpen) return null;
 
-    return (
+    // Portalled to body and raised above the mobile panel roots (`fixed inset-0
+    // z-[9999]` in CustomerDetails / TransactionListDetails). Rendered as a
+    // SIBLING of such a panel — as TransactionListDetails does — a z-50 root
+    // loses to z-[9999] and this form never appears in phone view. The spinner
+    // stays one step above the drawer so it can cover it.
+    return createPortal(
         <>
             {loading && !showSuccess && (
-                <div className="fixed inset-0 bg-black bg-opacity-70 z-[10000] flex items-center justify-center">
+                <div className="fixed inset-0 bg-black bg-opacity-70 z-[10020] flex items-center justify-center">
                     <div className={`rounded-lg p-8 flex flex-col items-center space-y-6 min-w-[320px] ${isDarkMode ? 'bg-gray-800' : 'bg-white'
                         }`}>
                         <Loader2
@@ -158,7 +164,7 @@ const TransactionRevertModal: React.FC<TransactionRevertModalProps> = ({
                 </div>
             )}
 
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-[10010]">
                 <div className={`h-full w-full max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
                     }`}>
                     {/* Header */}
@@ -314,7 +320,8 @@ const TransactionRevertModal: React.FC<TransactionRevertModalProps> = ({
                     </div>
                 </div>
             </div>
-        </>
+        </>,
+        document.body
     );
 };
 

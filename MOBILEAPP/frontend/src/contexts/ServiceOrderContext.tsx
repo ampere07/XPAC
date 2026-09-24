@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getServiceOrders, ServiceOrderData } from '../services/serviceOrderService';
-import { usePermissions } from '../hooks/usePermissions';
 
 interface ServiceOrder {
     id: string;
@@ -19,6 +18,8 @@ interface ServiceOrder {
     provider: string;
     affiliate: string;
     username: string;
+    /** From the account's job order — technical_details has no password column. */
+    pppoePassword: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -31,6 +32,11 @@ interface ServiceOrder {
     visitBy: string;
     visitWith: string;
     visitWithOther: string;
+    /**
+     * The team chosen in the Start Timer modal, in slot order. The edit form
+     * pre-fills Visit By / With / With (Other) from it.
+     */
+    technicians: string[] | null;
     visitRemarks: string;
     modifiedBy: string;
     modifiedDate: string;
@@ -60,15 +66,14 @@ interface ServiceOrder {
     city?: string;
     barangay?: string;
     referredBy?: string;
+    // The agent the stored referral names (the API sends the name in referredBy).
+    referredByAgentId?: number | null;
     start_time?: string | null;
     end_time?: string | null;
     setupImageUrl?: string;
     routerReadingImageUrl?: string;
     boxReadingImageUrl?: string;
     speedtestImageUrl?: string;
-    // Whether an administrator released this service order to the technician
-    // ahead of their queue. Locked (false) until they do.
-    technicianEnabled?: boolean;
 }
 
 interface ServiceOrderContextType {
@@ -99,6 +104,12 @@ export const useServiceOrderContext = () => {
 
 interface ServiceOrderProviderProps {
     children: ReactNode;
+    /**
+     * Whether to load the first page on mount. False for a user the API would
+     * not serve it to (see SHELL_PREFETCH_KEYS). An explicit refresh from a
+     * screen still fetches.
+     */
+    prefetch?: boolean;
 }
 
 const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
@@ -118,6 +129,8 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         provider: '',
         affiliate: order.group_name || '',
         username: order.username || '',
+        // Resolved by ServiceOrderApiController from technical_details.
+        pppoePassword: (order as any).pppoe_password || '',
         connectionType: order.connection_type || '',
         routerModemSN: order.router_modem_sn || '',
         lcp: order.lcp || '',
@@ -129,7 +142,8 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         visitStatus: order.visit_status || '',
         visitBy: order.visit_by_user || '',
         visitWith: order.visit_with || '',
-        visitWithOther: '',
+        visitWithOther: order.visit_with_other || '',
+        technicians: order.technicians ?? null,
         visitRemarks: order.visit_remarks || '',
         modifiedBy: order.updated_by_user || '',
         modifiedDate: order.updated_at || '',
@@ -159,24 +173,17 @@ const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
         city: order.city || '',
         barangay: order.barangay || '',
         referredBy: order.referred_by || '',
+        referredByAgentId: order.referred_by_agent_id ?? null,
         start_time: order.start_time || null,
         end_time: order.end_time || null,
         setupImageUrl: order.setup_image_url || '',
         routerReadingImageUrl: order.router_reading_image_url || '',
         boxReadingImageUrl: order.box_reading_image_url || '',
-        speedtestImageUrl: order.speedtest_image_url || '',
-        // Read straight off the column so the technician lock always reflects
-        // the database. MySQL hands tinyint back as 1/0 or "1"/"0".
-        technicianEnabled: (order as any).technician_enabled === true
-            || (order as any).technician_enabled === 1
-            || (order as any).technician_enabled === '1'
+        speedtestImageUrl: order.speedtest_image_url || ''
     };
 };
 
-export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ children }) => {
-    // Mounted for every role by Dashboard, but /service-orders is a staff collection.
-    // A customer session used to fetch it on mount and take a 403.
-    const { can, ready: permissionsReady } = usePermissions();
+export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ children, prefetch = true }) => {
     const [serviceOrders, setServiceOrders] = useState<ServiceOrder[]>([]);
     const ordersRef = React.useRef<ServiceOrder[]>([]);
     const fetchingRef = React.useRef<boolean>(false);
@@ -276,13 +283,11 @@ export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ chil
 
     // Initial fetch effect
     useEffect(() => {
-        // Wait for the keys to load, then only fetch for a user who may read service orders.
-        if (!permissionsReady || !can('service-order')) return;
-
+        if (!prefetch) return;
         if (ordersRef.current.length === 0 && !fetchingRef.current) {
             fetchServiceOrders(1, false, false);
         }
-    }, [fetchServiceOrders, permissionsReady, can]);
+    }, [fetchServiceOrders, prefetch]);
 
     return (
         <ServiceOrderContext.Provider

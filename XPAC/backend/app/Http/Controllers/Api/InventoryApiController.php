@@ -530,7 +530,7 @@ class InventoryApiController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'image' => 'required|image|max:10240', // Max 10MB
+                'image' => 'required|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240', // Max 10MB
                 'folder_name' => 'nullable|string|max:255'
             ]);
 

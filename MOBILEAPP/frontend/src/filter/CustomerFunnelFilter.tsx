@@ -1,41 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  Modal,
-  TouchableOpacity,
-  ScrollView,
-  TextInput,
-  ActivityIndicator,
-  Animated,
-  Dimensions,
-  Platform,
-} from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { X, ChevronLeft, ChevronRight, Search, Check, Calendar } from 'lucide-react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useState, useEffect } from 'react';
+import { X, ChevronLeft, ChevronRight, Search, Check } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { planService } from '../services/planService';
 import apiClient from '../config/api';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result
-    ? `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${opacity})`
-    : hex;
-};
-
-/** `YYYY-MM-DD` — the value shape the web `<input type="date">` stored. */
-const toIsoDay = (date: Date) => {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-};
-
-const parseIsoDay = (value: string) => {
-  if (!value) return new Date();
-  const parsed = new Date(`${value}T00:00:00`);
-  return isNaN(parsed.getTime()) ? new Date() : parsed;
+  return result ? `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${opacity})` : hex;
 };
 
 interface CustomerFunnelFilterProps {
@@ -124,21 +95,13 @@ const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
   isOpen,
   onClose,
   onApplyFilters,
-  currentFilters,
+  currentFilters
 }) => {
-  const isDarkMode = false;
-  const insets = useSafeAreaInsets();
-  const { width: screenWidth } = Dimensions.get('window');
-  const [rendered, setRendered] = useState(isOpen);
-  const slideX = useRef(new Animated.Value(screenWidth)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
-
+  const [isDarkMode, setIsDarkMode] = useState(localStorage.getItem('theme') === 'dark');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [selectedColumn, setSelectedColumn] = useState<Column | null>(null);
   const [filterValues, setFilterValues] = useState<FilterValues>({});
   const [searchTerm, setSearchTerm] = useState('');
-  const [loadingChecklist, setLoadingChecklist] = useState(false);
-  const [datePickerTarget, setDatePickerTarget] = useState<'from' | 'to' | null>(null);
 
   // Checklist data states
   const [plans, setPlans] = useState<string[]>([]);
@@ -157,556 +120,565 @@ const CustomerFunnelFilter: React.FC<CustomerFunnelFilterProps> = ({
   const [sessionStatuses, setSessionStatuses] = useState<string[]>([]);
   const [sessionGroups, setSessionGroups] = useState<string[]>([]);
   const [groupNames, setGroupNames] = useState<string[]>([]);
-  const [billingStatuses, setBillingStatuses] = useState<{ id: number; name: string }[]>([]);
+  const [billingStatuses, setBillingStatuses] = useState<{ id: number, name: string }[]>([]);
 
-  const primary = colorPalette?.primary || '#7c3aed';
-
-  useEffect(() => {
-    settingsColorPaletteService.getActive().then(setColorPalette).catch(() => { });
-  }, []);
-
-  // Slide the drawer in from the right on open, out to the right on close.
   useEffect(() => {
     if (isOpen) {
-      setRendered(true);
-      Animated.parallel([
-        Animated.timing(slideX, { toValue: 0, duration: 260, useNativeDriver: true }),
-        Animated.timing(backdropOpacity, { toValue: 0.4, duration: 260, useNativeDriver: true }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.timing(slideX, { toValue: screenWidth, duration: 220, useNativeDriver: true }),
-        Animated.timing(backdropOpacity, { toValue: 0, duration: 220, useNativeDriver: true }),
-      ]).start(({ finished }) => {
-        if (finished) setRendered(false);
-      });
-    }
-  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!isOpen) return;
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((saved) => {
-        if (saved) {
-          try { setFilterValues(JSON.parse(saved)); } catch { /* ignore */ }
-        } else if (currentFilters) {
-          setFilterValues(currentFilters);
+      const savedFilters = localStorage.getItem(STORAGE_KEY);
+      if (savedFilters) {
+        try {
+          setFilterValues(JSON.parse(savedFilters));
+        } catch (err) {
+          console.error('Failed to load saved filters:', err);
         }
-      })
-      .catch(() => {
-        if (currentFilters) setFilterValues(currentFilters);
-      });
-  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+      } else if (currentFilters) {
+        setFilterValues(currentFilters);
+      }
+    }
+  }, [isOpen, currentFilters]);
 
   useEffect(() => {
-    if (!isOpen) return;
-    setLoadingChecklist(true);
-    Promise.all([
-      planService.getAllPlans(),
-      apiClient.get<{ success: boolean; data: { barangays: string[]; cities: string[]; regions: string[] } }>(
-        '/lookup/customer-locations'
-      ),
-      apiClient.get<{
-        success: boolean;
-        data: {
-          lcp_names: string[];
-          nap_names: string[];
-          ports: string[];
-          vlans: string[];
-          lcpnaps: string[];
-          router_models: string[];
-          usage_types: string[];
-          connection_types: string[];
-          username_statuses: string[];
-          session_statuses: string[];
-          session_groups: string[];
-          group_names: string[];
-          billing_statuses: { id: number; name: string }[];
-        };
-      }>('/lookup/customers'),
-    ])
-      .then(([planData, locRes, custRes]) => {
-        if (planData) {
-          setPlans(
-            planData.map((p) => {
+    const observer = new MutationObserver(() => {
+      setIsDarkMode(localStorage.getItem('theme') === 'dark');
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const fetchColorPalette = async () => {
+      try {
+        const activePalette = await settingsColorPaletteService.getActive();
+        setColorPalette(activePalette);
+      } catch (err) {
+        console.error('Failed to fetch color palette:', err);
+      }
+    };
+    fetchColorPalette();
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      const fetchChecklistData = async () => {
+        try {
+          const [planData, locRes, custRes] = await Promise.all([
+            planService.getAllPlans(),
+            apiClient.get<{ success: boolean; data: { barangays: string[], cities: string[], regions: string[] } }>('/lookup/customer-locations'),
+            apiClient.get<{
+              success: boolean; data: {
+                lcp_names: string[],
+                nap_names: string[],
+                ports: string[],
+                vlans: string[],
+                lcpnaps: string[],
+                router_models: string[],
+                usage_types: string[],
+                connection_types: string[],
+                username_statuses: string[],
+                session_statuses: string[],
+                session_groups: string[],
+                group_names: string[],
+                billing_statuses: { id: number, name: string }[]
+              }
+            }>('/lookup/customers')
+          ]);
+
+          if (planData) {
+            const formattedPlans = planData.map(p => {
               const name = p.name || (p as any).plan_name || 'Unknown';
               const price = Math.floor(Number(p.price || 0));
               return `${name} ${price}`;
-            })
-          );
-        }
+            });
+            setPlans(formattedPlans);
+          }
 
-        const loc = (locRes as any).data;
-        if (loc?.success) {
-          setBarangays(loc.data.barangays || []);
-          setCities(loc.data.cities || []);
-          setRegions(loc.data.regions || []);
-        }
+          if (locRes.data.success) {
+            setBarangays(locRes.data.data.barangays);
+            setCities(locRes.data.data.cities);
+            setRegions(locRes.data.data.regions);
+          }
 
-        const cust = (custRes as any).data;
-        if (cust?.success) {
-          setLcpNames(cust.data.lcp_names || []);
-          setNapNames(cust.data.nap_names || []);
-          setPorts(cust.data.ports || []);
-          setVlans(cust.data.vlans || []);
-          setLcpnaps(cust.data.lcpnaps || []);
-          setRouterModels(cust.data.router_models || []);
-          setUsageTypes(cust.data.usage_types || []);
-          setConnectionTypes(cust.data.connection_types || []);
-          setUsernameStatuses(cust.data.username_statuses || []);
-          setSessionStatuses(cust.data.session_statuses || []);
-          setSessionGroups(cust.data.session_groups || []);
-          setGroupNames(cust.data.group_names || []);
-          setBillingStatuses(cust.data.billing_statuses || []);
+          if (custRes.data.success) {
+            setLcpNames(custRes.data.data.lcp_names);
+            setNapNames(custRes.data.data.nap_names);
+            setPorts(custRes.data.data.ports);
+            setVlans(custRes.data.data.vlans);
+            setLcpnaps(custRes.data.data.lcpnaps);
+            setRouterModels(custRes.data.data.router_models);
+            setUsageTypes(custRes.data.data.usage_types);
+            setConnectionTypes(custRes.data.data.connection_types);
+            setUsernameStatuses(custRes.data.data.username_statuses);
+            setSessionStatuses(custRes.data.data.session_statuses);
+            setSessionGroups(custRes.data.data.session_groups || []);
+            setGroupNames(custRes.data.data.group_names);
+            setBillingStatuses(custRes.data.data.billing_statuses);
+          }
+        } catch (err) {
+          console.error('Failed to fetch checklist data:', err);
         }
-      })
-      .catch((err) => console.error('Failed to fetch checklist data:', err))
-      .finally(() => setLoadingChecklist(false));
+      };
+      fetchChecklistData();
+    }
   }, [isOpen]);
 
-  const handleColumnClick = (col: Column) => {
-    setSelectedColumn(col);
+  const handleColumnClick = (column: Column) => {
+    setSelectedColumn(column);
     setSearchTerm('');
   };
 
   const handleBack = () => {
     setSelectedColumn(null);
     setSearchTerm('');
-    setDatePickerTarget(null);
   };
 
-  const handleApply = async () => {
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(filterValues));
-    } catch { /* ignore */ }
+  const handleApply = () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(filterValues));
     onApplyFilters(filterValues);
     onClose();
   };
 
-  const handleReset = async () => {
+  const handleReset = () => {
     setFilterValues({});
     setSelectedColumn(null);
-    try { await AsyncStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+    localStorage.removeItem(STORAGE_KEY);
   };
 
-  const isNumericType = (dt: string) => ['int', 'decimal', 'bigint'].includes(dt);
-  const isDateType = (dt: string) => ['date', 'datetime'].includes(dt);
+  const isNumericType = (dataType: string) => {
+    return ['int', 'decimal', 'bigint'].includes(dataType);
+  };
+
+  const isDateType = (dataType: string) => {
+    return ['date', 'datetime'].includes(dataType);
+  };
 
   const handleTextChange = (columnKey: string, value: string) => {
     if (value === '') {
-      const next = { ...filterValues };
-      delete next[columnKey];
-      setFilterValues(next);
+      const newFilters = { ...filterValues };
+      delete newFilters[columnKey];
+      setFilterValues(newFilters);
     } else {
-      setFilterValues((prev) => ({ ...prev, [columnKey]: { type: 'text', value } }));
+      setFilterValues(prev => ({
+        ...prev,
+        [columnKey]: {
+          type: 'text',
+          value
+        }
+      }));
     }
   };
 
   const handleRangeChange = (columnKey: string, field: 'from' | 'to', value: string) => {
-    setFilterValues((prev) => {
+    setFilterValues(prev => {
       const current = prev[columnKey] || { type: 'number' };
-      const next: any = { ...current, [field]: value };
-      if (!next.from && !next.to) {
-        const copy = { ...prev };
-        delete copy[columnKey];
-        return copy;
+      const next = { ...current, [field]: value };
+
+      if (next.from === '' && next.to === '') {
+        const newFilters = { ...prev };
+        delete newFilters[columnKey];
+        return newFilters;
       }
-      return { ...prev, [columnKey]: next };
+
+      return {
+        ...prev,
+        [columnKey]: next
+      };
     });
   };
 
   const handleDateChange = (columnKey: string, field: 'from' | 'to', value: string) => {
-    setFilterValues((prev) => {
+    setFilterValues(prev => {
       const current = prev[columnKey] || { type: 'date' };
-      const next: any = { ...current, [field]: value };
+      const next = { ...current, [field]: value };
+
       if (!next.from && !next.to) {
-        const copy = { ...prev };
-        delete copy[columnKey];
-        return copy;
+        const newFilters = { ...prev };
+        delete newFilters[columnKey];
+        return newFilters;
       }
-      return { ...prev, [columnKey]: next };
+
+      return {
+        ...prev,
+        [columnKey]: next
+      };
     });
   };
 
   const toggleOption = (columnKey: string, option: string | number) => {
-    setFilterValues((prev) => {
+    setFilterValues(prev => {
       const current = prev[columnKey] || { type: 'checklist', value: [] };
       const selectedOptions = ((current.value as (string | number)[]) || []).map(String);
       const optStr = String(option);
 
       const nextOptions = selectedOptions.includes(optStr)
-        ? selectedOptions.filter((o) => o !== optStr)
+        ? selectedOptions.filter(o => o !== optStr)
         : [...selectedOptions, optStr];
 
       if (nextOptions.length === 0) {
-        const copy = { ...prev };
-        delete copy[columnKey];
-        return copy;
+        const newFilters = { ...prev };
+        delete newFilters[columnKey];
+        return newFilters;
       }
 
-      return { ...prev, [columnKey]: { type: 'checklist', value: nextOptions } };
+      return {
+        ...prev,
+        [columnKey]: {
+          type: 'checklist',
+          value: nextOptions
+        }
+      };
     });
   };
 
-  const inputStyle = {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#111827',
-    backgroundColor: '#fff',
-  } as const;
-
-  const labelStyle = { fontSize: 14, fontWeight: '500' as const, color: '#374151', marginBottom: 8 };
-
   const renderFilterInput = () => {
     if (!selectedColumn) return null;
+
     const currentValue = filterValues[selectedColumn.key];
 
     if (selectedColumn.dataType === 'checklist') {
-      let options: { label: string; value: string | number }[] = [];
+      let options: { label: string, value: string | number }[] = [];
       if (selectedColumn.key === 'plan' || selectedColumn.key === 'desiredPlan') {
-        options = plans.map((p) => ({ label: p, value: p }));
+        options = plans.map(p => ({ label: p, value: p }));
       } else if (selectedColumn.key === 'barangay') {
-        options = barangays.map((b) => ({ label: b, value: b }));
+        options = barangays.map(b => ({ label: b, value: b }));
       } else if (selectedColumn.key === 'city') {
-        options = cities.map((c) => ({ label: c, value: c }));
+        options = cities.map(c => ({ label: c, value: c }));
       } else if (selectedColumn.key === 'region') {
-        options = regions.map((r) => ({ label: r, value: r }));
+        options = regions.map(r => ({ label: r, value: r }));
       } else if (selectedColumn.key === 'billingStatus') {
         if (billingStatuses.length > 0) {
-          options = billingStatuses.map((s) => ({ label: s.name, value: s.name.toLowerCase() }));
+          options = billingStatuses.map(s => ({
+            label: s.name,
+            value: s.name.toLowerCase()
+          }));
         } else {
           const statusList = ['Active', 'Blacklisted', 'Freeze', 'Inactive', 'Pullout', 'Service Account', 'VIP'];
-          options = statusList.map((s) => ({ label: s, value: s.toLowerCase() }));
+          options = statusList.map(s => ({ label: s, value: s.toLowerCase() }));
         }
       } else if (selectedColumn.key === 'lcp') {
-        options = lcpNames.map((o) => ({ label: o, value: o }));
+        options = lcpNames.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'nap') {
-        options = napNames.map((o) => ({ label: o, value: o }));
+        options = napNames.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'port') {
-        options = ports.map((o) => ({ label: o, value: o }));
+        options = ports.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'vlan') {
-        options = vlans.map((o) => ({ label: o, value: o }));
+        options = vlans.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'lcpnap') {
-        options = lcpnaps.map((o) => ({ label: o, value: o }));
+        options = lcpnaps.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'routerModel') {
-        options = routerModels.map((o) => ({ label: o, value: o }));
+        options = routerModels.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'usageType') {
-        options = usageTypes.map((o) => ({ label: o, value: o }));
+        options = usageTypes.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'connectionType') {
-        options = connectionTypes.map((o) => ({ label: o, value: o }));
+        options = connectionTypes.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'usernameStatus') {
-        options = usernameStatuses.map((o) => ({ label: o, value: o }));
+        options = usernameStatuses.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'groupName') {
-        options = groupNames.map((o) => ({ label: o, value: o }));
+        options = groupNames.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'sessionGroup') {
-        options = sessionGroups.map((o) => ({ label: o, value: o }));
+        options = sessionGroups.map(o => ({ label: o, value: o }));
       } else if (selectedColumn.key === 'onlineStatus') {
         const onlineStatusLabelMap: Record<string, string> = {
-          Disconnected: 'Disconnected',
-          Restricted: 'Restricted',
+          'Disconnected': 'Disconnected',
+          'Restricted': 'Restricted',
         };
-        options = sessionStatuses.map((o) => ({ label: onlineStatusLabelMap[o] || o, value: o }));
+        options = sessionStatuses.map(o => ({ label: onlineStatusLabelMap[o] || o, value: o }));
       } else if (selectedColumn.key === 'housingStatus') {
         options = [
           { label: 'Renter', value: 'renter' },
-          { label: 'Owner', value: 'owner' },
+          { label: 'Owner', value: 'owner' }
         ];
       }
 
-      const filteredOptions = options.filter((opt) =>
+      const filteredOptions = options.filter(opt =>
         opt.label.toLowerCase().includes(searchTerm.toLowerCase())
       );
-      const selectedValues = ((currentValue?.value as (string | number)[]) || []).map(String);
 
       return (
-        <View style={{ flex: 1 }}>
-          <View style={{ position: 'relative', marginBottom: 12 }}>
-            <View style={{ position: 'absolute', left: 12, top: 12, zIndex: 1 }}>
-              <Search size={16} color="#9ca3af" />
-            </View>
-            <TextInput
-              value={searchTerm}
-              onChangeText={setSearchTerm}
+        <div className="flex flex-col h-full overflow-hidden text-left">
+          <div className="relative mb-4">
+            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`} />
+            <input
+              type="text"
               placeholder="Search options..."
-              placeholderTextColor="#9ca3af"
-              style={[inputStyle, { paddingLeft: 36 }]}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className={`w-full pl-10 pr-4 py-2 rounded-lg border text-sm focus:outline-none transition-all ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-gray-50 border-gray-200 text-gray-900'
+                }`}
+              style={{
+                borderColor: 'transparent',
+              }}
+              onFocus={(e) => {
+                if (colorPalette?.primary) {
+                  e.currentTarget.style.borderColor = colorPalette.primary;
+                }
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = 'transparent';
+              }}
             />
-          </View>
-
-          {loadingChecklist ? (
-            <ActivityIndicator color={primary} style={{ marginTop: 24 }} />
-          ) : filteredOptions.length > 0 ? (
-            filteredOptions.map((option, idx) => {
-              const isSelected = selectedValues.includes(String(option.value));
-              return (
-                <TouchableOpacity
-                  key={`${option.value}-${idx}`}
-                  onPress={() => toggleOption(selectedColumn.key, option.value)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingHorizontal: 12,
-                    paddingVertical: 12,
-                    borderRadius: 8,
-                    marginBottom: 4,
-                    backgroundColor: isSelected ? hexToRgba(primary, 0.08) : 'transparent',
-                  }}
-                >
-                  <Text
-                    style={{ fontSize: 14, fontWeight: '500', color: isSelected ? primary : '#374151', flex: 1 }}
-                    numberOfLines={2}
+          </div>
+          <div className="flex-1 overflow-y-auto pr-2 space-y-1 custom-scrollbar">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((option, idx) => {
+                const isSelected = (currentValue?.value as (string | number)[])?.map(String).includes(String(option.value));
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => toggleOption(selectedColumn.key, option.value)}
+                    className={`w-full flex items-center justify-between p-3 rounded-xl transition-all ${isSelected
+                      ? (isDarkMode ? '' : '')
+                      : (isDarkMode ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-50 text-gray-700')
+                      }`}
+                    style={isSelected ? {
+                      backgroundColor: hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.1 : 0.05),
+                      color: colorPalette?.primary || '#7c3aed'
+                    } : {}}
                   >
-                    {option.label}
-                  </Text>
-                  {isSelected && <Check size={16} color={primary} />}
-                </TouchableOpacity>
-              );
-            })
-          ) : (
-            <Text style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center', paddingVertical: 32 }}>
-              No results found
-            </Text>
-          )}
-        </View>
+                    <span className="text-sm font-medium">{option.label}</span>
+                    {isSelected && <Check className="h-4 w-4" />}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="text-center py-8">
+                <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>No results found</p>
+              </div>
+            )}
+          </div>
+        </div>
       );
     }
 
     if (isNumericType(selectedColumn.dataType)) {
       return (
-        <View style={{ gap: 16 }}>
-          <View>
-            <Text style={labelStyle}>From</Text>
-            <TextInput
-              value={String(currentValue?.from ?? '')}
-              onChangeText={(v) => handleRangeChange(selectedColumn.key, 'from', v)}
-              keyboardType="numeric"
+        <div className="space-y-4 text-left">
+          <div>
+            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              From
+            </label>
+            <input
+              type="number"
+              value={currentValue?.from || ''}
+              onChange={(e) => handleRangeChange(selectedColumn.key, 'from', e.target.value)}
               placeholder="Minimum value"
-              placeholderTextColor="#9ca3af"
-              style={inputStyle}
+              className={`w-full px-3 py-2 rounded border ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-white border-gray-300 text-gray-900'
+                }`}
             />
-          </View>
-          <View>
-            <Text style={labelStyle}>To</Text>
-            <TextInput
-              value={String(currentValue?.to ?? '')}
-              onChangeText={(v) => handleRangeChange(selectedColumn.key, 'to', v)}
-              keyboardType="numeric"
+          </div>
+          <div>
+            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              To
+            </label>
+            <input
+              type="number"
+              value={currentValue?.to || ''}
+              onChange={(e) => handleRangeChange(selectedColumn.key, 'to', e.target.value)}
               placeholder="Maximum value"
-              placeholderTextColor="#9ca3af"
-              style={inputStyle}
+              className={`w-full px-3 py-2 rounded border ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-white border-gray-300 text-gray-900'
+                }`}
             />
-          </View>
-        </View>
+          </div>
+        </div>
       );
     }
 
     if (isDateType(selectedColumn.dataType)) {
-      const dateTrigger = (field: 'from' | 'to') => {
-        const value = String(currentValue?.[field] || '');
-        return (
-          <View>
-            <Text style={labelStyle}>{field === 'from' ? 'From' : 'To'}</Text>
-            <TouchableOpacity
-              onPress={() => setDatePickerTarget(field)}
-              style={[inputStyle, {
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                borderColor: value ? primary : '#d1d5db',
-              }]}
-            >
-              <Text style={{ fontSize: 14, color: value ? '#111827' : '#9ca3af' }}>{value || 'Select date'}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                {!!value && (
-                  <TouchableOpacity onPress={() => handleDateChange(selectedColumn.key, field, '')} hitSlop={8}>
-                    <X size={14} color="#9ca3af" />
-                  </TouchableOpacity>
-                )}
-                <Calendar size={16} color={value ? primary : '#9ca3af'} />
-              </View>
-            </TouchableOpacity>
-          </View>
-        );
-      };
-
       return (
-        <View style={{ gap: 16 }}>
-          {dateTrigger('from')}
-          {dateTrigger('to')}
-          {datePickerTarget && (
-            <DateTimePicker
-              value={parseIsoDay(String(currentValue?.[datePickerTarget] || ''))}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(event, date) => {
-                const target = datePickerTarget;
-                setDatePickerTarget(null);
-                if (event?.type !== 'set' || !date || !target) return;
-                handleDateChange(selectedColumn.key, target, toIsoDay(date));
-              }}
+        <div className="space-y-4 text-left">
+          <div>
+            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              From
+            </label>
+            <input
+              type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
+              value={currentValue?.from || ''}
+              onChange={(e) => handleDateChange(selectedColumn.key, 'from', e.target.value)}
+              className={`w-full px-3 py-2 rounded border ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-white border-gray-300 text-gray-900'
+                }`}
             />
-          )}
-        </View>
+          </div>
+          <div>
+            <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}>
+              To
+            </label>
+            <input
+              type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
+              value={currentValue?.to || ''}
+              onChange={(e) => handleDateChange(selectedColumn.key, 'to', e.target.value)}
+              className={`w-full px-3 py-2 rounded border ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-white border-gray-300 text-gray-900'
+                }`}
+            />
+          </div>
+        </div>
       );
     }
 
-    // Default: text
     return (
-      <View>
-        <Text style={labelStyle}>Search Value</Text>
-        <TextInput
+      <div className="text-left">
+        <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+          }`}>
+          Search Value
+        </label>
+        <input
+          type="text"
           value={typeof currentValue?.value === 'string' ? currentValue.value : ''}
-          onChangeText={(v) => handleTextChange(selectedColumn.key, v)}
+          onChange={(e) => handleTextChange(selectedColumn.key, e.target.value)}
           placeholder={`Enter ${selectedColumn.label.toLowerCase()}`}
-          placeholderTextColor="#9ca3af"
-          style={inputStyle}
+          className={`w-full px-3 py-2 rounded border ${isDarkMode
+            ? 'bg-gray-800 border-gray-700 text-white'
+            : 'bg-white border-gray-300 text-gray-900'
+            }`}
         />
-      </View>
+      </div>
     );
   };
 
-  const activeCount = Object.keys(filterValues).length;
+  if (!isOpen) return null;
 
   return (
-    <Modal visible={rendered} animationType="none" transparent onRequestClose={onClose}>
-      <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-end' }}>
-        <Animated.View
-          pointerEvents="none"
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000', opacity: backdropOpacity }}
+    <div className="fixed inset-0 z-[60] overflow-hidden text-left">
+      <div className="absolute inset-0 overflow-hidden">
+        <div
+          className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
+          onClick={onClose}
         />
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={onClose} />
 
-        <Animated.View
-          style={{
-            width: '92%',
-            maxWidth: 560,
-            height: '100%',
-            backgroundColor: '#fff',
-            transform: [{ translateX: slideX }],
-          }}
-        >
-          {/* Header */}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingHorizontal: 20,
-              paddingTop: 12,
-              paddingBottom: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: '#f3f4f6',
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-              {selectedColumn && (
-                <TouchableOpacity onPress={handleBack} style={{ padding: 6, borderRadius: 8, backgroundColor: '#f3f4f6' }}>
-                  <ChevronLeft size={18} color="#374151" />
-                </TouchableOpacity>
-              )}
-              <Text style={{ fontSize: 17, fontWeight: '700', color: '#111827', flex: 1 }} numberOfLines={1}>
-                {selectedColumn ? selectedColumn.label : 'Filters'}
-              </Text>
-              {!selectedColumn && activeCount > 0 && (
-                <View style={{ backgroundColor: hexToRgba(primary, 0.12), borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2 }}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: primary }}>{activeCount}</Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <X size={22} color="#4b5563" />
-            </TouchableOpacity>
-          </View>
+        <div className="fixed inset-y-0 right-0 max-w-full flex">
+          <div className={`w-screen max-w-md transform transition-transform duration-300 flex flex-col ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-gray-900 shadow-2xl'
+            }`}>
+            {/* Header */}
+            <div className={`px-6 py-5 flex items-center justify-between border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-100'
+              }`}>
+              <div className="flex items-center space-x-4">
+                {selectedColumn && (
+                  <button
+                    onClick={handleBack}
+                    className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                      }`}
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                )}
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight">
+                    {selectedColumn ? selectedColumn.label : 'Customer Filters'}
+                  </h2>
+                  {!selectedColumn && (
+                    <p className={`text-xs mt-0.5 font-medium ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                      Refine your customer results
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                  }`}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
-          {/* Content */}
-          <ScrollView style={{ flex: 1, paddingHorizontal: 20, paddingVertical: 16 }} keyboardShouldPersistTaps="handled">
-            {selectedColumn ? (
-              renderFilterInput()
-            ) : (
-              <View style={{ gap: 4 }}>
-                {[...allColumns]
-                  .sort((a, b) => a.label.localeCompare(b.label))
-                  .map((column) => {
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto px-6 py-6 scroll-smooth">
+              {selectedColumn ? (
+                renderFilterInput()
+              ) : (
+                <div className="space-y-1">
+                  {[...allColumns].sort((a, b) => a.label.localeCompare(b.label)).map((column) => {
                     const isActive = !!filterValues[column.key];
                     return (
-                      <TouchableOpacity
+                      <button
                         key={column.key}
-                        onPress={() => handleColumnClick(column)}
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          paddingHorizontal: 12,
-                          paddingVertical: 14,
-                          borderRadius: 10,
-                          borderWidth: 1,
-                          backgroundColor: isActive ? hexToRgba(primary, 0.05) : 'transparent',
-                          borderColor: isActive ? hexToRgba(primary, 0.15) : 'transparent',
-                        }}
+                        onClick={() => handleColumnClick(column)}
+                        className={`w-full group flex items-center justify-between p-4 rounded-2xl transition-all duration-200 ${isDarkMode
+                          ? 'hover:bg-gray-800'
+                          : 'hover:bg-gray-50 border border-transparent hover:border-gray-200'
+                          }`}
                       >
-                        <View style={{ flex: 1 }}>
-                          <Text
-                            style={{ fontSize: 14, fontWeight: '600', color: isActive ? primary : '#374151' }}
-                            numberOfLines={1}
-                          >
-                            {column.label}
-                          </Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <div className="flex items-center space-x-4">
+                          <div className="relative">
+                            <div className={`text-sm font-semibold transition-colors ${isActive ? '' : (isDarkMode ? 'text-gray-200' : 'text-gray-700')
+                              }`}
+                              style={isActive ? { color: colorPalette?.primary || '#7c3aed' } : {}}
+                            >
+                              {column.label}
+                            </div>
+                            {isActive && (
+                              <div
+                                className="absolute -left-3 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full"
+                                style={{
+                                  backgroundColor: colorPalette?.primary || '#7c3aed',
+                                  boxShadow: `0 0 8px ${hexToRgba(colorPalette?.primary || '#7c3aed', 0.6)}`
+                                }}
+                              />
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-3">
                           {isActive && (
-                            <View style={{ backgroundColor: hexToRgba(primary, 0.12), borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2 }}>
-                              <Text style={{ fontSize: 10, fontWeight: '700', color: primary }}>Active</Text>
-                            </View>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider`}
+                              style={{
+                                backgroundColor: hexToRgba(colorPalette?.primary || '#7c3aed', isDarkMode ? 0.2 : 0.1),
+                                color: colorPalette?.primary || '#7c3aed'
+                              }}
+                            >
+                              Active
+                            </span>
                           )}
-                          <ChevronRight size={16} color="#9ca3af" />
-                        </View>
-                      </TouchableOpacity>
+                          <ChevronRight className={`h-4 w-4 transition-transform group-hover:translate-x-0.5 ${isDarkMode ? 'text-gray-600' : 'text-gray-300'
+                            }`} />
+                        </div>
+                      </button>
                     );
                   })}
-              </View>
-            )}
-          </ScrollView>
+                </div>
+              )}
+            </div>
 
-          {/* Footer */}
-          <View
-            style={{
-              flexDirection: 'row',
-              gap: 12,
-              paddingHorizontal: 20,
-              paddingTop: 12,
-              paddingBottom: insets.bottom + 20,
-              borderTopWidth: 1,
-              borderTopColor: '#f3f4f6',
-            }}
-          >
-            <TouchableOpacity
-              onPress={handleReset}
-              style={{
-                flex: 1,
-                paddingVertical: 12,
-                borderRadius: 10,
-                borderWidth: 1,
-                borderColor: '#d1d5db',
-                alignItems: 'center',
-              }}
-            >
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>Reset</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleApply}
-              style={{ flex: 2, paddingVertical: 12, borderRadius: 10, backgroundColor: primary, alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Apply Filters</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
+            {/* Footer */}
+            <div className={`px-6 py-6 border-t ${isDarkMode ? 'border-gray-800 bg-gray-900/50' : 'border-gray-100 bg-gray-50/50'}`}>
+              <div className="flex space-x-3">
+                <button
+                  onClick={handleReset}
+                  className={`flex-1 px-4 py-3 rounded-2xl font-bold text-sm transition-all duration-200 ${isDarkMode
+                    ? 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                    : 'bg-white border border-gray-200 hover:border-gray-300 text-gray-600 shadow-sm'
+                    }`}
+                >
+                  Clear All
+                </button>
+                <button
+                  onClick={handleApply}
+                  className="flex-1 px-4 py-3 rounded-2xl font-bold text-sm text-white transition-all duration-200 active:scale-[0.98]"
+                  style={{
+                    backgroundColor: colorPalette?.primary || '#7c3aed',
+                    boxShadow: `0 4px 12px ${hexToRgba(colorPalette?.primary || '#7c3aed', 0.2)}`
+                  }}
+                >
+                  Apply Filters
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 };
 

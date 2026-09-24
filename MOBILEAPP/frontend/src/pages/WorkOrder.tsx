@@ -15,7 +15,7 @@ import {
   useWindowDimensions,
   DeviceEventEmitter
 } from 'react-native';
-import { Search, Plus, RefreshCw, Filter, Check, Download } from 'lucide-react-native';
+import { Search, Plus, RefreshCw, Filter, Check } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -23,14 +23,8 @@ import { useWorkOrderStore } from '../store/workOrderStore';
 import { WorkOrder } from '../types/workOrder';
 import WorkOrderDetails from '../components/WorkOrderDetails';
 import AssignWorkOrderModal from '../modals/AssignWorkOrderModal';
-import {
-  buildTechnicianLockedWorkOrderIds,
-  isTechnicianUser,
-  sortWorkOrdersForTechnician,
-  TECHNICIAN_LOCKED_MESSAGE
-} from '../utils/technicianWorkOrderAccess';
-import { exportToCSV } from '../utils/exportUtils';
-import { WORK_ORDER_EXPORT_COLUMNS, workOrderExportValue } from '../utils/exportColumns';
+import { useUserDirectory } from '../hooks/useUserDirectory';
+import { UserDirectory, resolveUserDisplayName } from '../utils/userDisplay';
 
 // --- Static Helpers & Components ---
 const ITEMS_PER_PAGE = 50;
@@ -69,32 +63,27 @@ const StatusText = React.memo(({ status }: { status?: string | null }) => {
 const WorkOrderCard = React.memo(({
   wo,
   onPress,
-  onLockedPress,
   isSelected,
-  isLocked,
-  formatDate
+  formatDate,
+  userDirectory
 }: {
   wo: WorkOrder;
   onPress: (wo: WorkOrder) => void;
-  onLockedPress: () => void;
   isSelected: boolean;
-  isLocked: boolean;
   formatDate: (d?: string) => string;
+  userDirectory: UserDirectory;
 }) => (
   <TouchableOpacity
-    // A locked card still answers a tap, with the reason it is locked, rather
-    // than looking broken.
-    onPress={() => (isLocked ? onLockedPress() : onPress(wo))}
+    onPress={() => onPress(wo)}
     style={[st.cardRow, {
-      backgroundColor: isLocked ? '#f9fafb' : (isSelected ? '#f3f4f6' : 'transparent'),
-      borderColor: '#e5e7eb',
-      opacity: isLocked ? 0.45 : 1
+      backgroundColor: isSelected ? '#f3f4f6' : 'transparent',
+      borderColor: '#e5e7eb'
     }]}
   >
     <View style={st.cardInner}>
       <View style={st.cardLeft}>
         <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
-          <Text style={[st.cardName, { color: isLocked ? '#6b7280' : '#111827', marginBottom: 0, flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
+          <Text style={[st.cardName, { color: '#111827', marginBottom: 0, flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
             {wo.instructions || 'No Instructions'}
           </Text>
           {isWorkStarted(wo) && (
@@ -104,19 +93,12 @@ const WorkOrderCard = React.memo(({
               </Text>
             </View>
           )}
-          {isLocked && (
-            <View style={{ backgroundColor: '#e5e7eb', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-              <Text style={{ color: '#4b5563', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase' }}>
-                Locked
-              </Text>
-            </View>
-          )}
         </View>
-        <Text style={[st.cardSub, { color: isLocked ? '#9ca3af' : '#4b5563' }]}>
+        <Text style={[st.cardSub, { color: '#4b5563' }]}>
           {formatDate(wo.requested_date)}
         </Text>
-        <Text style={[st.cardSub, { color: isLocked ? '#9ca3af' : '#6b7280', marginTop: 4, fontStyle: 'italic' }]}>
-          {wo.assign_to ? `Assigned to: ${wo.assign_to}` : 'Unassigned'}
+        <Text style={[st.cardSub, { color: '#6b7280', marginTop: 4, fontStyle: 'italic' }]}>
+          {wo.assign_to ? `Assigned to: ${resolveUserDisplayName(wo.assign_to, userDirectory, wo.assign_to)}` : 'Unassigned'}
         </Text>
       </View>
       <View style={st.cardRight}>
@@ -127,6 +109,7 @@ const WorkOrderCard = React.memo(({
 ));
 
 const WorkOrderPage: React.FC = () => {
+  const userDirectory = useUserDirectory();
   const isDarkMode = false; // Forced light mode as per user request
   const [searchQuery, setSearchQuery] = useState('');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
@@ -187,13 +170,6 @@ const WorkOrderPage: React.FC = () => {
     fetchWorkOrders(1, 1000, '', '');
   }, [fetchWorkOrders]);
 
-  /**
-   * Technicians only — narrower than the role check below, which also covers OSP
-   * and agents. The queue ordering and the lock are for the role that actually
-   * carries the work out.
-   */
-  const isTechnicianOnly = useMemo(() => isTechnicianUser(null, userRole), [userRole]);
-
   const filteredWorkOrders = useMemo(() => {
     let filtered = workOrders;
 
@@ -248,48 +224,16 @@ const WorkOrderPage: React.FC = () => {
       });
     }
 
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter((wo: WorkOrder) =>
-        (wo.instructions || '').toLowerCase().includes(query) ||
-        (wo.report_to || '').toLowerCase().includes(query) ||
-        (wo.assign_to || '').toLowerCase().includes(query) ||
-        (wo.requested_by || '').toLowerCase().includes(query)
-      );
-    }
+    if (!searchQuery) return filtered;
 
-    // Technicians read their list in the order they work it: In Progress oldest
-    // first, then other active work, with Done / Failed / On Hold at the end.
-    // Every other role keeps the API's requested_date-descending order.
-    if (isTechnicianOnly) {
-      return sortWorkOrdersForTechnician(filtered);
-    }
-
-    return filtered;
-  }, [workOrders, searchQuery, statusFilter, userRole, userEmail, userName, isTechnicianOnly]);
-
-  /** Exports what the list is showing — search and status filter already applied. */
-  const handleExport = useCallback(() => {
-    if (!filteredWorkOrders || filteredWorkOrders.length === 0) return;
-    exportToCSV('work_orders_export', WORK_ORDER_EXPORT_COLUMNS, filteredWorkOrders, workOrderExportValue);
-  }, [filteredWorkOrders]);
-
-  /**
-   * The work orders a technician may not open yet.
-   *
-   * Built from the whole store set, not the filtered/paginated view, so searching
-   * or filtering can never change whose turn it is. The util narrows to the
-   * records actually assigned to this technician — the work order API returns the
-   * whole organisation, unlike job and service orders.
-   */
-  const technicianLockedIds = useMemo(() => {
-    if (!isTechnicianOnly) return new Set<string>();
-    return buildTechnicianLockedWorkOrderIds(workOrders, { email: userEmail, fullName: userName });
-  }, [isTechnicianOnly, workOrders, userEmail, userName]);
-
-  const handleLockedPress = useCallback(() => {
-    Alert.alert('Job Order Locked', TECHNICIAN_LOCKED_MESSAGE, [{ text: 'OK' }]);
-  }, []);
+    const query = searchQuery.toLowerCase();
+    return filtered.filter((wo: WorkOrder) =>
+      (wo.instructions || '').toLowerCase().includes(query) ||
+      (wo.report_to || '').toLowerCase().includes(query) ||
+      (wo.assign_to || '').toLowerCase().includes(query) ||
+      (wo.requested_by || '').toLowerCase().includes(query)
+    );
+  }, [workOrders, searchQuery, statusFilter, userRole, userEmail, userName]);
 
   const totalPages = useMemo(() => Math.ceil(filteredWorkOrders.length / ITEMS_PER_PAGE), [filteredWorkOrders.length]);
 
@@ -426,22 +370,6 @@ const WorkOrderPage: React.FC = () => {
 
           <View style={st.actionsRow}>
             <TouchableOpacity
-              onPress={handleExport}
-              disabled={filteredWorkOrders.length === 0}
-              style={[st.actionIconBtn, {
-                backgroundColor: '#f3f4f6',
-                borderWidth: 1,
-                borderColor: '#d1d5db',
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 4,
-                opacity: filteredWorkOrders.length === 0 ? 0.4 : 1,
-              }]}
-            >
-              <Download size={20} color="#4b5563" />
-            </TouchableOpacity>
-
-            <TouchableOpacity
               onPress={() => setShowStatusModal(true)}
               style={[st.actionIconBtn, { 
                 backgroundColor: statusFilter !== 'all' ? (colorPalette?.primary || '#7c3aed') : '#f3f4f6',
@@ -500,10 +428,9 @@ const WorkOrderPage: React.FC = () => {
                   key={wo.id}
                   wo={wo}
                   onPress={handleCardPress}
-                  onLockedPress={handleLockedPress}
                   isSelected={selectedWorkOrder?.id === wo.id}
-                  isLocked={technicianLockedIds.has(String(wo.id))}
                   formatDate={formatDate}
+                  userDirectory={userDirectory}
                 />
               ))}
             </View>

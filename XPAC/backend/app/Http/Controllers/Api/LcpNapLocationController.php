@@ -12,20 +12,6 @@ use Illuminate\Support\Facades\Auth;
 
 class LcpNapLocationController extends Controller
 {
-    /**
-     * lcpnap names compared with spaces and dashes removed.
-     *
-     * technical_details.lcpnap is free text and has drifted: the same box is
-     * written "LP 146 NP 04" on most rows and "LP 146 - NP 04" on others, and
-     * matching it literally left the second kind attributed to no box at all —
-     * so its port read as free on a NAP that was in fact full.
-     *
-     * The ".2" that distinguishes a second box on the same LCP/NAP survives this,
-     * and no two of the lcpnap names collide once normalised, so it can only ever
-     * match rows that were always meant to match.
-     */
-    private const NORMALISED = "REPLACE(REPLACE(%s, ' ', ''), '-', '')";
-
     protected $googleDriveService;
 
     public function __construct(GoogleDriveService $googleDriveService)
@@ -33,110 +19,11 @@ class LcpNapLocationController extends Controller
         $this->googleDriveService = $googleDriveService;
     }
 
-    /** The PHP side of self::NORMALISED, for comparing against a bound value. */
-    private function normaliseLcpNapName(?string $name): string
-    {
-        return str_replace([' ', '-'], '', (string) $name);
-    }
-
-    /**
-     * The (lcp, nap) pairs that name more than one box, lowercased as "lcp|nap".
-     *
-     * A technical_details row carrying no lcpnap of its own can still be placed by
-     * its lcp and nap columns — but only when that pair names exactly one box.
-     * These pairs each have a second ".2" record and nothing on the row says which
-     * of the two it sits on, so they are left unattributed rather than counted
-     * against both.
-     */
-    private function ambiguousLcpNapPairs(): array
-    {
-        return \DB::table('lcpnap')
-            ->select('lcp', 'nap')
-            ->groupBy('lcp', 'nap')
-            ->havingRaw('COUNT(*) > 1')
-            ->get()
-            ->map(fn ($row) => strtolower(trim((string) $row->lcp) . '|' . trim((string) $row->nap)))
-            ->all();
-    }
-
-    /**
-     * Fold per-(lcpnap, lcp, nap) aggregates onto the boxes they belong to.
-     *
-     * Keyed by lcpnap id, with total_technical_details being the number of ports
-     * occupied — the figure every client renders as "used / total". Ports are a set
-     * rather than a sum because two groups can resolve to the same box, and because
-     * a port that has been re-let carries one technical_details row per subscriber
-     * that has ever sat on it; counting rows made a full 16-port NAP read "25 / 16".
-     *
-     * A group that resolves to no box is dropped, exactly as it was when the stats
-     * were keyed by the raw name.
-     */
-    private function attributeStatsToLocations($statGroups, $locations): \Illuminate\Support\Collection
-    {
-        // Ambiguity is read from the whole table, never from $locations: a search
-        // or an organization filter can hide the second box of a pair, and a pair
-        // that only looks unique would place rows on a box they may not be on.
-        $ambiguous = array_flip($this->ambiguousLcpNapPairs());
-
-        $byName = [];
-        $byPair = [];
-
-        foreach ($locations as $location) {
-            $byName[$this->normaliseLcpNapName($location->lcpnap_name)] = $location->id;
-
-            // Only a pair that names exactly one box can place a row carrying no name.
-            $pair = strtolower(trim((string) $location->lcp) . '|' . trim((string) $location->nap));
-            if (!isset($ambiguous[$pair])) {
-                $byPair[$pair] = $location->id;
-            }
-        }
-
-        $counters = ['active_sessions', 'restricted_sessions', 'offline_sessions',
-                     'disconnected_sessions', 'not_found_sessions', 'total_sessions'];
-        $stats = [];
-
-        foreach ($statGroups as $group) {
-            $name = trim((string) ($group->lcpnap ?? ''));
-            $pair = strtolower(trim((string) $group->lcp) . '|' . trim((string) $group->nap));
-
-            // A name that matches no box is left where it was rather than guessed at
-            // from lcp and nap — it could name either half of an ambiguous pair.
-            $locationId = $name !== ''
-                ? ($byName[$this->normaliseLcpNapName($name)] ?? null)
-                : ($byPair[$pair] ?? null);
-
-            if ($locationId === null) {
-                continue;
-            }
-
-            if (!isset($stats[$locationId])) {
-                $stats[$locationId] = array_fill_keys($counters, 0) + ['ports' => []];
-            }
-
-            foreach (explode(',', (string) $group->occupied_ports) as $port) {
-                if ($port !== '') {
-                    $stats[$locationId]['ports'][$port] = true;
-                }
-            }
-
-            foreach ($counters as $counter) {
-                $stats[$locationId][$counter] += (int) $group->{$counter};
-            }
-        }
-
-        return collect($stats)->map(function ($row) {
-            $row['total_technical_details'] = count($row['ports']);
-            unset($row['ports']);
-
-            return (object) $row;
-        });
-    }
-
     public function index(Request $request)
     {
         try {
-            $rawLimit = $request->get('limit');
-            $noLimit = $rawLimit === '0' || $rawLimit === 0 || $rawLimit === -1 || $rawLimit === '-1' || $rawLimit === 'all' || $request->boolean('no_limit') || $request->boolean('all');
+            $page = (int) $request->get('page', 1);
+            $limit = min((int) $request->get('limit', 1000), 1000);
             $search = $request->get('search', '');
             
             $query = LCPNAPLocation::query();
@@ -161,25 +48,6 @@ class LcpNapLocationController extends Controller
             }
             
             $totalItems = $query->count();
-
-            if ($noLimit) {
-                $lcpnapItems = $query->orderBy('lcpnap_name', 'asc')->get();
-                return response()->json([
-                    'success' => true,
-                    'data' => $lcpnapItems,
-                    'pagination' => [
-                        'current_page' => 1,
-                        'total_pages' => 1,
-                        'total_items' => $totalItems,
-                        'items_per_page' => $totalItems,
-                        'has_next' => false,
-                        'has_prev' => false
-                    ]
-                ]);
-            }
-            
-            $page = (int) $request->get('page', 1);
-            $limit = min((int) ($rawLimit ?: 1000), 1000);
             $totalPages = $limit > 0 ? ceil($totalItems / $limit) : 1;
             
             $lcpnapItems = $query->orderBy('id', 'desc')
@@ -218,7 +86,40 @@ class LcpNapLocationController extends Controller
             $search = $request->get('search');
             $currentUser = Auth::user();
             
-            // Step 1: Fetch the NAP boxes to be shown (lightweight query).
+            // Step 1: Pre-aggregate session counts from technical_details + online_status
+            $sessionStatsQuery = \DB::table('technical_details as td')
+                ->leftJoin('online_status as os', 'td.account_id', '=', 'os.account_id')
+                ->whereNotNull('td.lcpnap')
+                ->where('td.lcpnap', '!=', '');
+            
+            // Filter session stats by organization
+            if ($currentUser) {
+                if ($currentUser->organization_id) {
+                    $sessionStatsQuery->where('td.organization_id', $currentUser->organization_id);
+                } else {
+                    $sessionStatsQuery->whereNull('td.organization_id');
+                }
+            }
+
+            $sessionStatsQuery->groupBy('td.lcpnap')
+                ->select(
+                    'td.lcpnap',
+                    \DB::raw('COUNT(DISTINCT td.id) as total_technical_details'),
+                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Online" THEN os.id END) as active_sessions'),
+                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Restricted" THEN os.id END) as restricted_sessions'),
+                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Offline" THEN os.id END) as offline_sessions'),
+                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Disconnected" THEN os.id END) as disconnected_sessions'),
+                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Not Found" THEN os.id END) as not_found_sessions'),
+                    \DB::raw('COUNT(DISTINCT os.id) as total_sessions')
+                );
+
+            if (!empty($search)) {
+                $sessionStatsQuery->where('td.lcpnap', '=', $search);
+            }
+
+            $sessionStats = $sessionStatsQuery->get()->keyBy('lcpnap');
+
+            // Step 2: Fetch LCPNAP locations with coordinates (lightweight query)
             $lcpnapQuery = LCPNAPLocation::whereNotNull('coordinates')
                 ->where('coordinates', '!=', '');
 
@@ -235,50 +136,10 @@ class LcpNapLocationController extends Controller
                 $lcpnapQuery->where('lcpnap_name', '=', $search);
             }
 
-            $lcpnapLocations = $lcpnapQuery->orderBy('id', 'desc')->get();
-
-            // Step 2: Pre-aggregate per NAP box from technical_details + online_status.
-            //
-            // Grouped by the three columns that say which box a row is on, and
-            // resolved to the box itself afterwards in PHP. Matching in SQL instead
-            // would mean joining on REPLACE(...) — no index is usable through that,
-            // and it turned a 0.2s page into a 5s one.
-            $sessionStatsQuery = \DB::table('technical_details as td')
-                ->leftJoin('online_status as os', 'td.account_id', '=', 'os.account_id');
-
-            // Filter session stats by organization
-            if ($currentUser) {
-                if ($currentUser->organization_id) {
-                    $sessionStatsQuery->where('td.organization_id', $currentUser->organization_id);
-                } else {
-                    $sessionStatsQuery->whereNull('td.organization_id');
-                }
-            }
-
-            $statGroups = $sessionStatsQuery->groupBy('td.lcpnap', 'td.lcp', 'td.nap')
-                ->select(
-                    'td.lcpnap',
-                    'td.lcp',
-                    'td.nap',
-                    // The ports themselves, not a count: two groups can resolve to the
-                    // same box ("LP 146 NP 04" and "LP 146 - NP 04"), and their ports
-                    // have to be deduplicated across the pair, not added up. Written
-                    // "P01" and occasionally "P 01", so carried as the number it is.
-                    \DB::raw("GROUP_CONCAT(DISTINCT CASE WHEN COALESCE(td.port, '') <> '' THEN CAST(REPLACE(REPLACE(UPPER(td.port), ' ', ''), 'P', '') AS UNSIGNED) END) as occupied_ports"),
-                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Online" THEN os.id END) as active_sessions'),
-                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Restricted" THEN os.id END) as restricted_sessions'),
-                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Offline" THEN os.id END) as offline_sessions'),
-                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Disconnected" THEN os.id END) as disconnected_sessions'),
-                    \DB::raw('COUNT(DISTINCT CASE WHEN os.session_status = "Not Found" THEN os.id END) as not_found_sessions'),
-                    \DB::raw('COUNT(DISTINCT os.id) as total_sessions')
-                )
-                ->get();
-
-            $sessionStats = $this->attributeStatsToLocations($statGroups, $lcpnapLocations);
-
-            $lcpnapLocations = $lcpnapLocations
+            $lcpnapLocations = $lcpnapQuery->orderBy('id', 'desc')
+                ->get()
                 ->map(function($item) use ($sessionStats) {
-                    $stats = $sessionStats->get($item->id);
+                    $stats = $sessionStats->get($item->lcpnap_name);
 
                     return [
                         'id' => $item->id,
@@ -343,9 +204,9 @@ class LcpNapLocationController extends Controller
                 'nap_id' => 'nullable|string|max:255',
                 'port_total' => 'required|integer|min:1',
                 'coordinates' => 'nullable|string|max:255',
-                'reading_image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
-                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
-                'image_2' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
+                'reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image_2' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'modified_by' => 'nullable|string|max:255',
                 'organization_id' => 'nullable|integer',
                 'lcp_name' => 'nullable|string|max:255',
@@ -503,9 +364,9 @@ class LcpNapLocationController extends Controller
                 'nap_id' => 'nullable|string|max:255',
                 'port_total' => 'required|integer|min:1',
                 'coordinates' => 'nullable|string|max:255',
-                'reading_image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
-                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
-                'image_2' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:10240',
+                'reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'image_2' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'modified_by' => 'nullable|string|max:255',
                 'organization_id' => 'nullable|integer',
                 'lcp_name' => 'nullable|string|max:255',
@@ -782,38 +643,13 @@ class LcpNapLocationController extends Controller
             }
 
             $lcpnap = $query->findOrFail($id);
-
-            // The panel derives the free ports from this list, so a subscriber the
-            // query fails to return reads as an empty port. Matched the same way
-            // the usage count is: on the normalised name, falling back to lcp+nap
-            // for a row that carries no name — but only when that pair names this
-            // box alone, since otherwise the row could belong to either.
-            $normalisedName = $this->normaliseLcpNapName($lcpnap->lcpnap_name);
-            $pairNamesOneBox = \DB::table('lcpnap')
-                ->where('lcp', $lcpnap->lcp)
-                ->where('nap', $lcpnap->nap)
-                ->count() === 1;
-
+            
             $customerQuery = \DB::table('technical_details as td')
                 ->join('billing_accounts as ba', 'td.account_id', '=', 'ba.id')
                 ->join('customers as c', 'ba.customer_id', '=', 'c.id')
                 ->leftJoin('online_status as os', 'td.account_id', '=', 'os.account_id')
-                // Billing status decides whether this customer still occupies the port:
-                // once pulled out, the port is free for someone else.
-                ->leftJoin('billing_status as bs', 'ba.billing_status_id', '=', 'bs.id')
-                ->where(function ($match) use ($normalisedName, $pairNamesOneBox, $lcpnap) {
-                    $tdName = sprintf(self::NORMALISED, 'td.lcpnap');
-                    $match->whereRaw("COALESCE(td.lcpnap, '') <> '' AND {$tdName} = ?", [$normalisedName]);
-
-                    if ($pairNamesOneBox) {
-                        $match->orWhere(function ($fallback) use ($lcpnap) {
-                            $fallback->whereRaw("COALESCE(td.lcpnap, '') = ''")
-                                ->where('td.lcp', '=', $lcpnap->lcp)
-                                ->where('td.nap', '=', $lcpnap->nap);
-                        });
-                    }
-                });
-
+                ->where('td.lcpnap', '=', $lcpnap->lcpnap_name);
+            
             if ($currentUser) {
                 if ($currentUser->organization_id) {
                     $customerQuery->where('td.organization_id', $currentUser->organization_id);
@@ -827,9 +663,7 @@ class LcpNapLocationController extends Controller
                     'ba.account_no',
                     \DB::raw("TRIM(CONCAT_WS(' ', c.first_name, c.middle_initial, c.last_name)) as full_name"),
                     'td.port',
-                    'os.session_status as status',
-                    'ba.billing_status_id',
-                    'bs.status_name as billing_status'
+                    'os.session_status as status'
                 )
                 ->get();
 

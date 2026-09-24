@@ -21,8 +21,8 @@ const PORT = config.port || 6001;
 const apps = config['appManager.array.apps'] || [];
 const app = apps[0] || {};
 const APP_ID = app.id || '1000001';
-const APP_KEY = app.key || '8ctWR5PdV1dgM5h6RTGioI8k1hPbl8ImM3P6K3cne5v';
-const APP_SECRET = app.secret || 'KsCIAKjsPEWMDj2vWCWs7qYwkXZBUugVfcRjZyPRhJo';
+const APP_KEY = app.key || '8a84OUseLCGQAtaEeANi04muzz1HYsjfaYsz3d6KMAK';
+const APP_SECRET = app.secret || 'szxUAz9MQ5hTRAIC7MJfI4PfoghnK5LmQE9hoyuLIFt';
 
 // Channel subscriptions: { channelName: Set<ws> }
 const channels = {};
@@ -210,12 +210,12 @@ wss.on('connection', (ws, request) => {
 
                     // Prepare subscription data
                     let subscriptionData = '{}';
-                    
+
                     // For presence channels, we must return a presence object
                     if (channelName.startsWith('presence-')) {
                         const memberIds = [];
                         const membersHash = {};
-                        
+
                         // Collect current members in this channel
                         channels[channelName].forEach(client => {
                             const id = client._socketId || 'unknown';

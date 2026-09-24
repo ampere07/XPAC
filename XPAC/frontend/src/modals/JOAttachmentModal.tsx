@@ -117,7 +117,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
         routerReading: File | null;
         portLabel: File | null;
         houseFrontImage: File | null;
-        clientTagging: File | null;
     }>({
         setupImage: null,
         speedTestImage: null,
@@ -126,7 +125,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
         routerReading: null,
         portLabel: null,
         houseFrontImage: null,
-        clientTagging: null,
     });
 
     const [previews, setPreviews] = useState<{ [key: string]: string | null }>({
@@ -137,7 +135,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
         routerReading: null,
         portLabel: null,
         houseFrontImage: null,
-        clientTagging: null,
     });
 
     useEffect(() => {
@@ -197,7 +194,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 routerReading: convertGoogleDriveUrl(jobOrderData.router_reading_image_url || jobOrderData.Router_Reading_Image_URL),
                 portLabel: convertGoogleDriveUrl(jobOrderData.port_label_image_url || jobOrderData.Port_Label_Image_URL),
                 houseFrontImage: convertGoogleDriveUrl(jobOrderData.house_front_image_url || jobOrderData.house_front_picture_url || jobOrderData.houseFrontPicture || jobOrderData.House_Front_Image_URL),
-                clientTagging: convertGoogleDriveUrl(jobOrderData.client_tagging_url || jobOrderData.Client_Tagging_URL),
             });
         } else if (!isOpen) {
             // Reset
@@ -209,7 +205,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 routerReading: null,
                 portLabel: null,
                 houseFrontImage: null,
-                clientTagging: null,
             });
             setPreviews({
                 setupImage: null,
@@ -219,7 +214,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 routerReading: null,
                 portLabel: null,
                 houseFrontImage: null,
-                clientTagging: null,
             });
         }
     }, [isOpen, jobOrderData]);
@@ -286,8 +280,7 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                     boxReadingImage: 'box_reading_image',
                     routerReading: 'router_reading_image',
                     portLabel: 'port_label_image',
-                    houseFrontImage: 'house_front_image',
-                    clientTagging: 'client_tagging_image'
+                    houseFrontImage: 'house_front_image'
                 };
                 imageFormData.append(backendKeyMap[key] || key, file, file.name);
                 hasFiles = true;
@@ -394,7 +387,6 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 <ImageUploadField label="Box Reading" field="boxReadingImage" preview={previews.boxReadingImage} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                 <ImageUploadField label="Router Reading" field="routerReading" preview={previews.routerReading} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
                 <ImageUploadField label="Port Label" field="portLabel" preview={previews.portLabel} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
-                <ImageUploadField label="Client Tagging" field="clientTagging" preview={previews.clientTagging} isDarkMode={isDarkMode} handleFileChange={handleFileChange} clearFile={clearFile} />
             </div>
 
             {/* Hint for mobile users */}

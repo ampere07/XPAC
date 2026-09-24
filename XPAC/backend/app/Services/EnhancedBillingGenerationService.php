@@ -60,6 +60,37 @@ use Carbon\Carbon;
 class EnhancedBillingGenerationService
 {
     protected const VAT_RATE = 0.12;
+
+    /** Resolved VAT rate for this instance (billing_config lookup performed once). */
+    private ?float $resolvedVatRate = null;
+
+    /**
+     * VAT rate to apply during bill generation.
+     *
+     * Reads billing_config.vat_rate (stored as a fraction, e.g. 0.12 = 12%) and falls back to the
+     * historical default (self::VAT_RATE) when no valid rate is configured, so behaviour is
+     * unchanged for installs that never set one. Resolved once per instance to avoid a per-account
+     * query during a batch run.
+     */
+    protected function getVatRate(): float
+    {
+        if ($this->resolvedVatRate !== null) {
+            return $this->resolvedVatRate;
+        }
+
+        try {
+            $configured = \App\Models\BillingConfig::first()?->vat_rate;
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVatRate = (is_numeric($configured) && (float) $configured >= 0)
+            ? (float) $configured
+            : self::VAT_RATE;
+
+        return $this->resolvedVatRate;
+    }
+
     protected const DAYS_IN_MONTH = 30;
     protected const DAYS_UNTIL_DUE = 7;
     protected const DAYS_UNTIL_DC_NOTICE = 4;
@@ -146,7 +177,20 @@ class EnhancedBillingGenerationService
         ])
             ->where('billing_status_id', 1)
             ->whereNotNull('date_installed')
-            ->whereNotNull('account_no');
+            ->whereNotNull('account_no')
+            // Prepaid accounts are not billed on the fixed billing-day cadence — they receive no
+            // recurring invoice at all, because a prepaid period is paid for at checkout. Mirrors
+            // the identical exclusion in EnhancedBillingGenerationServiceWithNotifications, which
+            // is what the nightly cron runs; this class is still reachable from the
+            // /billing-generation/trigger-scheduled and debug routes, and without this a prepaid
+            // customer invoked through one of those would be billed twice over.
+            //
+            // Alias list, not a single '!=': a row still spelled 'Pre Paid' must stay excluded.
+            // NULL generation_type is legacy and bills as postpaid.
+            ->where(function ($q) {
+                $q->whereNotIn('generation_type', BillingAccount::PREPAID_ALIASES)
+                  ->orWhereNull('generation_type');
+            });
 
         if ($billingDay === self::END_OF_MONTH_BILLING) {
             $query->where('billing_day', self::END_OF_MONTH_BILLING);
@@ -274,8 +318,9 @@ class EnhancedBillingGenerationService
             $dueDate = $adjustedDate->copy()->addDays(self::DAYS_UNTIL_DUE);
 
             $prorateAmount = $this->calculateProrateAmount($account, $plan->price, $adjustedDate);
-            $monthlyFeeGross = $prorateAmount / (1 + self::VAT_RATE);
-            $vat = $monthlyFeeGross * self::VAT_RATE;
+            $vatRate = $this->getVatRate();
+            $monthlyFeeGross = $prorateAmount / (1 + $vatRate);
+            $vat = $monthlyFeeGross * $vatRate;
             $monthlyServiceFee = $prorateAmount - $vat;
 
             $invoiceId = $this->generateInvoiceId($statementDate);
@@ -374,11 +419,14 @@ class EnhancedBillingGenerationService
             
             $othersBasicCharges = 0;
 
-            $totalAmount = $prorateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
-            
-            if ($account->account_balance < 0) {
-                $totalAmount += $account->account_balance;
-            }
+            $periodCharges = $prorateAmount + $charges['staggered_install_fees'] + $charges['service_fees'] - $charges['rebates'] - $charges['discounts'] - $charges['advanced_payments'];
+
+            $priorBalance = round((float) $account->account_balance, 2);
+
+            // An advance payment sits on the account as a negative (credit) balance. It is netted
+            // into THIS invoice's total so the customer sees the credit applied, which means it must
+            // not be folded into the account balance again below — that would spend it twice.
+            $totalAmount = $priorBalance < 0 ? $periodCharges + $priorBalance : $periodCharges;
 
             $invoice = Invoice::create([
                 'account_no' => $account->account_no,
@@ -401,22 +449,24 @@ class EnhancedBillingGenerationService
 
             $appliedDiscounts = $charges['discounts'];
             
-            $newBalance = $account->account_balance > 0 
-                ? $totalAmount + $account->account_balance 
-                : $totalAmount;
+            // Always accumulate onto the running ledger — never assign the invoice total over it.
+            // Assigning is what wiped advance credits: a -5,000.00 credit was replaced by the new
+            // invoice total instead of absorbing it. Adding this period's charges to a negative
+            // balance nets it down toward zero and carries any remaining credit forward.
+            $newBalance = round($priorBalance + $periodCharges, 2);
 
             $account->update([
-                'account_balance' => round($newBalance, 2),
+                'account_balance' => $newBalance,
                 'balance_update_date' => $invoiceDate
             ]);
-            
+
             Log::info('Invoice created with discount applied to balance', [
                 'account_no' => $account->account_no,
                 'invoice_balance' => $prorateAmount,
                 'others_basic_charges' => $othersBasicCharges,
                 'total_amount' => $totalAmount,
                 'discounts_applied' => $appliedDiscounts,
-                'previous_balance' => $account->account_balance,
+                'previous_balance' => $priorBalance,
                 'new_balance' => $newBalance,
                 'note' => 'Discount already included in others_basic_charges calculation'
             ]);

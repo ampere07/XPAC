@@ -28,21 +28,95 @@ use Illuminate\Support\Facades\Hash;
 use App\Services\GoogleDriveService;
 use App\Services\PppoeUsernameService;
 use App\Services\RadiusServerResolver;
-use App\Services\RouterosApiService;
+use App\Services\VisitTimerResetService;
 use App\Models\RadiusConfig;
 use App\Models\ActivityLog;
 use App\Events\JobOrderViewingUpdate;
 
 class JobOrderController extends Controller
 {
+    /**
+     * Fallback VIP billing status id.
+     *
+     * Matches the hard-coded value in vip:check-expiration, CustomerDetailUpdateController and
+     * EnhancedBillingGenerationServiceWithNotifications. Used only when the billing_status table
+     * cannot be read or has no row named 'VIP'.
+     */
+    private const BILLING_STATUS_VIP_FALLBACK = 7;
+
+    /** Resolved VIP billing status id, looked up once per request. */
+    private ?int $resolvedVipStatusId = null;
+
+    /**
+     * The billing_status id that means "VIP".
+     *
+     * Resolved by name so a reordered status table cannot silently break VIP approval, with the
+     * long-standing id as the fallback. Same resolution the rest of the app uses.
+     */
     /** Is this account an agent, whose job orders are their own referrals? */
     private function isAgentUser($user): bool
     {
-        if ((int) ($user->role_id ?? 0) === \App\Models\Role::AGENT) {
-            return true;
+        return \App\Support\AgentAccess::isAgent($user)
+            || strtolower(trim((string) ($user->role->role_name ?? ''))) === 'agent';
+    }
+
+    private function getVipBillingStatusId(): int
+    {
+        if ($this->resolvedVipStatusId !== null) {
+            return $this->resolvedVipStatusId;
         }
 
-        return strtolower(trim((string) ($user->role->role_name ?? ''))) === 'agent';
+        try {
+            $configured = DB::table('billing_status')->where('status_name', 'VIP')->value('id');
+        } catch (\Throwable $e) {
+            $configured = null;
+        }
+
+        $this->resolvedVipStatusId = (int) ($configured ?: self::BILLING_STATUS_VIP_FALLBACK);
+
+        return $this->resolvedVipStatusId;
+    }
+
+    /**
+     * Record that a VIP is actually in service, once RADIUS has confirmed it.
+     *
+     * Every PPPoE account is provisioned restricted and says so in three places — the job order,
+     * the technical details copied from it at approval, and the online-status row. Moving the
+     * RADIUS user onto the plan group changes none of them: ManualRadiusOperationsService writes
+     * the billing status and nothing else. A VIP therefore came out of a successful approval with
+     * full service and the word "Restricted" on the job order list, the customer list, the details
+     * panel, the invoice and the statement — every screen an operator would check to see whether
+     * the VIP had worked, saying it had not.
+     *
+     * Called only after reconnectUser() reports success, so these columns describe what RADIUS
+     * actually did. A queued/failed reconnect deliberately leaves them reading Restricted, which
+     * is then the truth and the thing worth chasing.
+     *
+     * Best-effort: the approval is long committed and a bookkeeping write must not surface as a
+     * failed approval. session_status is advisory in any case — RadiusStatusSyncService overwrites
+     * it from the live session on its next pass.
+     */
+    private function markVipInService(JobOrder $jobOrder, TechnicalDetail $technicalDetail, BillingAccount $billingAccount): void
+    {
+        try {
+            $jobOrder->update(['username_status' => JobOrder::USERNAME_STATUS_ACTIVE]);
+            $technicalDetail->update(['username_status' => JobOrder::USERNAME_STATUS_ACTIVE]);
+
+            OnlineStatus::where('account_id', $billingAccount->id)
+                ->update(['session_status' => 'Online']);
+
+            \Log::info('VIP marked in service after a confirmed RADIUS reconnect', [
+                'job_order_id' => $jobOrder->id,
+                'account_no' => $billingAccount->account_no,
+                'username_status' => JobOrder::USERNAME_STATUS_ACTIVE,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('VIP is in service on RADIUS but its status columns could not be updated', [
+                'job_order_id' => $jobOrder->id,
+                'account_no' => $billingAccount->account_no,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     public function index(Request $request): JsonResponse
@@ -70,12 +144,6 @@ class JobOrderController extends Controller
                 } else {
                     $query->whereNull('organization_id');
                 }
-            }
-            
-            if ($request->has('assigned_email')) {
-                $assignedEmail = $request->query('assigned_email');
-                \Log::info('Filtering job orders by assigned_email: ' . $assignedEmail);
-                $query->where('assigned_email', $assignedEmail);
             }
 
             // An agent asks for their own referrals, so the page is narrowed to
@@ -117,6 +185,12 @@ class JobOrderController extends Controller
                               ->orWhereHas('billingAccount.customer', $referralMatch);
                     });
                 }
+            }
+            
+            if ($request->has('assigned_email')) {
+                $assignedEmail = $request->query('assigned_email');
+                \Log::info('Filtering job orders by assigned_email: ' . $assignedEmail);
+                $query->where('assigned_email', $assignedEmail);
             }
             
             if ($request->has('user_role') && strtolower($request->query('user_role')) === 'technician') {
@@ -194,7 +268,6 @@ class JobOrderController extends Controller
                         'start_time' => $jobOrder->start_time,
                         'end_time' => $jobOrder->end_time,
                         'technicians' => $jobOrder->technicians,
-                        'technician_enabled' => (bool) $jobOrder->technician_enabled,
                     ];
                 });
 
@@ -233,6 +306,22 @@ class JobOrderController extends Controller
                     'Timestamp' => $jobOrder->timestamp ? $jobOrder->timestamp->format('Y-m-d H:i:s') : null,
                     'Installation_Fee' => $jobOrder->installation_fee,
                     'Billing_Day' => $jobOrder->billing_day,
+                    // This response is a hand-built whitelist, not the model, so every billing
+                    // field the Job Order details panel renders has to be listed here explicitly
+                    // — anything omitted silently renders as blank.
+                    'generation_type' => $jobOrder->generation_type,
+                    'vat_type' => $jobOrder->vat_type,
+                    'vat_enabled' => $jobOrder->vat_enabled,
+                    'withholding_enabled' => $jobOrder->withholding_enabled,
+                    'withholding_percentage' => $jobOrder->withholding_percentage,
+                    'vip_enabled' => $jobOrder->vip_enabled,
+                    'vip_expiration' => $jobOrder->vip_expiration,
+                    // job_orders has no prepaid column of its own — the expiry lives on the
+                    // linked billing account, which is already eager-loaded, so no extra query.
+                    // Needed by the Prepaid Expiration funnel filter on the Job Order list.
+                    'prepaid_expires_at' => $jobOrder->billingAccount && $jobOrder->billingAccount->prepaid_expires_at
+                        ? $jobOrder->billingAccount->prepaid_expires_at->format('Y-m-d H:i:s')
+                        : null,
                     'Onsite_Status' => $jobOrder->onsite_status,
                     'Status' => $jobOrder->status,
                     'status' => $jobOrder->status,
@@ -256,9 +345,6 @@ class JobOrderController extends Controller
                     'start_time' => $jobOrder->start_time,
                     'end_time' => $jobOrder->end_time,
                     'technicians' => $jobOrder->technicians,
-                    // Drives the technician queue lock on both clients: the list
-                    // greys out newer job orders unless this says otherwise.
-                    'technician_enabled' => (bool) $jobOrder->technician_enabled,
                     'usage_type' => $jobOrder->usage_type,
                     'connection_type' => $jobOrder->connection_type,
                     'router_model' => $jobOrder->router_model,
@@ -287,7 +373,7 @@ class JobOrderController extends Controller
                     'client_tagging_url' => $jobOrder->client_tagging_url,
                     'proof_image_url' => $jobOrder->proof_image_url,
                     'installation_landmark' => $jobOrder->installation_landmark,
-                    
+            
                     'created_at' => $jobOrder->created_at ? $jobOrder->created_at->format('Y-m-d H:i:s') : null,
                     'updated_at' => $jobOrder->updated_at ? $jobOrder->updated_at->format('Y-m-d H:i:s') : null,
                     'created_by_user_email' => $jobOrder->created_by_user_email,
@@ -327,7 +413,7 @@ class JobOrderController extends Controller
                         $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
                     ),
                     'Referred_By_Raw' => $application ? $application->referred_by : ($customer ? $customer->referred_by : null),
-                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentId(
+                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent(
                         $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
                     ),
                     'Billing_Status' => $jobOrder->billing_status,
@@ -357,6 +443,29 @@ class JobOrderController extends Controller
             ], 500);
         }
     }
+    /**
+     * VAT and withholding do not apply to a VIP job order. The JO Assign Form disables both
+     * checkboxes when VIP is ticked; this enforces the same rule for anything posting to the API
+     * directly, so a stored job order — and the billing account approval copies it to — can never
+     * hold a contradictory combination.
+     *
+     * Only touches the payload when VIP is explicitly being turned on, so a partial update that
+     * never mentions vip_enabled is left alone.
+     */
+    private function normalizeVipBillingFlags(array $data): array
+    {
+        if (empty($data['vip_enabled'])) {
+            return $data;
+        }
+
+        $data['vat_enabled'] = false;
+        $data['vat_type'] = 'No Vat';
+        $data['withholding_enabled'] = false;
+        $data['withholding_percentage'] = null;
+
+        return $data;
+    }
+
     public function store(Request $request): JsonResponse
     {
         try {
@@ -371,6 +480,24 @@ class JobOrderController extends Controller
                 'installation_fee' => 'nullable|numeric|min:0',
                 'billing_day' => 'nullable|integer|min:0|max:31',
                 'billing_status' => 'nullable|string|max:255',
+                // 'Prepaid'/'Postpaid' are canonical. The other spellings are accepted because
+                // Laravel's `in` rule is case- AND whitespace-sensitive, and production data shows
+                // older builds posted 'PrePaid' and 'Pre Paid' — rejecting those would 422 a job
+                // order assignment rather than just storing a non-canonical value.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid|max:100',
+                // Legacy free-text VAT mode. Still accepted (and still written by the current
+                // form) so older clients and the detail/export screens keep working, but
+                // vat_enabled below is what billing generation actually reads.
+                'vat_type' => 'nullable|string|in:Vat Included,Excluded Vat,No Vat|max:100',
+                'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
+                // VIP is the existing billing status, captured here so approval can create the
+                // account as VIP directly. Mutually exclusive with VAT and withholding — see the
+                // normalisation below.
+                'vip_enabled' => 'nullable|boolean',
+                'vip_expiration' => 'nullable|date',
                 'onsite_status' => 'nullable|string|max:255',
                 'assigned_email' => 'nullable|email|max:255',
                 'onsite_remarks' => 'nullable|string',
@@ -433,7 +560,18 @@ class JobOrderController extends Controller
             if (!isset($data['onsite_status'])) {
                 $data['onsite_status'] = 'Pending';
             }
-            
+
+            // A PPPoE account starts restricted, always. Set here rather than left
+            // to the caller so a client that omits the field cannot create an
+            // account that is live before anyone has paid for it — see
+            // JobOrder::USERNAME_STATUS_RESTRICTED for why activation belongs
+            // downstream in the payment pipelines.
+            if (empty($data['username_status'])) {
+                $data['username_status'] = JobOrder::USERNAME_STATUS_RESTRICTED;
+            }
+
+            $data = $this->normalizeVipBillingFlags($data);
+
             \Log::info('JobOrder Creating with data', [
                 'data' => $data
             ]);
@@ -549,24 +687,7 @@ class JobOrderController extends Controller
             }
 
             $jobOrder = $query->with('lcpnapLocation')->findOrFail($id);
-
-            // A technician works their queue oldest first. Enforced here as well
-            // as in the UI so the lock cannot be stepped over by calling the API
-            // directly with a newer job order's id.
-            if ($this->isJobOrderLockedForTechnician($jobOrder, $currentUser)) {
-                DB::rollBack();
-
-                \Log::warning('JobOrder Update blocked: locked for technician', [
-                    'id' => $id,
-                    'user_email' => $currentUser->email ?? null,
-                ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This job order is locked. Finish the job order at the top of your list first, or ask an administrator to enable this one.',
-                ], 403);
-            }
-
+            
             $generateCredentials = $request->input('generate_credentials', false);
             
             // Auto-generate credentials if pppoe_username is provided but pppoe_password is empty
@@ -713,6 +834,29 @@ class JobOrderController extends Controller
                 }
             }
 
+            // Whichever of the three branches above ran, a PPPoE account now
+            // exists on this job order that did not before. It starts restricted:
+            // credentials being filled in says a technician reached the form, not
+            // that the customer is entitled to service. Activation happens later,
+            // through the payment pipelines — see
+            // JobOrder::USERNAME_STATUS_RESTRICTED.
+            //
+            // Only stamped when the job order has no status yet, so re-saving a JO
+            // that was legitimately activated downstream does not knock it back
+            // into restriction. That makes this safe to re-run, which matters
+            // because the Done form saves repeatedly.
+            if ($request->filled('pppoe_username') && empty($jobOrder->username_status)) {
+                $request->merge([
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+
+                \Log::info('PPPoE account initialised as restricted', [
+                    'job_order_id' => $id,
+                    'username' => $request->input('pppoe_username'),
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+            }
+
             $validator = Validator::make($request->all(), [
                 'application_id' => 'nullable|integer|exists:applications,id',
                 'status' => 'nullable|string|max:100',
@@ -722,6 +866,15 @@ class JobOrderController extends Controller
                 'billing_day' => 'nullable|integer|min:0',
                 'onsite_status' => 'nullable|string|max:100',
                 'billing_status' => 'nullable|string|max:255',
+                // Same billing flags as store(); VIP forces the other two off on write.
+                // generation_type is editable here too — the Done form sets it, and it decides
+                // whether the account bills on a fixed day or a rolling prepaid period.
+                'generation_type' => 'nullable|string|in:Prepaid,Postpaid,PrePaid,PostPaid,Pre Paid,Post Paid|max:100',
+                'vat_enabled' => 'nullable|boolean',
+                'withholding_enabled' => 'nullable|boolean',
+                'withholding_percentage' => 'nullable|numeric|min:0|max:100',
+                'vip_enabled' => 'nullable|boolean',
+                'vip_expiration' => 'nullable|date',
                 'assigned_email' => 'nullable|email|max:255',
                 'onsite_remarks' => 'nullable|string',
                 'status_remarks' => 'nullable|string|max:255',
@@ -742,6 +895,12 @@ class JobOrderController extends Controller
                 'installation_landmark' => 'nullable|string|max:255',
                 'pppoe_username' => 'nullable|string|max:255',
                 'pppoe_password' => 'nullable|string|max:255',
+                // Free-text rather than an `in` rule: the column also carries the
+                // states the downstream RADIUS operations write (Active, Disconnected,
+                // …), and constraining it here would reject a legitimate later update.
+                // What matters is that a new account is never created without it —
+                // that is enforced above, not by this rule.
+                'username_status' => 'nullable|string|max:100',
                 'custom_password' => 'nullable|string|max:255',
                 'created_by_user_email' => 'nullable|email|max:255',
                 'updated_by_user_email' => 'nullable|email|max:255',
@@ -780,41 +939,8 @@ class JobOrderController extends Controller
             if (isset($data['pppoe_username']) && !empty($data['pppoe_username'])) {
                 $data['username'] = $data['pppoe_username'];
             }
-
-            // Who recorded the pre-installation visit.
-            //
-            // Read from the signed-in user and assigned over whatever the request
-            // carried, so the email on the record is the account that actually
-            // made the change and cannot be set to someone else by editing the
-            // payload. Stamped only when the pre-install fields are part of this
-            // request, so an unrelated update leaves the existing value alone.
-            //
-            // There is no fallback. A pre-install whose author cannot be
-            // established is refused outright rather than written with a blank
-            // or stand-in name — the column exists to answer "who did this?",
-            // and a row that cannot answer it is worse than no row.
-            if ($request->has('pre_installed')) {
-                $recordedBy = $currentUser
-                    ? trim((string) ($currentUser->email ?? $currentUser->email_address ?? ''))
-                    : '';
-
-                if ($recordedBy === '') {
-                    DB::rollBack();
-
-                    \Log::warning('JobOrder Update blocked: pre-install author has no email address', [
-                        'id'      => $id,
-                        'user_id' => $currentUser->id ?? null,
-                    ]);
-
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Could not record the pre-installation: your account has no email address on file. '
-                            . 'Ask an administrator to add one, then try again.',
-                    ], 422);
-                }
-
-                $data['preinstalled_updated_by'] = $recordedBy;
-            }
+            
+            $data = $this->normalizeVipBillingFlags($data);
 
             \Log::info('JobOrder Updating with data', [
                 'id' => $id,
@@ -826,42 +952,21 @@ class JobOrderController extends Controller
 
             $oldStatus = $jobOrder->onsite_status;
 
-            // ── Technician availability guard (mirrors Api\ServiceOrderApiController) ──
-            // onsite_status is the Job Order equivalent of the Service Order
-            // visit_status.
-            //   • Reassigning the order (assigned_email changed) resets both timers
-            //     so the new technician starts fresh.
-            //   • Once a STARTED job leaves the "In Progress" state (any onsite_status
-            //     other than In Progress — Failed, Done, Reschedule, …) it must carry
-            //     an end_time, so the technician is not left flagged as busy.
-            // start_time/end_time are stored as Asia/Manila wall-clock to match the
-            // mobile timer, so we stamp Manila time here — bare now() is UTC here.
-            $assignedEmailChanged = array_key_exists('assigned_email', $data)
-                && (string) $data['assigned_email'] !== (string) ($jobOrder->assigned_email ?? '');
-
-            if ($assignedEmailChanged) {
-                $data['start_time'] = null;
-                $data['end_time']   = null;
-            } else {
-                $effectiveOnsite = strtolower(trim((string) (array_key_exists('onsite_status', $data)
-                    ? $data['onsite_status']
-                    : ($jobOrder->onsite_status ?? ''))));
-
-                $onsiteInProgress = in_array($effectiveOnsite, ['in progress', 'in-progress', 'inprogress'], true);
-                $leftInProgress   = ($effectiveOnsite !== '' && !$onsiteInProgress);
-
-                $startTimePresent = array_key_exists('start_time', $data)
-                    ? !empty($data['start_time'])
-                    : !empty($jobOrder->start_time);
-                // A payload that mentions end_time (a real timestamp OR an explicit
-                // null to (re)open the timer) is authoritative — never override it.
-                $callerManagesEndTime = array_key_exists('end_time', $data);
-
-                if ($leftInProgress && $startTimePresent && !$callerManagesEndTime && empty($jobOrder->end_time)) {
-                    $data['end_time'] = \Carbon\Carbon::now('Asia/Manila')->format('Y-m-d H:i:s');
-                }
-            }
-            // ──────────────────────────────────────────────────────────────────────
+            // A job order coming back from Failed or Reschedule is a NEW attempt, so the
+            // timings left behind by the previous one are cleared before the fill — see
+            // VisitTimerResetService for why a stale start_time is worse than none. Folded
+            // into $data rather than saved separately so it lands in the same UPDATE as the
+            // status change and shows up in the audit trail diff below.
+            $data = app(VisitTimerResetService::class)->applyTo(
+                $data,
+                $oldStatus,
+                $data['onsite_status'] ?? null,
+                [
+                    'entity' => 'job_order',
+                    'id' => $jobOrder->id,
+                    'actor' => $data['updated_by_user_email'] ?? null,
+                ]
+            );
 
             $jobOrder->fill($data);
             $dirtyAttributes = $jobOrder->getDirty();
@@ -927,13 +1032,8 @@ class JobOrderController extends Controller
 
             if (($data['onsite_status'] ?? null) === 'Done' && $oldStatus !== 'Done') {
                 $this->broadcastJobOrderDone($jobOrder);
-
-                // Trigger RADIUS account creation.
-                //
-                // Deliberately synchronous: the subscriber has to be able to
-                // authenticate the moment the visit is saved, so a Done that did not
-                // reach RADIUS is not a Done. Once every attempt is spent the update
-                // fails, and the technician is shown what actually went wrong.
+                
+                // Trigger RADIUS account creation
                 $radiusResult = $this->createRadiusAccountInternal($jobOrder);
                 if (!$radiusResult['success']) {
                     $detailedError = $radiusResult['error'] ?? $radiusResult['message'] ?? 'radius api error occured contact support';
@@ -1002,6 +1102,9 @@ class JobOrderController extends Controller
                     if ($jobOrder->pppoe_username) {
                         $technicalUpdateData['username'] = $jobOrder->pppoe_username;
                     }
+                    if ($jobOrder->pppoe_password) {
+                        $technicalUpdateData['pppoe_password'] = $jobOrder->pppoe_password;
+                    }
                     
                     if (!empty($technicalUpdateData)) {
                         $technicalDetail->update($technicalUpdateData);
@@ -1042,25 +1145,13 @@ class JobOrderController extends Controller
                 'trace' => $e->getTraceAsString()
             ]);
 
-            // Precise mapping as requested by user.
-            // cURL 7 is a refused connection, 28 a timeout, 6/35 a DNS or TLS
-            // failure — all of them mean the same thing to a technician: the
-            // server could not be reached. Only 7 was matched before, so a
-            // timeout fell through and showed the raw cURL string instead.
-            if (str_contains($errorMessage, 'Failed to connect to RADIUS server') ||
-                str_contains($errorMessage, 'Connection refused') ||
-                str_contains($errorMessage, 'Timeout was reached') ||
-                str_contains($errorMessage, 'cURL error 6') ||
-                str_contains($errorMessage, 'cURL error 7') ||
-                str_contains($errorMessage, 'cURL error 28') ||
-                str_contains($errorMessage, 'cURL error 35')) {
+            // Precise mapping as requested by user
+            if (str_contains($errorMessage, 'Failed to connect to RADIUS server') || 
+                str_contains($errorMessage, 'Connection refused') || 
+                str_contains($errorMessage, 'cURL error 7')) {
                 return response()->json([
                     'success' => false,
-                    // Name the actual failure rather than just "Radius Offline" —
-                    // a timeout, a refused port and a TLS failure need different
-                    // people to fix them, and the technician on site is the one
-                    // who has to relay it.
-                    'message' => 'Failed to connect to RADIUS server: ' . $this->describeConnectionFailure($errorMessage),
+                    'message' => 'Radius Offline',
                     'error' => $errorMessage
                 ], 400);
             }
@@ -1099,32 +1190,6 @@ class JobOrderController extends Controller
         }
     }
 
-    /**
-     * Turn a raw cURL failure into the one line that says what to go and fix.
-     *
-     * The underlying message is still returned in the 'error' field; this is the
-     * part a technician can read off the screen and pass on.
-     */
-    private function describeConnectionFailure(string $errorMessage): string
-    {
-        if (str_contains($errorMessage, 'cURL error 28') || str_contains($errorMessage, 'Timeout was reached')) {
-            return 'no response before the timeout. The server is offline, or a firewall is dropping the connection.';
-        }
-
-        if (str_contains($errorMessage, 'cURL error 7') || str_contains($errorMessage, 'Connection refused')) {
-            return 'the connection was refused. The server is reachable but nothing is listening on that port.';
-        }
-
-        if (str_contains($errorMessage, 'cURL error 6')) {
-            return 'the host name could not be resolved. Check the IP or host in the RADIUS config.';
-        }
-
-        if (str_contains($errorMessage, 'cURL error 35')) {
-            return 'the secure connection failed. Check whether the RADIUS config should be http instead of https.';
-        }
-
-        return 'the server could not be reached.';
-    }
 
     /**
      * Tell the agent who referred this customer that the visit is done.
@@ -1180,6 +1245,142 @@ class JobOrderController extends Controller
             ]);
         }
     }
+
+
+    /**
+     * Settle the referring agent for a job order being approved, if there is one
+     * and if the settlement service is available.
+     *
+     * Three outcomes, deliberately treated differently:
+     *
+     *   • No referral recorded — a job order nobody referred is a perfectly
+     *     ordinary approval (walk-ins and direct sign-ups). Skipped without
+     *     reaching for the service at all.
+     *   • The service cannot be resolved — that means the class is missing from
+     *     THIS deployment, not that anything is wrong with the job order. Nothing
+     *     has been written at that point, so the approval carries on and the gap
+     *     is logged as an error for whoever deploys. The row keeps a null
+     *     agent_paid_at, so it stays eligible to be settled once the deployment
+     *     catches up; blocking every approval instead would be far worse.
+     *   • A failure INSIDE settle() stays fatal on purpose: it runs in the
+     *     approval's transaction, and a half-applied credit must roll back with
+     *     it rather than leave an agent's balance wrong.
+     *
+     * A fourth outcome is possible and is the one that catches people out: a
+     * referral IS recorded, but no agent matches it, so settle() writes nothing
+     * and the approval succeeds looking entirely normal. The job order's
+     * commission_status, commission_value, incentive_value, agent_paid_at and
+     * agent_paid_to all stay NULL — indistinguishable from the feature not
+     * being deployed. approve() logs that case as a WARNING with the referral
+     * text, because it is the only way to tell the two apart.
+     *
+     * @return array{paid: bool, reason: string, agent_id: ?int,
+     *               commission: float, incentive_value: float,
+     *               referred_by?: string}
+     */
+    /** Are the agent-settlement columns present? Cached per process. */
+    private static function agentSettlementSchemaReady(): bool
+    {
+        static $ready = null;
+
+        if ($ready === null) {
+            try {
+                $ready = \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'agent_paid_at')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'commission_value')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('job_orders', 'incentive_value')
+                    && \Illuminate\Support\Facades\Schema::hasColumn('agent_balance', 'commission_value');
+            } catch (\Throwable $e) {
+                $ready = false;
+            }
+        }
+
+        return $ready;
+    }
+
+    private function settleReferringAgent(JobOrder $jobOrder, ?string $actionBy): array
+    {
+        $skipped = static fn (string $reason): array => [
+            'paid'            => false,
+            'reason'          => $reason,
+            'agent_id'        => null,
+            'commission'      => 0.0,
+            'incentive_value' => 0.0,
+        ];
+
+        // Resolved exactly the way JobOrderAgentPaymentService::referringAgent()
+        // does, including the fallback read, so this pre-check cannot disagree
+        // with the service about whether a referral exists.
+        $referredBy = optional($jobOrder->application)->referred_by;
+        if (!$referredBy && $jobOrder->application_id) {
+            $referredBy = DB::table('applications')->where('id', $jobOrder->application_id)->value('referred_by');
+        }
+
+        if (trim((string) $referredBy) === '') {
+            return $skipped('no referred_by on the application');
+        }
+
+        // Carried into the outcome so a skip can be read without going back to
+        // the database to ask what the referral actually said. The commonest
+        // cause of a skip is a referral naming a TEAM rather than an agent —
+        // see agents:export-team-referrals — and the value is what shows that
+        // at a glance.
+        $referralText = trim((string) $referredBy);
+
+        // GOWISER: the settlement writes job_orders.agent_paid_at/_to,
+        // commission_value, incentive_value and agent_balance.commission_value,
+        // all added by the 2026_08_14 agent migrations. Until those have been
+        // run, settling would throw inside the approval transaction and block
+        // EVERY approval of a referred job order — so it is skipped instead,
+        // loudly, and the job order stays eligible (agent_paid_at NULL) for
+        // when the schema catches up.
+        if (!self::agentSettlementSchemaReady()) {
+            \Log::error('Job Order Approval - agent settlement columns missing (run the 2026_08_14 agent migrations); approving without settling', [
+                'job_order_id' => $jobOrder->getKey(),
+            ]);
+
+            return $skipped('settlement columns not migrated');
+        }
+
+        try {
+            $service = app(\App\Services\JobOrderAgentPaymentService::class);
+        } catch (\Throwable $e) {
+            \Log::error('Job Order Approval - agent settlement unavailable, approving without it', [
+                'job_order_id' => $jobOrder->getKey(),
+                'exception'    => get_class($e),
+                'error'        => $e->getMessage(),
+            ]);
+
+            return $skipped('settlement service unavailable');
+        }
+
+        // GOWISER: a settlement failure must never fail or roll back the
+        // approval itself (customer, billing account, user and RADIUS work are
+        // all in the same transaction). settle() runs inside a nested
+        // transaction — a SAVEPOINT on MySQL — so a throw rolls back only the
+        // half-applied credit, and the approval carries on with the job order
+        // left unsettled (agent_paid_at NULL) and eligible to be settled later.
+        try {
+            $outcome = DB::transaction(fn () => $service->settle($jobOrder, $actionBy));
+        } catch (\Throwable $e) {
+            \Log::error('Job Order Approval - agent settlement failed; approving without it', [
+                'job_order_id' => $jobOrder->getKey(),
+                'exception'    => get_class($e),
+                'error'        => $e->getMessage(),
+            ]);
+
+            $failed = $skipped('settlement failed');
+            $failed['referred_by'] = $referralText;
+
+            return $failed;
+        }
+
+        // The referral text travels with the outcome either way, so the caller
+        // can say WHY nothing settled rather than only that nothing did.
+        $outcome['referred_by'] = $referralText;
+
+        return $outcome;
+    }
+
 
     private function broadcastJobOrderDone($jobOrder)
     {
@@ -1254,87 +1455,6 @@ class JobOrderController extends Controller
         }
     }
 
-    /**
-     * Settle the referring agent for a job order being approved, if there is one
-     * and if the settlement service is available.
-     *
-     * Three outcomes, deliberately treated differently:
-     *
-     *   • No referral recorded — a job order nobody referred is a perfectly
-     *     ordinary approval (walk-ins and direct sign-ups). Skipped without
-     *     reaching for the service at all.
-     *   • The service cannot be resolved — that means the class is missing from
-     *     THIS deployment, not that anything is wrong with the job order. Nothing
-     *     has been written at that point, so the approval carries on and the gap
-     *     is logged as an error for whoever deploys. The row keeps a null
-     *     agent_paid_at, so it stays eligible to be settled once the deployment
-     *     catches up; blocking every approval instead would be far worse.
-     *   • A failure INSIDE settle() stays fatal on purpose: it runs in the
-     *     approval's transaction, and a half-applied credit must roll back with
-     *     it rather than leave an agent's balance wrong.
-     *
-     * A fourth outcome is possible and is the one that catches people out: a
-     * referral IS recorded, but no agent matches it, so settle() writes nothing
-     * and the approval succeeds looking entirely normal. The job order's
-     * commission_status, commission_value, incentive_value, agent_paid_at and
-     * agent_paid_to all stay NULL — indistinguishable from the feature not
-     * being deployed. approve() logs that case as a WARNING with the referral
-     * text, because it is the only way to tell the two apart.
-     *
-     * @return array{paid: bool, reason: string, agent_id: ?int,
-     *               commission: float, incentive_value: float,
-     *               referred_by?: string}
-     */
-    private function settleReferringAgent(JobOrder $jobOrder, ?string $actionBy): array
-    {
-        $skipped = static fn (string $reason): array => [
-            'paid'            => false,
-            'reason'          => $reason,
-            'agent_id'        => null,
-            'commission'      => 0.0,
-            'incentive_value' => 0.0,
-        ];
-
-        // Resolved exactly the way JobOrderAgentPaymentService::referringAgent()
-        // does, including the fallback read, so this pre-check cannot disagree
-        // with the service about whether a referral exists.
-        $referredBy = optional($jobOrder->application)->referred_by;
-        if (!$referredBy && $jobOrder->application_id) {
-            $referredBy = DB::table('applications')->where('id', $jobOrder->application_id)->value('referred_by');
-        }
-
-        if (trim((string) $referredBy) === '') {
-            return $skipped('no referred_by on the application');
-        }
-
-        // Carried into the outcome so a skip can be read without going back to
-        // the database to ask what the referral actually said. The commonest
-        // cause of a skip is a referral naming a TEAM rather than an agent —
-        // see agents:export-team-referrals — and the value is what shows that
-        // at a glance.
-        $referralText = trim((string) $referredBy);
-
-        try {
-            $service = app(\App\Services\JobOrderAgentPaymentService::class);
-        } catch (\Throwable $e) {
-            \Log::error('Job Order Approval - agent settlement unavailable, approving without it', [
-                'job_order_id' => $jobOrder->getKey(),
-                'exception'    => get_class($e),
-                'error'        => $e->getMessage(),
-            ]);
-
-            return $skipped('settlement service unavailable');
-        }
-
-        $outcome = $service->settle($jobOrder, $actionBy);
-
-        // The referral text travels with the outcome either way, so the caller
-        // can say WHY nothing settled rather than only that nothing did.
-        $outcome['referred_by'] = $referralText;
-
-        return $outcome;
-    }
-
     public function approve($id): JsonResponse
     {
         try {
@@ -1380,20 +1500,7 @@ class JobOrderController extends Controller
                 throw new \Exception('Job order has already been approved and has an associated billing account.');
             }
 
-            // Always a NEW customer row. Never matched against an existing one.
-            //
-            // One person legitimately holds several accounts under the same name,
-            // email and mobile number — a second line at the same address, a unit
-            // for a relative, a separate business connection. Matching on those
-            // details attached the new account to the older person's row, and the
-            // account_no sync further down then overwrote that row's account_no
-            // with the new one, so the EARLIER account was left pointing at a
-            // customer record that now described the later account.
-            //
-            // Each approval therefore owns its customer record outright: one
-            // approved job order, one customer row, one billing account. The
-            // account_no written below lands on this new row and disturbs nothing
-            // that came before it.
+            // Always create a dedicated Customer record for each approved onboarding/account
             $customer = Customer::create([
                 'first_name' => $application->first_name,
                 'middle_initial' => $application->middle_initial,
@@ -1419,11 +1526,6 @@ class JobOrderController extends Controller
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
                 'updated_by' => $actionUserEmail,
-            ]);
-
-            \Log::info('Created a new customer for approval', [
-                'customer_id'  => $customer->id,
-                'job_order_id' => $id,
             ]);
 
             \Log::info('Customer Ready with Contact Numbers', [
@@ -1493,6 +1595,57 @@ class JobOrderController extends Controller
                 }
             }
             
+            // A VIP job order is approved exactly the way a postpaid one is: Active from day one,
+            // with no prepaid pay-first handling at all. This flag switches off BOTH halves of
+            // prepaid onboarding — the Inactive starting status here, and the initial billing plus
+            // RADIUS restriction after the commit below — so a VIP customer who signed up under a
+            // prepaid billing type is left in service instead of being restricted at approval.
+            // Coalesced so a job order predating the vip_enabled column reads as an ordinary
+            // approval instead of tripping on a missing attribute.
+            $isVipApproval = (bool) ($jobOrder->vip_enabled ?? false);
+
+            // Prepaid accounts start Inactive (pay-first): the customer must pay their initial
+            // bill before service is granted. Setting the status inside the committed transaction
+            // (rather than a post-commit flip) guarantees a prepaid account is durably Inactive the
+            // instant approval commits — no window where a crash leaves it Active/unrestricted.
+            $isPrepaidAccount = !$isVipApproval
+                && \App\Models\BillingAccount::isPrepaidType($jobOrder->generation_type);
+
+            /*
+             * A VIP is created ON the VIP billing status, not on Active.
+             *
+             * VIP is a billing status in this system, not a flag beside one. Everything that has
+             * to treat a comped account differently keys off that status and nothing else:
+             *
+             *   - EnhancedBillingGenerationServiceWithNotifications loads Active accounts only, so
+             *     the VIP status is what stops invoices, statements and notifications being
+             *     produced for an account that is never going to pay;
+             *   - vip:check-expiration selects billing_status_id = VIP, so the status is also what
+             *     makes vip_expiration mean anything — off it, the date is inert;
+             *   - AutoDisconnectService sweeps Active accounts with an overdue balance, and
+             *     radius:enforce-restricted excludes VIP by name.
+             *
+             * Creating the account Active therefore did not merely mislabel it. It put a comped
+             * customer into the ordinary billing run, and the invoice nobody was ever going to pay
+             * then aged into an overdue balance that auto-disconnect restricted — the VIP losing
+             * service, a cycle after being granted it, through the front door.
+             */
+            $vipStatusId = $this->getVipBillingStatusId();
+            $newAccountStatusId = match (true) {
+                $isVipApproval => $vipStatusId,
+                $isPrepaidAccount => (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4),
+                default => 1,
+            };
+
+            if ($isVipApproval) {
+                \Log::info('Job order approved as VIP — account created on the VIP billing status', [
+                    'job_order_id' => $jobOrder->id,
+                    'vip_expiration' => $jobOrder->vip_expiration,
+                    'generation_type' => $jobOrder->generation_type,
+                    'billing_status_id' => $newAccountStatusId,
+                ]);
+            }
+
             $billingAccount = BillingAccount::create([
                 'customer_id' => $customer->id,
                 'account_no' => $accountNumber,
@@ -1501,7 +1654,21 @@ class JobOrderController extends Controller
                 'account_balance' => $installationFee,
                 'balance_update_date' => now(),
                 'billing_day' => $jobOrder->billing_day,
-                'billing_status_id' => 1,
+                'billing_status_id' => $newAccountStatusId,
+                'generation_type' => $jobOrder->generation_type,
+                'vat_type' => $jobOrder->vat_type,
+                // Billing settings captured on the JO Assign Form are carried onto the account,
+                // which is where the billing generation service reads them from. Coalesced so a
+                // job order created before these columns existed lands as an explicit false
+                // rather than NULL.
+                'vat_enabled' => (bool) ($jobOrder->vat_enabled ?? false),
+                'withholding_enabled' => (bool) ($jobOrder->withholding_enabled ?? false),
+                'withholding_percentage' => $jobOrder->withholding_percentage,
+                // When the comping ends. Live rather than decorative now that the account is
+                // created on the VIP billing status: vip:check-expiration selects on that status
+                // and restricts the account on this date, exactly as it does for a VIP set from
+                // Customer Details.
+                'vip_expiration' => $jobOrder->vip_enabled ? $jobOrder->vip_expiration : null,
                 'organization_id' => $organizationId,
                 'created_by' => $actionUserEmail,
                 'updated_by' => $actionUserEmail,
@@ -1542,7 +1709,16 @@ class JobOrderController extends Controller
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
                 'username' => $usernameForTechnical,
-                'username_status' => $jobOrder->username_status,
+                'pppoe_password' => $jobOrder->pppoe_password,
+                // Carried across from the job order, falling back to restricted
+                // rather than NULL. A job order created before the restricted-by-
+                // default rule has no status to copy, and a blank here would read
+                // as "no restriction" on the customer record — the one reading it
+                // cannot tell an unset column from a live account. Only ever fills
+                // an absent value; a job order already activated downstream keeps
+                // whatever state it reached.
+                'username_status' => $jobOrder->username_status
+                    ?: JobOrder::USERNAME_STATUS_RESTRICTED,
                 'connection_type' => $jobOrder->connection_type,
                 'router_model' => $jobOrder->router_model,
                 'router_modem_sn' => $modemSN,
@@ -1573,6 +1749,15 @@ class JobOrderController extends Controller
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
                 'username' => $generatedUsername,
+                // Blank placeholder for every path, VIP included. The VIP move onto the plan group
+                // happens after this transaction commits and can fail, so writing 'Online' here
+                // would be a claim made before the thing it claims has been attempted — and a
+                // stranded VIP would read as connected on every screen. It is written once the
+                // reconnect actually succeeds; see the VIP block after the commit.
+                //
+                // Advisory either way: RadiusStatusSyncService owns this column and overwrites it
+                // each pass from the RADIUS group plus live session — Online while a session is up,
+                // Offline if the ONU is down.
                 'session_status' => '',
             ]);
             
@@ -1599,61 +1784,6 @@ class JobOrderController extends Controller
                     'account_number' => $accountNumber,
                     'existing_user_id' => $existingUser->id,
                 ]);
-
-                // Approving onto an account that already has a portal user left
-                // that user holding whatever password it was created with, while
-                // the customer is told their password is their mobile number.
-                // Point it at the number, but only for a customer-role account
-                // whose hash has drifted — never overwrite a staff password.
-                if (\App\Support\PortalPassword::isCustomer($existingUser)
-                    && !\App\Support\PortalPassword::hashIsCurrent($customer->contact_number_primary, $existingUser->password_hash)) {
-                    $existingUser->contact_number = trim((string) $customer->contact_number_primary);
-                    $existingUser->password_hash = \App\Support\PortalPassword::normalize($customer->contact_number_primary);
-                    $existingUser->save();
-
-                    \Log::info('Existing customer user repointed at current contact number', [
-                        'user_id' => $existingUser->id,
-                        'account_number' => $accountNumber,
-                    ]);
-                }
-
-                // An approved job order means a working service, so the portal
-                // login has to be open — the branch below creates new users with
-                // active = 1 and this one left the flag wherever it happened to
-                // be. The account that reaches here is usually one that was
-                // pulled out (active = 0) and has now been re-installed: the
-                // approval reported the portal account ready while the customer
-                // was still refused at sign-in.
-                //
-                // Only for a customer-role account. A staff user whose username
-                // collides with an account number must not be re-enabled by an
-                // installation, which is the same reason the password repoint
-                // above carries this guard.
-                //
-                // Both columns, so the row cannot read 'active' while being
-                // locked out or the reverse. `active` is what sign-in checks.
-                if (\App\Support\PortalPassword::isCustomer($existingUser)) {
-                    $wasSuspended = !$existingUser->active;
-
-                    $existingUser->active = 1;
-                    $existingUser->status = 'active';
-                    $existingUser->updated_by_user_id = $actionUserId;
-                    $existingUser->save();
-
-                    if ($wasSuspended) {
-                        \Log::info('Existing customer portal login re-enabled by job order approval', [
-                            'user_id' => $existingUser->id,
-                            'account_number' => $accountNumber,
-                            'job_order_id' => $id,
-                        ]);
-                    }
-                } else {
-                    \Log::warning('Account number matches a non-customer user; portal login left untouched', [
-                        'user_id' => $existingUser->id,
-                        'account_number' => $accountNumber,
-                        'role_id' => $existingUser->role_id,
-                    ]);
-                }
             } else {
                 // Create user with direct password hash assignment to avoid mutator
                 $userData = [
@@ -1662,7 +1792,7 @@ class JobOrderController extends Controller
                     'first_name' => $customer->first_name,
                     'middle_initial' => $customer->middle_initial,
                     'last_name' => $customer->last_name,
-                    'contact_number' => trim((string) $customer->contact_number_primary),
+                    'contact_number' => $customer->contact_number_primary,
                     'role_id' => $customerRoleId,
                     'status' => 'active',
                     'active' => 1,
@@ -1673,11 +1803,7 @@ class JobOrderController extends Controller
                 
                 // Directly insert into database to bypass mutator
                 $userId = \DB::table('users')->insertGetId(array_merge($userData, [
-                    // Canonical spelling, so the number verifies however the
-                    // customer types it at the login screen — "0917…", "917…",
-                    // "+63 917…" all reach the same hash. Hashing the raw column
-                    // value meant only its exact spelling ever worked.
-                    'password_hash' => \App\Support\PortalPassword::hash($customer->contact_number_primary),
+                    'password_hash' => Hash::make($customer->contact_number_primary),
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]));
@@ -1748,6 +1874,172 @@ class JobOrderController extends Controller
                 ]);
             }
 
+
+            // Prepaid onboarding: a prepaid customer must PAY before they get service. At approval
+            // we (1) generate their initial bill immediately, and (2) start them Inactive +
+            // RADIUS-restricted with NO prepaid period yet (prepaid_expires_at stays NULL). The
+            // 30-day prepaid clock only starts once they pay (see PrepaidRenewalService, invoked
+            // from the payment pipelines), at which point the existing payment reconnect flow
+            // reactivates them. Postpaid customers are untouched — they stay Active as before.
+            //
+            // $isPrepaidAccount already excludes VIP approvals, so a comped customer gets neither
+            // an initial bill nor a restriction no matter which billing type they signed up under.
+            //
+            // Best-effort by design: the approval transaction is already committed, so a billing
+            // or RADIUS hiccup must never undo the approval. The generator's own per-cycle
+            // idempotency guards mean re-running will not create duplicate invoices.
+            if ($isPrepaidAccount) {
+                try {
+                    $billingAccount->load(['customer', 'technicalDetails']);
+                    $initialBilling = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class)
+                        ->generateInitialBillingForAccount($billingAccount, $actionUserId);
+
+                    \Log::info('Prepaid initial billing generated on approval', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'result' => $initialBilling,
+                    ]);
+                } catch (\Throwable $billingEx) {
+                    \Log::error('Prepaid initial billing generation failed on approval (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'error' => $billingEx->getMessage(),
+                    ]);
+                }
+
+                // The account is already durably Inactive (set in the committed transaction above).
+                // Best-effort RADIUS restriction on top: if the RADIUS user isn't provisioned yet
+                // the call just reports an error we log — the customer is Inactive either way and
+                // gets provisioned/reconnected on their first successful payment.
+                try {
+                    $radiusRestrict = app(\App\Services\ManualRadiusOperationsService::class)->restrictedUser([
+                        'username' => $generatedUsername,
+                        'accountNumber' => $accountNumber,
+                        'remarks' => 'Prepaid Awaiting Initial Payment',
+                        'updatedBy' => 'System',
+                    ]);
+
+                    \Log::info('Prepaid account RADIUS-restricted on approval (already Inactive in billing)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'radius_status' => $radiusRestrict['status'] ?? 'unknown',
+                    ]);
+                } catch (\Throwable $restrictEx) {
+                    \Log::error('Prepaid approval RADIUS restriction failed (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'error' => $restrictEx->getMessage(),
+                    ]);
+                }
+            }
+
+            /*
+             * VIP new install: put the customer into service.
+             *
+             * Skipping restrictedUser() above is NOT enough on its own. Every PPPoE account is
+             * provisioned into the Restricted RADIUS group when the job order is marked Done
+             * ({@see createRadiusAccountInternal()}, restricted-by-default), and the only thing
+             * that has ever moved a user out of it is a payment landing. A VIP never pays, so
+             * without this the account is created VIP with no bill and no restriction call — and
+             * the customer still has no service, because their RADIUS user is sitting in the
+             * Restricted group that nothing will ever move them out of.
+             *
+             * This is the one path that moves a VIP onto their plan group at approval, which is
+             * what "VIP new installs are never restricted" actually requires.
+             *
+             * Best-effort, mirroring the prepaid block above: the approval is already committed,
+             * so a RADIUS failure is queued for the ProcessRadiusQueue cron rather than being
+             * allowed to undo the approval.
+             */
+            if ($isVipApproval) {
+                /*
+                 * Which plan names the target RADIUS group.
+                 *
+                 * The application is the usual source, but it is not the only one and it is not
+                 * always filled: an approval that reuses an existing customer can carry the plan on
+                 * the customer record instead, and $planId was already resolved against plan_list
+                 * above. Reading only $application->desired_plan meant one blank column left a VIP
+                 * sitting in the Restricted group with nothing but a log line — the exact outcome
+                 * this whole block exists to prevent. Falling back costs one query and removes a
+                 * class of stranded VIPs.
+                 */
+                $vipPlan = $application->desired_plan
+                    ?: ($customer->desired_plan
+                        ?: ($planId ? DB::table('plan_list')->where('id', $planId)->value('plan_name') : null));
+
+                $vipReconnectParams = [
+                    'accountNumber' => $accountNumber,
+                    'username' => $generatedUsername,
+                    'plan' => $vipPlan,
+                    'updatedBy' => $actionUserEmail,
+                    'remarks' => 'VIP New Install - Auto Reconnect',
+                    // The approval transaction committed this account onto the VIP billing status
+                    // deliberately; RADIUS must not be the thing that decides it. Without this,
+                    // reconnectUser() writes Active — which would un-comp the account on the spot,
+                    // putting it straight back into the billing run.
+                    'preserveBillingStatus' => true,
+                ];
+
+                $vipReconnectError = null;
+
+                if (empty($vipPlan)) {
+                    // reconnectUser() names the target RADIUS group after the plan, so without one
+                    // there is nothing to reconnect onto and no retry could ever succeed — logged
+                    // rather than queued. The account is VIP in billing and needs a manual
+                    // reconnect once a plan is on file.
+                    \Log::error('VIP new install could not be reconnected — no plan on the application, the customer or plan_list', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'username' => $generatedUsername,
+                        'plan_id' => $planId,
+                    ]);
+                } else {
+                    try {
+                        $vipReconnect = app(\App\Services\ManualRadiusOperationsService::class)
+                            ->reconnectUser($vipReconnectParams);
+
+                        if (($vipReconnect['status'] ?? '') === 'success') {
+                            \Log::info('VIP new install reconnected onto plan group at approval', [
+                                'job_order_id' => $id,
+                                'account_no' => $accountNumber,
+                                'username' => $generatedUsername,
+                                'plan' => $vipPlan,
+                                'billing_status_id' => $newAccountStatusId,
+                            ]);
+
+                            $this->markVipInService($jobOrder, $technicalDetail, $billingAccount);
+                        } else {
+                            $vipReconnectError = $vipReconnect['message'] ?? 'RADIUS reconnect returned failure';
+                        }
+                    } catch (\Throwable $vipEx) {
+                        $vipReconnectError = $vipEx->getMessage();
+                    }
+                }
+
+                // Only a genuine RADIUS failure is worth retrying.
+                if ($vipReconnectError !== null) {
+                    \Log::error('VIP new install RADIUS reconnect failed (approval itself still succeeded)', [
+                        'job_order_id' => $id,
+                        'account_no' => $accountNumber,
+                        'username' => $generatedUsername,
+                        'error' => $vipReconnectError,
+                    ]);
+
+                    \Log::channel('radiusrelated')->error('[VIP APPROVAL RECONNECT FAILED - QUEUED] Account: ' . $accountNumber . ' - User: ' . $generatedUsername . ' - Error: ' . $vipReconnectError);
+
+                    \App\Services\RadiusQueueService::queue([
+                        'organization_id' => $organizationId,
+                        'source_type'     => 'job_order_vip_approval',
+                        'source_id'       => $jobOrder->id,
+                        'account_no'      => $accountNumber,
+                        'operation'       => 'reconnect_user',
+                        'params'          => $vipReconnectParams,
+                        'last_error'      => $vipReconnectError,
+                        'created_by'      => $actionUserEmail,
+                    ]);
+                }
+            }
+
             // Create Activity Log using helper
             ActivityLog::log(
                 'Job Order Approved',
@@ -1796,8 +2088,8 @@ class JobOrderController extends Controller
                         $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
                         $emailBody = str_replace('{{customer_name}}', $customerName, $emailBody);
                         $emailBody = str_replace('{{customer_tag}}', $customerName, $emailBody);
-                        $emailBody = str_replace('{{company_name}}', 'ATSS Fiber', $emailBody);
-                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/atssfiber', $emailBody);
+                        $emailBody = str_replace('{{company_name}}', 'GOWISER', $emailBody);
+                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/gowiserzc', $emailBody);
                         $emailBody = str_replace('{{account_no}}', $accountNumber, $emailBody);
                         $emailBody = str_replace('{{username}}', $generatedUsername, $emailBody);
                         $emailBody = str_replace('{{password}}', $generatedPassword, $emailBody);
@@ -1856,6 +2148,11 @@ class JobOrderController extends Controller
                     'user_username' => $accountNumber,
                     'username' => $generatedUsername,
                     'password' => $generatedPassword,
+                    // Reported back so the approver can see on the spot which onboarding path ran,
+                    // rather than having to open the customer to check whether a comped account
+                    // was left in service.
+                    'vip_enabled' => $isVipApproval,
+                    'billing_status_id' => $newAccountStatusId,
                 ]
             ]);
 
@@ -2095,16 +2392,16 @@ class JobOrderController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'folder_name' => 'required|string|max:255',
-                'signed_contract_image' => 'nullable|image|max:10240',
-                'setup_image' => 'nullable|image|max:10240',
-                'box_reading_image' => 'nullable|image|max:10240',
-                'router_reading_image' => 'nullable|image|max:10240',
-                'port_label_image' => 'nullable|image|max:10240',
-                'client_signature_image' => 'nullable|image|max:10240',
-                'client_tagging_image' => 'nullable|image|max:10240',
-                'speed_test_image' => 'nullable|image|max:10240',
-                'proof_image' => 'nullable|image|max:10240',
-                'house_front_image' => 'nullable|image|max:10240',
+                'signed_contract_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'setup_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'box_reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'router_reading_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'port_label_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'client_signature_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'client_tagging_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'speed_test_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'proof_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                'house_front_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
             ]);
 
             if ($validator->fails()) {
@@ -2116,18 +2413,8 @@ class JobOrderController extends Controller
             }
 
             $jobOrder = JobOrder::findOrFail($id);
-
-            // Same oldest-first queue rule as update(): a technician cannot attach
-            // work to a job order they are not allowed to open yet.
-            if ($this->isJobOrderLockedForTechnician($jobOrder, auth()->user())) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This job order is locked. Finish the job order at the top of your list first, or ask an administrator to enable this one.',
-                ], 403);
-            }
-
             $applicationId = $jobOrder->application_id ?? $jobOrder->Application_ID;
-
+            
             if (!$applicationId) {
                 return response()->json([
                     'success' => false,
@@ -2337,26 +2624,31 @@ class JobOrderController extends Controller
                 $plan = trim($plan);
             }
             
+            // The account is created into the Restricted group, NOT the customer's
+            // plan group.
+            //
+            // This is the whole point of the restricted-by-default rule: putting a
+            // brand new user straight into its plan group is what "early automatic
+            // activation" means in practice — full plan bandwidth granted the
+            // moment a technician saved a form, before a peso has been collected.
+            // The user is provisioned so the credentials work and the session can
+            // be seen, but it carries the restricted profile until the payment
+            // pipelines move it. $plan is still resolved above and reported back in
+            // the response, because the caller needs to know which plan the account
+            // will be activated onto.
+            //
+            // Activation is downstream and explicit: ManualRadiusOperationsService
+            // ::reconnectUser, called from PaymentWorkerService and
+            // TransactionController once a payment lands, rewrites the group to the
+            // plan. Nothing here should ever do it.
             $payload = [
                 'name' => $pppoeUsername,
-                'group' => $plan,
+                'group' => JobOrder::USERNAME_STATUS_RESTRICTED,
                 'password' => $pppoePassword
             ];
 
-            // Try radius_config #1 up to 5 times; if it never succeeds, fall back to #2.
-            //
-            // The attempts are spaced out rather than fired back to back, so a
-            // server that is rebooting or briefly saturated gets a chance to answer
-            // instead of having all five attempts spent inside the same second.
-            // The gaps grow (1s, 2s, 3s, 4s) and are only taken between attempts,
-            // never after the last one.
-            //
-            // The whole loop has to finish inside the request, so the budget is
-            // bounded: 5 attempts x 4s connect + 10s of waiting is ~30s per config,
-            // ~60s if both are tried. RouterosApiService applies its own connect and
-            // read timeouts, so the loop cannot inherit an unbounded socket wait.
-            $maxAttemptsPerConfig = 5;
-            $retryWaitSeconds = [1, 2, 3, 4];
+            // Try radius_config #1 up to 3 times; if it never succeeds, fall back to #2.
+            $maxAttemptsPerConfig = 3;
             $positionsToTry = [1];
             if ($configs->count() >= 2) {
                 $positionsToTry[] = 2;
@@ -2370,6 +2662,10 @@ class JobOrderController extends Controller
                     continue;
                 }
 
+                $radiusUrl = $radiusConfig->ssl_type . '://' . $radiusConfig->ip . ':' . $radiusConfig->port . '/rest/user-manage/user';
+                $radiusUsername = $radiusConfig->username;
+                $radiusPassword = $radiusConfig->password;
+
                 \Log::channel('radiusrelated')->info('RADIUS server selected for JobOrder account creation', [
                     'job_order_id'     => $id,
                     'position'         => $position,
@@ -2378,94 +2674,40 @@ class JobOrderController extends Controller
                 ]);
 
                 for ($attempt = 1; $attempt <= $maxAttemptsPerConfig; $attempt++) {
-                    // Wait before every attempt except the first.
-                    if ($attempt > 1) {
-                        $wait = $retryWaitSeconds[$attempt - 2] ?? end($retryWaitSeconds);
-                        \Log::channel('radiusrelated')->info('Waiting before RADIUS retry for JobOrder: ' . $id, [
-                            'job_order_id'  => $id,
-                            'position'      => $position,
-                            'next_attempt'  => $attempt,
-                            'wait_seconds'  => $wait,
-                        ]);
-                        sleep($wait);
-                    }
-
                     try {
-                        $api = app(RouterosApiService::class);
+                        $response = Http::withOptions([
+                            'verify' => false
+                        ])
+                        ->withBasicAuth($radiusUsername, $radiusPassword)
+                        ->put($radiusUrl, $payload);
 
-                        // Connect first so an unreachable device is told apart from a
-                        // device that answered and refused the account. connect()
-                        // walks both transports for this config — the saved one, then
-                        // the alternate — so reaching here means neither answered.
-                        if (!$api->connect($radiusConfig)) {
-                            $radiusError = $api->getLastError() !== ''
-                                ? $api->getLastError()
-                                : 'No RADIUS endpoint responded.';
-                            $lastFailureWasConnection = true;
-                            \Log::channel('radiusrelated')->error('RADIUS Connection Exception for JobOrder: ' . $id, [
-                                'error' => $radiusError,
-                                'position' => $position,
-                                'attempt' => $attempt . '/' . $maxAttemptsPerConfig,
-                                'radius_config_id' => $radiusConfig->id,
-                                'radius_ip' => $radiusConfig->ip,
-                                'transports' => $api->endpointStates($radiusConfig),
-                            ]);
+                        $statusCode = $response->status();
 
-                            // Both transports are already in cool-off: retrying here
-                            // only sleeps. Hand over to the next config now.
-                            if ($api->lastConnectAllEndpointsDown()) {
-                                \Log::channel('radiusrelated')->warning('Every transport for this RADIUS config is down; moving to the next config', [
-                                    'job_order_id'     => $id,
-                                    'position'         => $position,
-                                    'radius_config_id' => $radiusConfig->id,
-                                    'radius_ip'        => $radiusConfig->ip,
-                                ]);
-                                break;
-                            }
-
-                            continue;
-                        }
-
-                        \Log::channel('radiusrelated')->info('RADIUS transport in use for JobOrder: ' . $id, [
-                            'job_order_id'     => $id,
-                            'position'         => $position,
-                            'radius_config_id' => $radiusConfig->id,
-                            'endpoint'         => $api->activeEndpoint(),
-                        ]);
-
-                        // addUser() is idempotent: an account that is already on the
-                        // device is reported as success rather than duplicated, so a
-                        // retry after a half-completed attempt is safe.
-                        if ($api->addUser($radiusConfig, $payload['name'], $payload['password'], $payload['group'])) {
+                        if ($statusCode === 204 || $response->successful()) {
                             $radiusSubmitted = true;
                             $radiusError = null;
                             break;
                         }
 
-                        $radiusError = $api->getLastError() !== ''
-                            ? $api->getLastError()
-                            : 'The RADIUS device rejected the account.';
+                        $radiusError = 'HTTP ' . $statusCode . ': ' . $response->body();
                         $lastFailureWasConnection = false;
                         \Log::channel('radiusrelated')->error('RADIUS API Error for JobOrder: ' . $id, [
-                            'error' => $radiusError,
+                            'status' => $statusCode,
+                            'response' => $response->body(),
                             'payload' => $payload,
                             'position' => $position,
                             'attempt' => $attempt,
                             'radius_config_id' => $radiusConfig->id,
                             'radius_ip' => $radiusConfig->ip,
                         ]);
-
-                        // The device answered and refused this exact sentence (unknown
-                        // group, bad value). Re-sending it produces the same !trap, so
-                        // move on to the next server instead of burning the retries.
-                        break;
                     } catch (\Exception $mikrotikException) {
                         $radiusError = $mikrotikException->getMessage();
                         $lastFailureWasConnection = true;
                         \Log::channel('radiusrelated')->error('RADIUS Connection Exception for JobOrder: ' . $id, [
                             'error' => $radiusError,
+                            'trace' => $mikrotikException->getTraceAsString(),
                             'position' => $position,
-                            'attempt' => $attempt . '/' . $maxAttemptsPerConfig,
+                            'attempt' => $attempt,
                             'radius_config_id' => $radiusConfig->id,
                             'radius_ip' => $radiusConfig->ip,
                         ]);
@@ -2487,6 +2729,28 @@ class JobOrderController extends Controller
                 ];
             }
 
+            // Record the restriction on the job order itself, so the state is
+            // visible without querying RADIUS and so approval carries it onto
+            // technical_details (TechnicalDetail::create copies this column).
+            //
+            // Only when the account was actually provisioned in this call and the
+            // job order has not since been activated: this method is re-runnable by
+            // design — the Done form and the approval path can both reach it — and
+            // it must never knock an account that a payment already activated back
+            // into restriction.
+            if ($radiusSubmitted && empty($jobOrder->username_status)) {
+                $jobOrder->update([
+                    'username_status' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                ]);
+
+                \Log::channel('radiusrelated')->info('PPPoE account provisioned restricted', [
+                    'job_order_id' => $id,
+                    'username' => $pppoeUsername,
+                    'radius_group' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                    'plan_when_activated' => $plan,
+                ]);
+            }
+
             return [
                 'success' => true,
                 'message' => $credentialsExist ? 'RADIUS credentials already exist' : 'RADIUS account created successfully',
@@ -2494,7 +2758,13 @@ class JobOrderController extends Controller
                     'job_order_id' => $id,
                     'username' => $pppoeUsername,
                     'password' => $pppoePassword,
-                    'group' => $plan,
+                    // What the account is on now, and what it will be moved to when
+                    // a payment activates it. Reported apart so the caller cannot
+                    // read the plan as evidence the account is live.
+                    'group' => JobOrder::USERNAME_STATUS_RESTRICTED,
+                    'plan_when_activated' => $plan,
+                    'username_status' => $jobOrder->username_status
+                        ?: JobOrder::USERNAME_STATUS_RESTRICTED,
                     'credentials_exist' => $credentialsExist,
                     'radius_response' => [
                         'submitted' => $radiusSubmitted,
@@ -2646,7 +2916,7 @@ class JobOrderController extends Controller
      */
     private function replaceGlobalVariables(string $message): string
     {
-        $portalUrl = 'sync.atssfiber.ph';
+        $portalUrl = 'sync.gowiser.ph';
         $brandName = DB::table('form_ui')->value('brand_name') ?? 'Your ISP';
 
         $message = str_replace('{{portal_url}}', $portalUrl, $message);
@@ -2720,211 +2990,6 @@ class JobOrderController extends Controller
                 'error'   => $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Release a job order to its technician ahead of their queue.
-     *
-     * Technicians work oldest first: only the oldest job order still open to them
-     * is actionable, everything newer is greyed out. An administrator calls this
-     * to unlock one specific job order early. Restricted to administrators by the
-     * `role` middleware on the route — the flag is not fillable, so this is the
-     * only way it can be set.
-     */
-    public function enableForTechnician(Request $request, $id): JsonResponse
-    {
-        try {
-            $query = JobOrder::query();
-            $currentUser = auth()->user();
-            if ($currentUser) {
-                if ($currentUser->organization_id) {
-                    $query->where('organization_id', $currentUser->organization_id);
-                } else {
-                    $query->whereNull('organization_id');
-                }
-            }
-
-            $jobOrder = $query->findOrFail($id);
-
-            // Already released — answer successfully with the current state rather
-            // than writing an audit entry for a no-op.
-            if ($jobOrder->technician_enabled) {
-                return response()->json([
-                    'success' => true,
-                    'message' => 'This job order is already enabled for the technician.',
-                    'data' => [
-                        'id' => $jobOrder->id,
-                        'technician_enabled' => true,
-                    ],
-                ]);
-            }
-
-            $performedBy = $request->input('updated_by_user_email')
-                ?? optional($currentUser)->email_address
-                ?? optional($currentUser)->email
-                ?? 'System';
-
-            $jobOrder->technician_enabled = true;
-            $jobOrder->updated_by_user_email = $performedBy;
-            $jobOrder->save();
-
-            AuditTrailLog::create([
-                'old_details' => [
-                    'type' => 'joborders',
-                    'id' => $jobOrder->id,
-                    'data' => ['technician_enabled' => false],
-                ],
-                'new_details' => [
-                    'type' => 'joborders',
-                    'id' => $jobOrder->id,
-                    'data' => ['technician_enabled' => true],
-                ],
-                'created_by_user' => $performedBy,
-                'updated_by_user' => $performedBy,
-            ]);
-
-            ActivityLog::log(
-                'Job Order Enabled For Technician',
-                "Job Order #{$jobOrder->id} unlocked for technician access by {$performedBy}",
-                'info',
-                [
-                    'user_email' => $performedBy,
-                    'resource_type' => 'JobOrder',
-                    'resource_id' => $jobOrder->id,
-                ]
-            );
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Job order enabled for technician access.',
-                'data' => [
-                    'id' => $jobOrder->id,
-                    'technician_enabled' => true,
-                ],
-            ]);
-        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Job order not found',
-            ], 404);
-        } catch (\Exception $e) {
-            \Log::error('Failed to enable job order for technician', [
-                'job_order_id' => $id,
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to enable job order for technician',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /**
-     * Is this job order locked for the signed-in user because it is not their
-     * next one in the queue?
-     *
-     * Only ever true for technicians. A job order is open when any of these hold:
-     *   • it heads the queue of work still assigned to them — the oldest In
-     *     Progress job order, or the oldest other active one when they have none
-     *     in progress, or the oldest rescheduled one when that is all that is
-     *     left. A reschedule sorts last, so it reaches the head only when there
-     *     is no active work in front of it;
-     *   • an administrator enabled it (technician_enabled);
-     *   • they have already started it and not yet closed it — a job in flight
-     *     must never become unreachable;
-     *   • it is finished, failed or cancelled: nothing is left to act on.
-     *
-     * A rescheduled job order is deliberately NOT open on its status alone. It
-     * stays out of the queue's way, so it never blocks the work behind it, but
-     * picking it back up is an administrator's call — otherwise a reschedule
-     * would be the one status a technician could always act on, whatever else
-     * they had waiting, which is how a rescheduled job order came to be editable
-     * while its own Start button was still locked.
-     *
-     * A job order that is not part of the technician's own assigned queue is left
-     * alone: this restriction governs the order of their own work, and must not
-     * start blocking records reached some other way.
-     */
-    private function isJobOrderLockedForTechnician(JobOrder $jobOrder, $currentUser): bool
-    {
-        if (!$currentUser || (int) $currentUser->role_id !== Role::TECHNICIAN) {
-            return false;
-        }
-
-        if ($jobOrder->technician_enabled) {
-            return false;
-        }
-
-        $onsiteStatus = strtolower(trim((string) $jobOrder->onsite_status));
-        if (in_array($onsiteStatus, JobOrder::TECHNICIAN_QUEUE_CLOSED_ONSITE_STATUSES, true)) {
-            return false;
-        }
-
-        // Already in flight for this technician. A zero date counts as unset, the
-        // same way the two clients read these columns.
-        $isTimeSet = static function ($value): bool {
-            $normalised = strtolower(trim((string) $value));
-            return !in_array($normalised, ['', '0000-00-00 00:00:00', 'not set', '-', 'none', 'null'], true);
-        };
-
-        if ($isTimeSet($jobOrder->start_time) && !$isTimeSet($jobOrder->end_time)) {
-            return false;
-        }
-
-        $technicianEmail = $currentUser->email ?? $currentUser->email_address ?? null;
-        if (!$technicianEmail) {
-            return false;
-        }
-
-        // The technician's open queue, in the order the two clients paint their
-        // list: In Progress first, then other active work, then deferred work
-        // last, oldest first within each band on the job order's own timestamp
-        // falling back to the row's creation date. So the head of this list is
-        // the row that appears at the top of the technician's screen.
-        //
-        // Deferred work is ranked here rather than excluded with the finished
-        // work. Sorting last is what keeps it from taking the slot away from
-        // active work; excluding it made it neither next nor locked.
-        //
-        // Membership of THIS list is also what decides whether the job order is
-        // one of theirs to queue at all. Testing ownership separately would mean
-        // two comparisons of the same email that can disagree — and a
-        // disagreement fails open, because an empty queue never blocks.
-        $inProgressFirst = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(onsite_status, ''))) IN ('%s') THEN 0 ELSE 1 END",
-            implode("', '", JobOrder::TECHNICIAN_IN_PROGRESS_ONSITE_STATUSES)
-        );
-
-        $deferredLast = sprintf(
-            "CASE WHEN LOWER(TRIM(COALESCE(onsite_status, ''))) IN ('%s') THEN 1 ELSE 0 END",
-            implode("', '", JobOrder::TECHNICIAN_QUEUE_DEFERRED_ONSITE_STATUSES)
-        );
-
-        $queue = JobOrder::where('assigned_email', $technicianEmail)
-            ->whereNotIn(
-                DB::raw("LOWER(TRIM(COALESCE(onsite_status, '')))"),
-                JobOrder::TECHNICIAN_QUEUE_CLOSED_ONSITE_STATUSES
-            )
-            ->when($currentUser->organization_id, function ($q) use ($currentUser) {
-                $q->where('organization_id', $currentUser->organization_id);
-            }, function ($q) {
-                $q->whereNull('organization_id');
-            })
-            ->orderBy(DB::raw($deferredLast))
-            ->orderBy(DB::raw($inProgressFirst))
-            ->orderBy(DB::raw('COALESCE(`timestamp`, `created_at`)'))
-            ->orderBy('id')
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id);
-
-        // Not part of their own queue — leave the existing behaviour alone.
-        if (!$queue->contains((int) $jobOrder->id)) {
-            return false;
-        }
-
-        return $queue->first() !== (int) $jobOrder->id;
     }
 
     /**

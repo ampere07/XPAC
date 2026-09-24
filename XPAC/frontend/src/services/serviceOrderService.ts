@@ -23,7 +23,15 @@ export interface ServiceOrderData {
   house_front_picture_url?: string;
   plan?: string;
   group_name?: string;
+  /** 'Prepaid' | 'Postpaid', copied in from the billing account by ServiceOrderApiController. */
+  generation_type?: string | null;
   username?: string;
+  /**
+   * PPPoE password from technical_details. service_orders does not store it, so
+   * ServiceOrderApiController joins it in — falling back to the account's newest job order for
+   * accounts installed before technical_details carried the column.
+   */
+  pppoe_password?: string | null;
   connection_type?: string;
   router_modem_sn?: string;
   lcp?: string;
@@ -38,9 +46,6 @@ export interface ServiceOrderData {
   assigned_email?: string;
   repair_category?: string;
   visit_status?: string;
-  // Stamped by the API the day a technician moves visit_status. A DATE column,
-  // so "YYYY-MM-DD" — null on every ticket no technician has moved.
-  visit_status_date?: string | null;
   priority_level?: string;
   visit_by_user?: string;
   visit_with?: string;
@@ -151,26 +156,6 @@ export const updateServiceOrder = async (id: string, serviceOrderData: Partial<S
     return response.data;
   } catch (error) {
     console.error('Error updating service order:', error);
-    throw error;
-  }
-};
-
-/**
- * Release a service order to its technician ahead of their queue.
- *
- * Administrator-only on the server, so the flag cannot be flipped by the
- * technician whose queue it governs.
- */
-export const enableServiceOrderForTechnician = async (id: string | number) => {
-  try {
-    const idStr = id.toString();
-    const authData = localStorage.getItem('authData');
-    const currentUser = authData ? JSON.parse(authData) : null;
-    const payload = currentUser?.email ? { updated_by_user: currentUser.email } : {};
-    const response = await apiClient.post<ApiResponse<any>>(`/service-orders/${idStr}/enable-technician`, payload);
-    return response.data;
-  } catch (error) {
-    console.error('Error enabling service order for technician:', error);
     throw error;
   }
 };

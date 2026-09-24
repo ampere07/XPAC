@@ -9,12 +9,14 @@ import {
   Menu as MenuIcon, Package, List, ClipboardCheck, X, ChevronUp,
   CreditCard, FileText, Receipt, Clock,
   MessageSquare, Network, AlertCircle, Router, Server, Wifi, Send, Cable, MapPin, Mail,
-  MessageSquareText, Wallet, Gauge, Layers, Ticket, Users, RefreshCw, Coins, FileWarning, Tag, Activity, Gift, UserCog, AlertTriangle
+  MessageSquareText, Wallet, Gauge, Layers, Ticket
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { useNavBadgeCounts, NavBadgeCounts } from '../hooks/useNavBadgeCounts';
+import { useCustomerDataContextOptional } from '../contexts/CustomerDataContext';
 import { usePermissions } from '../hooks/usePermissions';
-import { ROLE, permissionForSection } from '../config/permissions';
+import { AuthLike, ROLE, isLockedRole, permissionForSection } from '../config/permissions';
 
 interface SidebarProps {
   activeSection: string;
@@ -23,52 +25,32 @@ interface SidebarProps {
   userRole: string;
   userEmail?: string;
   roleId?: number | string;
+  /** The signed-in account, so the bar follows a /me/permissions refresh. */
+  auth?: AuthLike | null;
 }
 
 /**
  * A tab-bar entry.
  *
  * What a role may open is decided by the permission table, keyed on `id`
- * through config/permissions.ts — the same key the screen itself checks and the
- * API demands. The per-item allowedRoles / allowedRoleIds lists this replaced
- * had to be kept in step with the web portal's own copy by hand, and had
- * drifted: Work Order listed technician here and not on the web, LCP List
- * listed administrator here and superadmin there.
+ * through config/permissions.ts: the same key the screen itself checks and the
+ * API demands.
  */
 interface MenuItem {
   id: string;
   label: string;
   icon: React.ElementType;
-  isMenuPage?: boolean;
-  /**
-   * The key this entry is listed under, when that is narrower than the one its
-   * section resolves to.
-   *
-   * Only `dashboard` needs it. Its section override is the union
-   * ['dashboard', 'agent-dashboard', 'customer-dashboard'], because the screen
-   * that opens depends on the role and any of the three may open it — which is
-   * right for opening it and wrong for listing it. Read as-is, an agent and a
-   * customer would both be offered a "Dashboard" tab leading straight back to
-   * the agent and customer dashboards that are deliberately not in this bar.
-   *
-   * Narrowing it to the bare key lists the entry for the roles whose dashboard
-   * this actually is. Nothing about opening the section changes: Dashboard.tsx
-   * still checks the union, so an agent following any other route to it still
-   * gets their own screen.
-   */
+  /** The key(s) this entry is listed under, when not the one its section resolves to. */
   requires?: string | string[];
   /**
-   * Restrict this entry to particular roles, on top of the permission check.
-   *
-   * Needed only where permissions cannot express the answer: a SuperAdmin holds
-   * the wildcard, so they match every key there is, including the customer
-   * portal's. `requires` cannot narrow that — the wildcard satisfies any key —
-   * so the customer-only entries name their role instead.
-   *
-   * Mirrors `onlyRoles` on the web Sidebar's own MenuItem, which exists for the
-   * same reason.
+   * Restrict this entry to particular seeded roles, on top of the permission
+   * check. Needed where keys cannot express the answer: SuperAdmin holds the
+   * wildcard, which matches the customer and agent portal keys too, and those
+   * entries have only ever been shown to the customer and the agent. Custom
+   * roles are decided by their keys alone.
    */
   onlyRoles?: number[];
+  isMenuPage?: boolean;
 }
 
 interface NavGroup {
@@ -76,38 +58,73 @@ interface NavGroup {
   items: MenuItem[];
 }
 
+/**
+ * Count bubble on a bottom-bar icon.
+ *
+ * Renders nothing at zero: an empty queue is shown by the absence of a badge, and
+ * a "0" would draw the eye to the one tab with nothing to do. Anything past 99 is
+ * capped, because the bubble has to stay inside the tab.
+ */
+const NavBadge: React.FC<{ count?: number }> = ({ count }) => {
+  if (!count || count < 1) return null;
+
+  const label = count > 99 ? '99+' : String(count);
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        top: -6,
+        // Nudged further right as the label grows so the bubble stays clear of the
+        // icon instead of creeping across it.
+        right: label.length > 1 ? -14 : -8,
+        minWidth: 16,
+        height: 16,
+        borderRadius: 8,
+        paddingHorizontal: 4,
+        backgroundColor: '#ef4444',
+        alignItems: 'center',
+        justifyContent: 'center',
+        // Keeps the bubble legible where it overlaps the icon.
+        borderWidth: 1.5,
+        borderColor: '#ffffff',
+      }}
+      // One announcement for the tab rather than a stray number after the label.
+      accessibilityLabel={`${label} pending`}
+    >
+      <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '700', lineHeight: 12 }}>
+        {label}
+      </Text>
+    </View>
+  );
+};
+
 const MAX_VISIBLE_ITEMS = 4;
 const GRID_COLUMNS = 3;
 
-/**
- * Label typography for the bar. The block is two lines tall whatever the label
- * says, which is what keeps the icons on one baseline across a row.
- */
-const LABEL_FONT_SIZE = 10;
-const LABEL_LINE_HEIGHT = 12;
-const LABEL_BLOCK_HEIGHT = LABEL_LINE_HEIGHT * 2;
+const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userRole, roleId, auth }) => {
+  const { can, roleId: resolvedRoleId } = usePermissions(auth);
+  /**
+   * Badges are a technician feature: these tabs are that role's personal work
+   * queue, so a count on them is actionable. For an administrator the same tabs
+   * list every record in the system, where a badge in the thousands is noise.
+   */
+  // role_id 2 is Technician; 4 is Agent. The same test the Job Order page and both
+  // order contexts use to decide whether to scope a list to one technician.
+  const isTechnician =
+    (userRole || '').toLowerCase().trim() === 'technician' || String(roleId) === '2';
 
-/**
- * Split a label into exactly two lines, one word per line.
- *
- * A single word keeps the second line as a non-breaking space rather than
- * dropping it: an empty string would let the text block collapse to one line on
- * the platforms that trim trailing whitespace, and the point of the fixed height
- * is that it never does.
- *
- * Three words put the tail together on the second line instead of losing it.
- * Only one label has three today — "Smart OLT Logs" — and "OLT Logs" on the
- * second line reads better than dropping "Logs" or squeezing in a third row
- * that every other item would have to leave blank.
- */
-const twoLineLabel = (label: string): string => {
-  const words = String(label ?? '').trim().split(/\s+/).filter(Boolean);
-  const [first = '', ...rest] = words;
-  return `${first}\n${rest.join(' ') || '\u00A0'}`;
-};
+  const badgeCounts = useNavBadgeCounts(isTechnician);
 
-const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userRole, roleId }) => {
-  const { can } = usePermissions();
+  /**
+   * A prepaid account has no bills — invoice generation is disabled for it — so the tab that would
+   * open the SOA/Invoices screen is named for what it actually shows: the top-up history. Read
+   * from the already-loaded customer detail, so this costs no request. Undefined for every
+   * non-customer role, which keeps the label at its postpaid default.
+   */
+  const customerData = useCustomerDataContextOptional();
+  const billingNavLabel = customerData?.isPrepaid ? 'History' : 'Bills';
+
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [isMenuExpanded, setIsMenuExpanded] = useState(false);
   const [measuredHeight, setMeasuredHeight] = useState(300);
@@ -133,73 +150,28 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
     {
       title: 'Operations',
       items: [
-        // The agent and customer dashboards are deliberately not listed.
-        //
-        // Both are landing pages: ROLE_HOME sends an agent to 'agent-dashboard'
-        // and a customer to 'customer-dashboard' at sign-in, and the switch in
-        // Dashboard.tsx falls back to them for those roles. So they are where
-        // those users already are, and a tab pointing at the screen you are
-        // looking at is a tab that does nothing.
-        //
-        // Hidden here rather than unrouted or de-permissioned: the sections
-        // still render, still carry their keys, and the two roles still land on
-        // them. Removing the routes would have dropped both onto a blank
-        // screen, and dropping the keys would have broken parity with the web
-        // client and the server catalog that PermissionsParityTest guards.
-        //
-        // The administrator's own dashboard and the live monitor lead, as they
-        // do on the web sidebar. `requires` narrows the first to the bare
-        // 'dashboard' key — see MenuItem.
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, requires: 'dashboard' },
-        { id: 'live-monitor', label: 'Monitoring', icon: Activity },
+        { id: 'agent-dashboard', label: 'Dashboard', icon: LayoutDashboard, onlyRoles: [ROLE.AGENT] },
+        { id: 'customer-dashboard', label: 'Dashboard', icon: LayoutDashboard, onlyRoles: [ROLE.CUSTOMER] },
         { id: 'applicationManagement', label: 'Application', icon: FileCheck },
         { id: 'job-order', label: 'Job Order', icon: Wrench },
         { id: 'service-order', label: 'Service Order', icon: Settings },
-        { id: 'radius-queue', label: 'RADIUS Queue', icon: Server },
         { id: 'work-order', label: 'Work Order', icon: ClipboardCheck },
         { id: 'lcp-nap-location', label: 'LCP/NAP', icon: MapPinned },
       ],
     },
     {
-      // The same eleven entries the web sidebar's Billing group carries, in the
-      // same order. Kept aligned deliberately: this is the group an
-      // administrator works out of every day, and the two clients disagreeing
-      // about what is in it is what makes somebody think a page is missing.
-      //
-      // Customer Bills is NOT here. The web files it under Customer Portal
-      // beside Customer Support, because it is the bill a customer reads about
-      // their own account rather than the billing desk's workload — see the
-      // Account group below.
       title: 'Billing',
       items: [
-        { id: 'customer', label: 'Customer', icon: Users },
-        { id: 'transaction-list', label: 'Transactions', icon: Receipt },
-        { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw },
-        { id: 'payment-portal', label: 'Payment Portal', icon: CreditCard },
-        { id: 'soa', label: 'Statements', icon: FileText },
-        { id: 'invoice', label: 'Invoice', icon: ReceiptText },
+        { id: 'customer-bills', label: billingNavLabel, icon: ReceiptText, onlyRoles: [ROLE.CUSTOMER] },
         { id: 'overdue', label: 'Overdue', icon: Clock },
-        // 'so-charges' is the section id the Dashboard switch and Menu page use;
-        // permissions.ts maps it to the 'so-charge' key.
-        { id: 'so-charges', label: 'SO Charge', icon: Coins },
-        { id: 'dc-notice', label: 'DC Notice', icon: FileWarning },
-        // 'rebate' likewise: the mobile section id, mapped to 'mass-rebate'.
-        { id: 'rebate', label: 'Rebates', icon: Coins },
-        { id: 'discounts', label: 'Discounts', icon: Tag },
       ],
     },
     {
-      // The web sidebar's Agent group, entry for entry.
-      //
-      // Labels follow the web because that is what an administrator is used to
-      // reading. 'commission' is the mobile section id for the page the server
-      // and the web both call Bonus History — permissions.ts maps the two.
       title: 'Agent',
       items: [
-        { id: 'commission', label: 'Bonus History', icon: Gift },
-        { id: 'team-agent', label: 'Team Agents', icon: Users },
-        { id: 'agent-management', label: 'Agent Management', icon: UserCog },
-        { id: 'agent-payout', label: 'Agent Payout', icon: Wallet },
+        { id: 'commission', label: 'History', icon: ReceiptText },
+        // An agent reads their own invoices here (the server scopes the list);
+        // generating, status changes and pay-outs are admin-only in the page.
         { id: 'agent-invoices', label: 'Invoices', icon: FileText },
       ],
     },
@@ -211,18 +183,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
       ],
     },
     {
-      // The reconciliation tools, each of which writes corrections into a live
-      // downstream. Only the ones ported to this client are listed; the rest
-      // stay off the bar rather than appearing and leading nowhere.
-      title: 'Tools',
-      items: [
-        { id: 'smartolt-tool', label: 'SmartOLT Tool', icon: Network },
-        { id: 'mikrotik-radius-tool', label: 'Mikrotik Radius', icon: Router },
-        { id: 'xendit-reconcile-tool', label: 'Xendit Reconcile', icon: CreditCard },
-        { id: 'billing-reconcile-tool', label: 'Billing Reconcile', icon: Receipt },
-      ],
-    },
-    {
       title: 'Configurations',
       items: [
         { id: 'promo-list', label: 'Promos', icon: Ticket },
@@ -231,7 +191,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
         { id: 'lcp-list', label: 'LCP List', icon: Network },
         { id: 'nap-list', label: 'NAP List', icon: Network },
         { id: 'usage-type-list', label: 'Usage Types', icon: Gauge },
-        { id: 'vlan-config', label: 'VLAN', icon: Network },
         { id: 'payment-method-list', label: 'Payment', icon: CreditCard },
         { id: 'work-category-list', label: 'Work Cat.', icon: Wrench },
         { id: 'radius-config', label: 'RADIUS', icon: Wifi },
@@ -243,68 +202,35 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
       ],
     },
     {
-      // The web sidebar's Logs group, entry for entry and in its order.
-      //
-      // Each carries its own key, which is the restriction: Disconnected through
-      // Data Logs are Administrator and SuperAdmin, Modem/Router adds Head
-      // Technician and Inventory Staff, and the last three — Smart OLT, Radius
-      // and System — are SuperAdmin's alone. Listing them separately is what
-      // makes those three restrictions apply; a single combined "File Logs"
-      // entry keyed on the union of all three did not.
-      //
-      // Ids are mobile section ids where they differ from the key
-      // ('disconnection-logs', 'file-log-viewer', 'activity-logs');
-      // permissionForSection translates.
       title: 'Logs',
       items: [
-        { id: 'disconnection-logs', label: 'Disconnected', icon: AlertTriangle },
-        { id: 'reconnection-logs', label: 'Reconnection', icon: RefreshCw },
         { id: 'sms-logs', label: 'SMS Logs', icon: MessageSquareText },
         { id: 'email-logs', label: 'Email Logs', icon: Mail },
-        { id: 'data-logs', label: 'Data Logs', icon: FileText },
-        { id: 'modem-router-logs', label: 'Modem/Router', icon: Router },
-        { id: 'file-log-viewer', label: 'Smart OLT Logs', icon: Network },
-        { id: 'radius-logs', label: 'Radius Logs', icon: Activity },
-        { id: 'activity-logs', label: 'System Logs', icon: FileText },
+        { id: 'file-log-viewer', label: 'File Logs', icon: FileText },
+        { id: 'expenses-log', label: 'Expenses', icon: Wallet },
       ],
     },
     {
       title: 'Account',
       items: [
-        // Listed ahead of Support so a customer's bar reads Bills, Support,
-        // Menu — the order they had when Bills sat in the Billing group, which
-        // is the order the collapsed bar takes its first three from.
-        // The customer portal. Listed for the Customer role alone: a SuperAdmin
-        // holds the wildcard and so matches these keys too, which put another
-        // account's Bills and Support screens on an administrator's bar. The
-        // web sidebar has no equivalent entries at all — it returns null for a
-        // customer and renders their portal as its own layout.
-        { id: 'customer-bills', label: 'Bills', icon: ReceiptText, onlyRoles: [ROLE.CUSTOMER] },
         { id: 'customer-support', label: 'Support', icon: LifeBuoy, onlyRoles: [ROLE.CUSTOMER] },
-        { id: 'menu', label: 'Menu', icon: MenuIcon, isMenuPage: true },
+        { id: 'menu', label: 'Menu', icon: MenuIcon, isMenuPage: true, requires: [] },
       ],
     },
   ];
 
   // ─── Permission filtering ───
-  // An entry is listed when the role holds the key its id maps to — the same
-  // key Dashboard checks before rendering the screen, so the tab bar can never
-  // offer something that then refuses to open.
-  // The signed-in role, for the handful of entries permissions cannot decide.
-  // Read through usePermissions so this agrees with every other screen about
-  // who somebody is, rather than depending on the prop being passed.
-  const { roleId: resolvedRoleId } = usePermissions();
-  const effectiveRoleId = Number(roleId ?? resolvedRoleId) || resolvedRoleId;
-
-  const filterByPermission = (items: MenuItem[]): MenuItem[] =>
+  const filterMenuByRole = (items: MenuItem[]): MenuItem[] =>
     items.filter(item => {
-      if (item.onlyRoles && !item.onlyRoles.includes(effectiveRoleId)) return false;
+      if (item.onlyRoles && isLockedRole(resolvedRoleId) && !item.onlyRoles.includes(resolvedRoleId)) {
+        return false;
+      }
       return can(item.requires ?? permissionForSection(item.id));
     });
 
   // Build filtered groups (only groups with at least 1 visible item)
   const filteredNavGroups = navGroups
-    .map(group => ({ title: group.title, items: filterByPermission(group.items) }))
+    .map(group => ({ title: group.title, items: filterMenuByRole(group.items) }))
     .filter(group => group.items.length > 0);
 
   // Flatten for bottom bar logic
@@ -434,20 +360,19 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
           }),
         }}>
           <IconComponent size={22} color={isActive ? primaryColor : '#6b7280'} />
+          <NavBadge count={badgeCounts[item.id as keyof NavBadgeCounts]} />
         </View>
         <Text
           style={{
             width: '100%',
-            fontSize: LABEL_FONT_SIZE,
-            lineHeight: LABEL_LINE_HEIGHT,
-            height: LABEL_BLOCK_HEIGHT,
+            fontSize: 10,
             fontWeight: isActive ? '700' : '500',
             color: isActive ? primaryColor : '#6b7280',
             textAlign: 'center',
           }}
-          numberOfLines={2}
+          numberOfLines={1}
         >
-          {twoLineLabel(item.label)}
+          {item.label}
         </Text>
       </Pressable>
     );
@@ -659,18 +584,21 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
                   zIndex: 10,
                 }}
               >
-                <IconComponent size={22} color={isActive ? primaryColor : '#4b5563'} />
+                {/* The icon and its badge share a wrapper so the badge anchors to the
+                    icon rather than to the whole tab, which is wider than it. */}
+                <View>
+                  <IconComponent size={22} color={isActive ? primaryColor : '#4b5563'} />
+                  <NavBadge count={badgeCounts[item.id as keyof NavBadgeCounts]} />
+                </View>
                 <Text style={{
                   width: '100%',
                   textAlign: 'center',
-                  fontSize: LABEL_FONT_SIZE,
-                  lineHeight: LABEL_LINE_HEIGHT,
-                  height: LABEL_BLOCK_HEIGHT,
+                  fontSize: 10,
                   marginTop: 4,
                   fontWeight: isActive ? '700' : '500',
                   color: isActive ? primaryColor : '#4b5563'
-                }} numberOfLines={2}>
-                  {twoLineLabel(item.label)}
+                }} numberOfLines={1}>
+                  {item.label}
                 </Text>
               </Pressable>
             );
@@ -705,14 +633,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
               <Text style={{
                 width: '100%',
                 textAlign: 'center',
-                fontSize: LABEL_FONT_SIZE,
-                lineHeight: LABEL_LINE_HEIGHT,
-                height: LABEL_BLOCK_HEIGHT,
+                fontSize: 10,
                 marginTop: 4,
                 fontWeight: isActiveInOverflow || activeSection === 'menu' ? '700' : '500',
                 color: isActiveInOverflow || activeSection === 'menu' ? primaryColor : '#4b5563'
-              }} numberOfLines={2}>
-                {twoLineLabel('More')}
+              }} numberOfLines={1}>
+                More
               </Text>
             </Pressable>
           )}

@@ -59,15 +59,6 @@ interface InvoiceStore {
     invoiceRecords: InvoiceRecordUI[];
     totalCount: number;
     isLoading: boolean;
-    /**
-     * True while the chunk loop is still pulling the rest of the table.
-     *
-     * isLoading drops to false as soon as the first chunk lands so the list can
-     * paint, which leaves every other entry point free to start a second loop or
-     * to have its merge overwritten by this one. Anything that writes the record
-     * array waits on this flag, not on isLoading.
-     */
-    isBackgroundLoading: boolean;
     error: string | null;
     fetchInvoiceRecords: (force?: boolean) => Promise<void>;
     refreshInvoiceRecords: () => Promise<void>;
@@ -80,16 +71,11 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
     invoiceRecords: [],
     totalCount: 0,
     isLoading: false,
-    isBackgroundLoading: false,
     error: null,
     lastUpdated: null,
 
     fetchInvoiceRecords: async (force = false) => {
-        const { invoiceRecords, isLoading, isBackgroundLoading } = get();
-
-        // A second pass starting mid-chunk-loop would append to its own snapshot
-        // and the two would overwrite each other, losing rows.
-        if (isBackgroundLoading) return;
+        const { invoiceRecords, isLoading } = get();
 
         // If already loading or data already exists (and not forcing), skip
         if (isLoading || (invoiceRecords.length > 0 && !force)) return;
@@ -170,8 +156,6 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
             let currentPage = 2;
             let hasMore = allFetchedRecords.length < dbTotal;
 
-            set({ isBackgroundLoading: hasMore });
-
             while (hasMore) {
                 try {
                     const nextResult = await invoiceService.getAllInvoices(false, currentPage, CHUNK_SIZE);
@@ -200,15 +184,10 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
                 error: err.message || 'Failed to load records',
                 isLoading: false
             });
-        } finally {
-            set({ isLoading: false, isBackgroundLoading: false });
         }
     },
 
     refreshInvoiceRecords: async () => {
-        // Emptying the array mid-run would be undone by the loop's next write.
-        if (get().isBackgroundLoading) return;
-
         set({ invoiceRecords: [] });
         await get().fetchInvoiceRecords(true);
     },
@@ -223,12 +202,8 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
     },
 
     pollLatestUpdates: async () => {
-        const { lastUpdated, invoiceRecords, totalCount, isBackgroundLoading } = get();
+        const { lastUpdated, invoiceRecords, totalCount } = get();
         if (!lastUpdated || invoiceRecords.length === 0) return;
-
-        // The merge below rebuilds the array from current state; the chunk loop
-        // would then write its own snapshot over the top and drop the update.
-        if (isBackgroundLoading) return;
 
         try {
             const isoString = lastUpdated.toISOString();

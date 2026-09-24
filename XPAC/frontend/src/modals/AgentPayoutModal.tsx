@@ -35,6 +35,11 @@ interface AgentPayoutModalProps {
     approveId?: number;
     /** Reference of the record being approved, shown read-only. */
     approveRefNumber?: string;
+    /**
+     * The type the record being approved was raised with. Sent back unchanged
+     * so approving never re-types a commission / incentives record as 'all'.
+     */
+    approveType?: string | null;
 }
 
 interface PayoutFormData {
@@ -57,7 +62,8 @@ const AgentPayoutForm: React.FC<{
     invoiceNumber?: string;
     approveId?: number;
     approveRefNumber?: string;
-}> = ({ agentId, agentName, onClose, onSuccess, isOpen, fromInvoice = false, invoiceNumber, approveId, approveRefNumber }) => {
+    approveType?: string | null;
+}> = ({ agentId, agentName, onClose, onSuccess, isOpen, fromInvoice = false, invoiceNumber, approveId, approveRefNumber, approveType }) => {
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
 
     useEffect(() => {
@@ -415,7 +421,7 @@ const AgentPayoutForm: React.FC<{
             const response = approveId
                 ? await apiClient.post(`/commissions/history/${approveId}/approve`, {
                     total_amount: formData.total_amount,
-                    type: formData.payout_type,
+                    type: approveType || formData.payout_type,
                     remarks: formData.remarks,
                     proof_of_payment: proofUrl,
                 })

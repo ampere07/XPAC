@@ -24,7 +24,7 @@ export const commissionService = {
     },
 
     // The quota incentives the cron awarded, one row per referral counted.
-    // Mirrors ATSS2_0/frontend/src/services/commissionService.ts — the History
+    // Mirrors GOWISER/frontend/src/services/commissionService.ts — the History
     // screen's Incentives tab had no way to load anything without it, so it
     // rendered an empty list whatever the agent had earned.
     getIncentiveHistory: async (limit = 2000, offset = 0, updatedAfter?: string) => {

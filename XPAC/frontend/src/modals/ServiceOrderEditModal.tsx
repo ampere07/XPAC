@@ -13,8 +13,7 @@ import { getAllLCPNAPs, LCPNAP } from '../services/lcpnapService';
 import { routerModelService, RouterModel } from '../services/routerModelService';
 import { getBillingRecordDetails } from '../services/billingService';
 import { technicianService } from '../services/technicianService';
-import { getRegions, getCities, City } from '../services/cityService';
-import { barangayService, Barangay } from '../services/barangayService';
+import { logBlockedTechnicianTransfer } from '../services/serviceOrderService';
 import SearchableField from '../components/common/SearchableField';
 
 
@@ -51,6 +50,7 @@ interface ServiceOrderEditFormData {
   plan: string;
 
   username: string;
+  pppoePassword?: string;
   connectionType: string;
   routerModemSN: string;
   lcp: string;
@@ -86,11 +86,6 @@ interface ServiceOrderEditFormData {
   routerModel: string;
   newPlan: string;
   newLcpnap: string;
-  // Customer address fields, editable only under the Relocation concern
-  address: string;
-  barangay: string;
-  city: string;
-  region: string;
 }
 
 interface ImageFiles {
@@ -99,137 +94,6 @@ interface ImageFiles {
   timeOutFile: File | null;
   clientSignatureFile: File | null;
 }
-
-/**
- * Support statuses that close the visit, and the visit status each one implies.
- *
- * The Visit Status field is only shown under "For Visit", so on these two there
- * is no field for the user to set it in — that is what left resolved and failed
- * tickets carrying no visit status at all. Any support status not listed here
- * leaves the visit status exactly as the user left it.
- *
- * Kept in one place because the rule is applied three times — on change, again
- * on save, and once more to decide whether the payload carries visit_status —
- * and the three drifting apart is what would put a value on screen that never
- * reaches the row.
- */
-const CLOSING_VISIT_STATUS: Record<string, string> = {
-  Resolved: 'Done',
-  Failed: 'Failed'
-};
-
-/**
- * The repair categories that put the new LCP/NAP/Port fields on screen and send
- * them, because the work moves the customer to a different line.
- *
- * All four required the full set — router serial, LCP-NAP, port, VLAN, router
- * model — because a migration or a transfer always replaces the whole
- * installation. A reactivation does not, so it is not listed here; see
- * REACTIVATE_CATEGORIES.
- */
-const RELOCATION_CATEGORIES = ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT'];
-
-/**
- * How a reactivation is spelled, lowercased.
- *
- * "Reactivate" is what the picker offers. "Reactivation" is what older rows and
- * the server's migration branch say, and a ticket saved under it has to keep
- * behaving like one when it is reopened, so both are read. Mirrors
- * ServiceOrderApiController::REACTIVATE_CATEGORIES.
- */
-const REACTIVATE_CATEGORIES = ['reactivate', 'reactivation'];
-
-/** Is this repair category a reactivation, whichever way it is spelled? */
-const isReactivateCategory = (repairCategory?: string | null): boolean =>
-  REACTIVATE_CATEGORIES.includes(String(repairCategory ?? '').toLowerCase().trim());
-
-/**
- * billing_status.id 5 is Pullout — the account has been physically pulled out
- * and its portal login disabled (see App\Support\PulloutCategory, which is what
- * disables it).
- *
- * The only ticket worth raising against an account in that state is the one
- * that brings it back, so both pickers collapse to the reactivation option.
- * Offering "Relocate" or "Replace Router" on a pulled-out account invites a
- * visit for a service that is not connected.
- */
-const PULLOUT_BILLING_STATUS_ID = 5;
-
-/**
- * The repair categories, lifted out of the JSX so the pulled-out case can
- * narrow the list rather than duplicate it.
- */
-const REPAIR_CATEGORY_OPTIONS = [
-  { name: 'None' },
-  { name: 'Fiber Relaying' },
-  { name: 'Migrate' },
-  { name: 'others' },
-  { name: 'Pullout' },
-  { name: 'Reactivate' },
-  { name: 'Reboot/Reconfig Router' },
-  { name: 'Relocate Router' },
-  { name: 'Relocate' },
-  { name: 'Replace Patch Cord' },
-  { name: 'Replace Router' },
-  { name: 'Resplice' },
-  { name: 'Transfer LCP/NAP/PORT' },
-  { name: 'Update Vlan' },
-];
-
-/** The single category a pulled-out account may be given. */
-const REACTIVATE_REPAIR_CATEGORY = REPAIR_CATEGORY_OPTIONS.find(
-  (option) => isReactivateCategory(option.name)
-)!;
-
-/** The concern to fall back on when the catalog has no reactivation entry. */
-const REACTIVATE_CONCERN_FALLBACK = 'Reactivate';
-
-/**
- * What the LCP-NAP and Port fields mean under this repair category.
- *
- * Three answers, not two: a relocation requires them as the new installation, a
- * reactivation offers them as an optional correction, and everything else does
- * not show them at all. Switching between the three is what has to clear them —
- * see handleInputChange.
- */
-const lineFieldGroup = (repairCategory?: string | null): 'relocation' | 'reactivate' | 'none' => {
-  if (RELOCATION_CATEGORIES.includes(String(repairCategory ?? ''))) return 'relocation';
-  if (isReactivateCategory(repairCategory)) return 'reactivate';
-  return 'none';
-};
-
-/**
- * Has the technician put the account on a different LCP, NAP or port?
- *
- * Compared the way the server compares them — trimmed and case-folded — so the
- * form and the API agree about what counts as a move, and a paste that differs
- * only in case does not read as one. A blank "new" value means the field was
- * left alone, not that the line was cleared, so it never counts as a change.
- *
- * The LCP and NAP come out of the single LCP-NAP picker, which is why they are
- * parsed here rather than read from two fields.
- */
-const lineIdentityChanged = (current: { lcp: string; nap: string; port: string },
-                             next: { lcp: string; nap: string; port: string }): string[] => {
-  const normalize = (value?: string | null) => String(value ?? '').toLowerCase().trim();
-
-  return (['lcp', 'nap', 'port'] as const).filter(field => {
-    const proposed = normalize(next[field]);
-    return proposed !== '' && proposed !== normalize(current[field]);
-  });
-};
-
-/** Pull "LCP-008" and "NAP-02" out of the combined LCP-NAP picker value. */
-const parseLcpNap = (lcpnap?: string | null): { lcp: string; nap: string } => {
-  const value = String(lcpnap ?? '');
-  const lcpMatch = value.match(/LCP-\d+/i);
-  const napMatch = value.match(/NAP-\d+/i);
-
-  return {
-    lcp: lcpMatch ? lcpMatch[0].toUpperCase() : '',
-    nap: napMatch ? napMatch[0].toUpperCase() : '',
-  };
-};
 
 const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   isOpen,
@@ -242,16 +106,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [activeImageSize, setActiveImageSize] = useState<ImageSizeSetting | null>(null);
   const sigCanvas = useRef<SignatureCanvas>(null);
-
-  // The day a technician last moved this ticket's Visit Status, as the API
-  // stored it. A DATE column, but MySQL drivers and JSON casting between them
-  // can hand it back as "2026-09-05", "2026-09-05 00:00:00" or an ISO string,
-  // so keep the leading date and drop whatever follows.
-  const visitStatusDate = (() => {
-    const raw = serviceOrderData?.visit_status_date ?? serviceOrderData?.visitStatusDate;
-    const match = String(raw ?? '').match(/^\d{4}-\d{2}-\d{2}/);
-    return match ? match[0] : '';
-  })();
 
   const getCurrentUser = (): UserData | null => {
     try {
@@ -274,15 +128,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     ? !isTech
     : (currentUser?.role_id === 1 || currentUser?.role_id === 8 || (typeof currentUser?.role === 'string' && ['administrator', 'superadmin', 'super admin', 'headtech'].includes(currentUser.role.toLowerCase())));
 
-  // Relocation address fields are limited to Administrator (role 1) and SuperAdmin (role 7).
-  // isAdministratorOrSuperadmin is deliberately not reused here: it also passes HeadTech (8),
-  // misses SuperAdmin (7), and treats any non-technician as an admin when isTech is provided.
-  const canEditRelocationAddress = !isTechnician && (
-    currentUser?.role_id === 1 ||
-    currentUser?.role_id === 7 ||
-    (typeof currentUser?.role === 'string' && ['administrator', 'superadmin', 'super admin'].includes(currentUser.role.toLowerCase()))
-  );
-
   const [technicians, setTechnicians] = useState<Array<{ name: string; id?: number }>>([]);
   const [technicianUsers, setTechnicianUsers] = useState<Array<{ name: string; email: string }>>([]);
 
@@ -298,13 +143,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   const [routerModels, setRouterModels] = useState<RouterModel[]>([]);
   const [billingStatusId, setBillingStatusId] = useState<number | null>(null);
 
-  // Location lookups for the Relocation address fields
-  const [regions, setRegions] = useState<Array<{ id: number; name: string }>>([]);
-  const [allCities, setAllCities] = useState<City[]>([]);
-  const [allBarangays, setAllBarangays] = useState<Barangay[]>([]);
-  // Snapshot of the customer's address when the modal opened, so only actual edits are sent
-  const [originalAddress, setOriginalAddress] = useState({ address: '', barangay: '', city: '', region: '' });
-
   const [orderItems, setOrderItems] = useState<OrderItem[]>([{ itemId: '', quantity: '' }]);
 
   const [formData, setFormData] = useState<ServiceOrderEditFormData>({
@@ -316,6 +154,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     plan: '',
 
     username: '',
+    pppoePassword: '',
     connectionType: '',
     routerModemSN: '',
     lcp: '',
@@ -358,11 +197,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     newVlan: '',
     routerModel: '',
     newPlan: '',
-    newLcpnap: '',
-    address: '',
-    barangay: '',
-    city: '',
-    region: ''
+    newLcpnap: ''
   });
 
 
@@ -654,28 +489,11 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       }
     };
 
-    const fetchLocations = async () => {
-      try {
-        const [fetchedRegions, fetchedCities, barangaysRes] = await Promise.all([
-          getRegions(),
-          getCities(),
-          barangayService.getAll()
-        ]);
-
-        setRegions(Array.isArray(fetchedRegions) ? fetchedRegions : []);
-        setAllCities(Array.isArray(fetchedCities) ? fetchedCities : []);
-        setAllBarangays(barangaysRes.success && Array.isArray(barangaysRes.data) ? barangaysRes.data : []);
-      } catch (error) {
-        console.error('Error fetching locations:', error);
-      }
-    };
-
     if (isOpen) {
       fetchTechnicians();
       fetchTechnicianUsers();
       fetchTechnicalDetails();
       fetchConcerns();
-      fetchLocations();
     }
 
 
@@ -742,6 +560,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         plan: serviceOrderData.plan || '',
 
         username: serviceOrderData.username || '',
+        pppoePassword: serviceOrderData.pppoePassword || serviceOrderData.pppoe_password || '',
         connectionType: serviceOrderData.connectionType || serviceOrderData.connection_type || '',
         routerModemSN: serviceOrderData.routerModemSN || serviceOrderData.router_modem_sn || '',
         lcp: serviceOrderData.lcp || '',
@@ -791,28 +610,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         newNap: '',
         newPort: '',
         newVlan: '',
-        // Reset with the rest of the "new" fields rather than left behind. It was
-        // the only one of the group not cleared here, which was harmless while
-        // the field belonged to Migrate alone — the category had to be chosen
-        // again anyway. Reactivate now reads it too, and a value left over from
-        // the previous ticket in this session would read as "the line moved" and
-        // rename a PPPoE account that nobody touched.
-        newLcpnap: '',
-        routerModel: '',
-        address: serviceOrderData.contactAddress || serviceOrderData.contact_address || serviceOrderData.address || '',
-        barangay: serviceOrderData.barangay || '',
-        city: serviceOrderData.city || '',
-        region: serviceOrderData.region || ''
+        routerModel: ''
       }));
-
-      // Remember what the customer address looked like on open so the save only
-      // sends the address fields that the user actually changed.
-      setOriginalAddress({
-        address: serviceOrderData.contactAddress || serviceOrderData.contact_address || serviceOrderData.address || '',
-        barangay: serviceOrderData.barangay || '',
-        city: serviceOrderData.city || '',
-        region: serviceOrderData.region || ''
-      });
     }
   }, [serviceOrderData, isOpen, currentUserEmail]);
 
@@ -835,54 +634,11 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     fetchBillingStatus();
   }, [isOpen, serviceOrderData]);
 
-  // A pulled-out account: both pickers collapse to reactivation.
-  const isPulledOut = billingStatusId === PULLOUT_BILLING_STATUS_ID;
-
-  // `concern` is a free string on service_orders and the update path never maps
-  // it back to support_concern.id, so a reactivation entry the catalog happens
-  // not to carry can still be offered and saved.
-  const reactivateConcerns = concerns.filter((c) => isReactivateCategory(c.concern_name));
-  const concernOptions = isPulledOut
-    ? (reactivateConcerns.length > 0
-        ? reactivateConcerns
-        : [{ concern_name: REACTIVATE_CONCERN_FALLBACK } as Concern])
-    : [{ concern_name: 'None' } as Concern, ...concerns];
-
-  const repairCategoryOptions = isPulledOut
-    ? [REACTIVATE_REPAIR_CATEGORY]
-    : REPAIR_CATEGORY_OPTIONS;
-
   const handleInputChange = (field: keyof ServiceOrderEditFormData, value: string) => {
     setFormData(prev => {
       const newState = { ...prev, [field]: value };
       if (field === 'newLcp' || field === 'newNap' || field === 'newLcpnap') {
         newState.newPort = '';
-      }
-      // Moving to a repair category that means something different by the LCP-NAP
-      // and Port fields starts them empty.
-      //
-      // The two groups read the same fields for different purposes: under a
-      // relocation they are the new installation and are required, under a
-      // reactivation they are the optional "came back on a different line" and
-      // are what triggers the RADIUS rename. Carrying a half-filled relocation
-      // into a reactivation would silently rename a working PPPoE account.
-      // Re-picking the same category is not a change and clears nothing.
-      if (field === 'repairCategory' && lineFieldGroup(value) !== lineFieldGroup(prev.repairCategory)) {
-        newState.newLcpnap = '';
-        newState.newPort = '';
-        newState.newLcp = '';
-        newState.newNap = '';
-      }
-      // Closing the ticket closes its visit with it — see CLOSING_VISIT_STATUS.
-      if (field === 'supportStatus' && CLOSING_VISIT_STATUS[value]) {
-        newState.visitStatus = CLOSING_VISIT_STATUS[value];
-      }
-      // Region -> City -> Barangay cascade: clear the dependent levels when a parent changes
-      if (field === 'region') {
-        newState.city = '';
-        newState.barangay = '';
-      } else if (field === 'city') {
-        newState.barangay = '';
       }
       return newState;
     });
@@ -890,26 +646,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
-
-  const getFilteredCities = (): City[] => {
-    if (!formData.region) return [];
-    const selectedRegion = regions.find(reg => reg.name === formData.region);
-    if (!selectedRegion) return [];
-    return allCities.filter(city => city.region_id === selectedRegion.id);
-  };
-
-  const getFilteredBarangays = (): Barangay[] => {
-    if (!formData.city) return [];
-    const selectedCity = allCities.find(city => city.name === formData.city);
-    if (!selectedCity) return [];
-    return allBarangays.filter(brgy => brgy.city_id === selectedCity.id);
-  };
-
-  // The relocation address is only written to the customer record on a Resolved save, so the
-  // form has to say when edits are still pending rather than dropping them silently.
-  const isSupportStatusResolved = String(formData.supportStatus).toLowerCase().trim() === 'resolved';
-  const hasPendingAddressEdits = (['address', 'barangay', 'city', 'region'] as const)
-    .some(field => (formData[field] || '') !== (originalAddress[field] || ''));
 
   const handleImageChange = async (field: keyof ImageFiles, file: File | null) => {
     if (file && activeImageSize && activeImageSize.image_size_value < 100) {
@@ -1038,9 +774,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     const isForVisit = formData.supportStatus === 'For Visit';
     const isVisitDone = isForVisit && formData.visitStatus === 'Done';
     const isVisitRescheduledOrFailed = isForVisit && (formData.visitStatus === 'Reschedule' || formData.visitStatus === 'Failed');
-    const isMigrateGroup = isVisitDone && RELOCATION_CATEGORIES.includes(formData.repairCategory);
+    const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT'].includes(formData.repairCategory);
     const isReplaceRouter = isVisitDone && formData.repairCategory === 'Replace Router';
-    const isReactivate = isVisitDone && isReactivateCategory(formData.repairCategory);
 
     if (!formData.supportStatus.trim()) newErrors.supportStatus = 'Support Status is required';
 
@@ -1094,16 +829,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       if (!formData.newRouterModemSN.trim()) newErrors.newRouterModemSN = 'New Router Modem SN is required';
     }
 
-    // Reactivation: both fields are optional, because most reactivations put the
-    // customer back on the line they left on and there is nothing to record. A
-    // port on its own is the one combination that cannot be saved — the port
-    // number only means anything against an LCP-NAP, and sending one without the
-    // other would move the account to a port on whichever LCP-NAP it is already
-    // on, which is not what picking a port was meant to say.
-    if (isReactivate && formData.newPort.trim() && !formData.newLcpnap.trim()) {
-      newErrors.newLcpnap = 'Select the LCP-NAP this port belongs to';
-    }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -1126,26 +851,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     return status === 'resolved' && (concern === 'restrict' || concern === 'disconnect');
   };
 
-  /**
-   * The LCP/NAP/Port fields a reactivation is about to move, if any.
-   *
-   * Drives the warning below, and reads the form exactly as the save does, so
-   * what the banner promises is what gets sent. Empty means this save renames
-   * nothing in RADIUS.
-   */
-  const reactivateLineMove = (): string[] => {
-    if (formData.visitStatus.toLowerCase() !== 'done' || !isReactivateCategory(formData.repairCategory)) {
-      return [];
-    }
-
-    const { lcp, nap } = parseLcpNap(formData.newLcpnap);
-
-    return lineIdentityChanged(
-      { lcp: formData.lcp, nap: formData.nap, port: formData.port },
-      { lcp, nap, port: formData.newPort }
-    );
-  };
-
   const handleItemChange = (index: number, field: 'itemId' | 'quantity', value: string) => {
     const newOrderItems = [...orderItems];
     newOrderItems[index][field] = value;
@@ -1164,12 +869,56 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   };
 
   const handleSave = async () => {
-    // ── Technician reassignment: allowed at any time. When the assigned tech
-    //    changes, the on-site visit is reset so the new technician starts fresh
-    //    (start_time / end_time are cleared below in the service order update). ──
+    // ── Block technician reassignment only once the job is actually being worked on ──
+    // A ticket counts as "started" only when its visit status is In Progress AND a real
+    // start time exists. Empty / placeholder start times (''/null/'0000-00-00 ...') do
+    // NOT count, so a ticket that was never physically started can still be transferred.
+    const isRealTs = (v: any) => {
+      const s = (v == null ? '' : String(v)).trim();
+      return s !== '' && s.toLowerCase() !== 'null' && !/^0000-00-00/.test(s);
+    };
+    const rawStart = serviceOrderData?.start_time ?? serviceOrderData?.startTime ?? serviceOrderData?.Start_Time ?? null;
+    const startStr = (rawStart == null ? '' : String(rawStart)).trim();
+    const hasStartTime = isRealTs(rawStart);
+    const hasEndTime = isRealTs(serviceOrderData?.end_time ?? serviceOrderData?.endTime ?? serviceOrderData?.End_Time ?? null);
+
+    const rawVisitStatus = (serviceOrderData?.visitStatus || serviceOrderData?.visit_status || '').toString().trim().toLowerCase();
+    const isVisitInProgress = rawVisitStatus === 'in progress' || rawVisitStatus === 'in-progress';
+
     const currentAssigned = (formData.assignedEmail || '').trim();
     const originalAssigned = (originalAssignedEmail || '').trim();
     const technicianChanged = !!originalAssigned && currentAssigned !== originalAssigned;
+
+    // Only block while the tech is actively on the job: visit status In Progress, a real
+    // start time, and no end time yet. Reschedule (not In Progress) and finished tickets
+    // (an end time exists) are always transferable, as is a ticket that never started.
+    if (technicianChanged && isVisitInProgress && hasStartTime && !hasEndTime) {
+      const findName = (email: string) =>
+        [{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === email)?.name || email;
+      const originalTechName = findName(originalAssigned);
+      const newTechName = findName(currentAssigned);
+      const serviceOrderId = serviceOrderData?.id;
+
+      // Record the blocked attempt in details_update_logs (fire-and-forget; never blocks the UI)
+      if (serviceOrderId) {
+        logBlockedTechnicianTransfer(serviceOrderId, {
+          performed_by: currentUserEmail,
+          original_technician_name: originalTechName,
+          new_technician_name: newTechName,
+          account_no: formData.accountNo,
+          start_time: startStr
+        });
+      }
+
+      setModal({
+        isOpen: true,
+        type: 'error',
+        title: 'Transfer Not Allowed',
+        message: `This ticket has already been started by ${originalTechName}. Technician reassignment is no longer allowed because the assigned technician is already dispatched and working on-site.`
+      });
+      return;
+    }
+    // ── End reassignment block ──────────────────────────────────────────────
 
     const updatedFormData = {
       ...formData,
@@ -1185,41 +934,18 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       })
     };
 
-    // A closed ticket always saves as a closed visit. handleInputChange already set
-    // this when the user picked the status; repeating it here is what guarantees it
-    // reaches the payload — the status can also arrive from a ticket that opened
-    // Resolved or Failed, carrying a visit status the form never showed.
-    const closingVisitStatus = CLOSING_VISIT_STATUS[updatedFormData.supportStatus];
-    if (closingVisitStatus) {
-      updatedFormData.visitStatus = closingVisitStatus;
+    if (updatedFormData.supportStatus === 'Resolved') {
+      const originalVisitStatus = serviceOrderData.visitStatus || (serviceOrderData.visit_status === 'In Progress' ? 'In Progress' : (serviceOrderData.visitStatus || serviceOrderData.visit_status || 'In Progress'));
+      if (originalVisitStatus === 'In Progress' || originalVisitStatus === 'In-Progress' || originalVisitStatus === 'Reschedule') {
+        updatedFormData.visitStatus = '';
+      } else {
+        updatedFormData.visitStatus = originalVisitStatus;
+      }
+    } else if (updatedFormData.supportStatus === 'Failed') {
+      updatedFormData.visitStatus = 'Failed';
     }
 
-    /**
-     * Is the record ALREADY carrying the visit status this save would force?
-     *
-     * If it is, the save must not send visit_status at all. The API keys several
-     * one-shot actions off the column *changing* — the service charge posted when
-     * it becomes Done, and the auto-migration and auto-pullout read back from the
-     * row — so re-sending a value the row already holds is what risks running them
-     * a second time. Omitting the key leaves the column untouched and those
-     * triggers unreached.
-     *
-     * Read from serviceOrderData, not from formData: the form loader turns a blank
-     * stored value into "In Progress", so the form cannot tell an empty column from
-     * a genuine in-progress visit. Only the raw record can.
-     *
-     * "completed" counts as Done, the same equivalence the loader applies, so a
-     * ticket stored under that older spelling is not rewritten just to restyle it.
-     */
-    const normalizeVisitStatus = (value: unknown) => {
-      const lower = String(value ?? '').toLowerCase().trim();
-      return lower === 'completed' ? 'done' : lower;
-    };
-    const visitStatusAlreadyClosed = !!closingVisitStatus
-      && normalizeVisitStatus(serviceOrderData.visitStatus ?? serviceOrderData.visit_status)
-        === normalizeVisitStatus(closingVisitStatus);
-
-    if (updatedFormData.visitStatus === 'Reschedule') {
+    if (updatedFormData.visitStatus === 'Reschedule' || technicianChanged) {
       updatedFormData.visitBy = '';
       updatedFormData.visitWith = '';
       updatedFormData.visitWithOther = '';
@@ -1240,13 +966,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     // SmartOLT Validation Logic
     if (formData.connectionType === 'Fiber') {
       // Check if New Router Modem SN field is visible
-      // The categories that draw the serial field: the relocation group, which
-      // replaces the whole installation, plus Replace Router, which replaces only
-      // the hardware. Reactivate is deliberately not among them — it restores an
-      // account onto a line, and the router it comes back on is the one it left
-      // with.
       const isNewRouterModemSNVisible = updatedFormData.visitStatus === 'Done' &&
-        [...RELOCATION_CATEGORIES, 'Replace Router'].includes(updatedFormData.repairCategory);
+        ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT', 'Replace Router'].includes(updatedFormData.repairCategory);
 
       // Validate New Router Modem SN if provided and visible
       if (isNewRouterModemSNVisible && formData.newRouterModemSN?.trim()) {
@@ -1376,75 +1097,25 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       });
 
       // Parse New LCPNAP
-      const { lcp: newLcp, nap: newNap } = parseLcpNap(updatedFormData.newLcpnap);
+      let newLcp = '';
+      let newNap = '';
+      if (updatedFormData.newLcpnap) {
+        const lcpMatch = updatedFormData.newLcpnap.match(/LCP-\d+/i);
+        const napMatch = updatedFormData.newLcpnap.match(/NAP-\d+/i);
+        newLcp = lcpMatch ? lcpMatch[0].toUpperCase() : '';
+        newNap = napMatch ? napMatch[0].toUpperCase() : '';
+      }
 
       const isForVisit = updatedFormData.supportStatus === 'For Visit';
       const isVisitDone = isForVisit && updatedFormData.visitStatus === 'Done';
       const isVisitRescheduledOrFailed = isForVisit && (updatedFormData.visitStatus === 'Reschedule' || updatedFormData.visitStatus === 'Failed');
-
-      /**
-       * A remark is never blanked by a save.
-       *
-       * Support Remarks and Visit Remarks are only editable in some support and
-       * visit states, so a save made in another state — taking the ticket back to
-       * In Progress, for instance — must leave them exactly as they are. Sending
-       * an empty value would overwrite what is stored; omitting the key entirely
-       * leaves the column untouched, because the server only writes the fields a
-       * request actually carries.
-       *
-       * The trade is deliberate: a remark cannot be emptied from this form once
-       * written. Clearing one by accident loses the record of what happened,
-       * which is worse than having to correct the text instead.
-       */
-      const remarkIfPresent = (key: string, value: string | null | undefined) =>
-        String(value ?? '').trim() === '' ? {} : { [key]: value };
-      const isMigrateGroup = isVisitDone && RELOCATION_CATEGORIES.includes(updatedFormData.repairCategory);
+      const isMigrateGroup = isVisitDone && ['Migrate', 'Relocate', 'Relocate Router', 'Transfer LCP/NAP/PORT'].includes(updatedFormData.repairCategory);
       const isReplaceRouter = isVisitDone && updatedFormData.repairCategory === 'Replace Router';
       const isUpdateVlan = isVisitDone && updatedFormData.repairCategory === 'Update Vlan';
-      const isReactivate = isVisitDone && isReactivateCategory(updatedFormData.repairCategory);
 
       const showNewRouterSN = isVisitDone && (isMigrateGroup || isReplaceRouter);
       const showNewTechDetails = isVisitDone && isMigrateGroup;
       const showNewVlan = isVisitDone && (isMigrateGroup || isUpdateVlan);
-
-      /**
-       * A reactivation that brings the customer back on a different line.
-       *
-       * Only the three fields the PPPoE username is built from are considered —
-       * LCP, NAP and port — because those are what make the stored credential
-       * describe the wrong line. Sending them is what tells the server to rename
-       * the RADIUS account; sending them when nothing moved would rename a
-       * working credential and drop the customer's session for no reason, so the
-       * keys are omitted entirely rather than sent unchanged.
-       *
-       * The same comparison runs server side against the row, which is the one
-       * that decides. This copy exists so the form can say what is about to
-       * happen before the save, not to be trusted in place of it.
-       */
-      const reactivateMovedFields = isReactivate
-        ? lineIdentityChanged(
-            { lcp: updatedFormData.lcp, nap: updatedFormData.nap, port: updatedFormData.port },
-            { lcp: newLcp, nap: newNap, port: updatedFormData.newPort }
-          )
-        : [];
-
-      const sendReactivateLineMove = reactivateMovedFields.length > 0;
-
-      // Relocation address changes (customers table). All four fields are optional, so
-      // only the ones that differ from the values loaded on open are sent.
-      //
-      // The write is held back until the ticket is Resolved: while the relocation is still
-      // in progress the customer has not moved yet, so their record must keep the old
-      // address. Only on the save that carries Resolved do the new values get committed.
-      const isRelocationResolved = updatedFormData.concern === 'Relocation'
-        && String(updatedFormData.supportStatus).toLowerCase().trim() === 'resolved';
-
-      const changedAddressFields: Record<string, string> = {};
-      (['address', 'barangay', 'city', 'region'] as const).forEach(field => {
-        if ((updatedFormData[field] || '') !== (originalAddress[field] || '')) {
-          changedAddressFields[field] = updatedFormData[field] || '';
-        }
-      });
 
       const serviceOrderUpdateData: any = {
         account_no: updatedFormData.accountNo,
@@ -1463,11 +1134,8 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         vlan: updatedFormData.vlan,
         support_status: updatedFormData.supportStatus,
 
-        // Include visit_status when the field is visible (For Visit), or when a closing
-        // support status forced it above AND the row is not already holding that value
-        // — see visitStatusAlreadyClosed: re-sending it is what could run the API's
-        // one-shot triggers twice.
-        ...((isForVisit || (closingVisitStatus && !visitStatusAlreadyClosed)) ? {
+        // Include visit_status if visible (For Visit status) or explicitly updated when Resolved/Failed
+        ...((isForVisit || ['Resolved', 'Failed'].includes(updatedFormData.supportStatus) || updatedFormData.visitStatus === '') ? {
           visit_status: updatedFormData.visitStatus,
         } : {}),
         ...(isForVisit ? {
@@ -1479,7 +1147,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
           visit_by_user: updatedFormData.visitBy,
           visit_with: updatedFormData.visitWith,
           visit_with_other: updatedFormData.visitWithOther,
-          ...remarkIfPresent('visit_remarks', updatedFormData.visitRemarks),
+          visit_remarks: updatedFormData.visitRemarks,
         } : {}),
 
         // Fields visible only when visit is Done
@@ -1501,76 +1169,24 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
             router_model: updatedFormData.routerModel,
           } : {}),
           ...(showNewVlan ? { new_vlan: updatedFormData.newVlan } : {}),
-
-          // Reactivation onto a different line. Deliberately the LCP/NAP/port
-          // three and nothing else: the router serial, VLAN and model belong to
-          // a relocation, and a reactivation that also replaced the hardware is
-          // a different repair category. Sent only when one of the three moved,
-          // so an ordinary reactivation posts no new_* keys at all and the
-          // server's own comparison finds nothing to re-sync.
-          ...(sendReactivateLineMove ? {
-            new_lcpnap: updatedFormData.newLcpnap,
-            new_lcp: newLcp,
-            new_nap: newNap,
-            new_port: updatedFormData.newPort,
-          } : {}),
         } : {}),
 
         concern: updatedFormData.concern,
         concern_remarks: updatedFormData.concernRemarks,
         updated_by: updatedFormData.modifiedBy,
         updated_by_user: updatedFormData.modifiedBy,
-        ...remarkIfPresent('support_remarks', updatedFormData.supportRemarks),
-        // An empty field parses to NaN, which serialises as JSON null and the
-        // API reads as a ₱0 charge — backing out anything already posted.
-        service_charge: Number.isFinite(parseFloat(updatedFormData.serviceCharge))
-          ? parseFloat(updatedFormData.serviceCharge)
-          : 0,
+        support_remarks: updatedFormData.supportRemarks,
+        service_charge: parseFloat(updatedFormData.serviceCharge),
         status: updatedFormData.status,
         ...(updatedFormData.concern === 'Upgrade/Downgrade Plan' ? { new_plan: updatedFormData.newPlan } : {}),
-
-        // Relocation: send only the address fields the user actually changed, and only once
-        // the ticket is Resolved, so an untouched or still-pending field is never written
-        // over. The backend logs the old/new values.
-        ...(isRelocationResolved && canEditRelocationAddress ? changedAddressFields : {}),
-
-        // Reset the on-site timers when the technician is reassigned so the new
-        // technician starts a fresh visit (no inherited start/end time).
-        ...(technicianChanged ? { start_time: null, end_time: null } : {})
+        ...(technicianChanged || updatedFormData.visitStatus === 'Reschedule' ? {
+          start_time: null,
+          end_time: null,
+          visit_by_user: null,
+          visit_with: null,
+          visit_with_other: null,
+        } : {})
       };
-
-      /**
-       * A Resolved or Failed save closes the ticket — it does not rewrite the record.
-       *
-       * The payload above carries the whole form, and the API writes every key it
-       * receives. The form loads a blank for anything the record left empty, and for
-       * anything the current support status never put on screen, so sending those
-       * blanks back would null columns the user never touched. Dropping them leaves
-       * the save carrying the forced visit_status plus the fields that actually hold
-       * a value — an unchanged field re-sends what is already stored, which writes
-       * nothing.
-       *
-       * Only the closing statuses are pruned. A For Visit save still sends its blanks,
-       * because there the empty field was on screen and clearing it is a real edit.
-       *
-       * The exempt keys are the ones whose blank IS the intended write:
-       *   • start_time / end_time — deliberately nulled when the technician changes;
-       *   • service_charge — the API only posts the charge on a request that carries
-       *     it, so dropping a 0 would silently skip the billing on resolve.
-       *
-       * The trade matches remarkIfPresent above: a field cannot be emptied from this
-       * form on a closing save. Set it before resolving, or reopen the ticket.
-       */
-      if (closingVisitStatus) {
-        const keepWhenBlank = new Set(['start_time', 'end_time', 'service_charge']);
-        Object.keys(serviceOrderUpdateData).forEach(key => {
-          if (keepWhenBlank.has(key)) return;
-          const value = serviceOrderUpdateData[key];
-          if (value === null || value === undefined || String(value).trim() === '') {
-            delete serviceOrderUpdateData[key];
-          }
-        });
-      }
 
       setUploadProgress(85);
 
@@ -1595,13 +1211,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
           pullout_status?: string | null;
           restricted_status?: string | null;
           disconnect_status?: string | null;
-          // The reconnection half of a Reactivate ticket: billing back to Active
-          // and the plan re-applied in RADIUS. 'already_online' / 'already_active'
-          // mean the line was up and nothing was touched.
-          reactivate_status?: string | null;
-          // The RADIUS rename triggered when a reactivation moved the line.
-          // 'no_change' and null both mean nothing needed renaming.
-          reactivate_radius_status?: string | null;
           radius_queued?: boolean;
           radius_queue_failed?: boolean;
           radius_steps?: Array<{ step: string; operation: string; status: string }>;
@@ -1687,8 +1296,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               : step.operation === 'disconnect' ? 'Disconnection'
                 : step.operation === 'pullout' ? 'Pullout'
                   : step.operation === 'migration' ? 'Migration'
-                    : step.operation === 'reactivate' ? 'Reactivation PPPoE rename'
-                      : 'RADIUS';
+                    : 'RADIUS';
 
           if (step.step === 'attempt_1') {
             stepMessage = `Attempting ${opLabel} via RADIUS...`;
@@ -1742,68 +1350,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       // Pullout Messages
       if (response.data.pullout_status === 'success') {
         successMessage += '\n\nRADIUS account disabled for pullout.';
-      }
-
-      // Reactivation: the reconnection itself.
-      //
-      // Reported whatever the outcome, including the two "nothing to do"
-      // answers. A technician who files a reactivation and is told only
-      // "updated successfully" has no way to tell a line that came back up from
-      // one that was never touched, and those need different next steps.
-      switch (response.data.reactivate_status) {
-        case 'success':
-          successMessage += '\n\nAccount reactivated: billing set to Active and the plan re-applied in RADIUS.';
-          break;
-        case 'already_online':
-          successMessage += '\n\nAccount reactivated. RADIUS already had this account connected, so it was left alone.';
-          break;
-        case 'already_active':
-          successMessage += '\n\nAccount reactivated. Billing was already Active, so the RADIUS step was skipped.';
-          break;
-        case 'no_username':
-          successMessage += '\n\nWarning: no PPPoE username is recorded for this account, so it could not be reconnected in RADIUS.';
-          break;
-        case 'no_plan':
-          successMessage += '\n\nWarning: no plan is recorded for this account, so it could not be reconnected in RADIUS.';
-          break;
-        case 'no_account':
-          successMessage += '\n\nWarning: no billing account matches this service order, so it could not be reconnected.';
-          break;
-        case 'exception':
-          successMessage += '\n\nWarning: the reconnection could not be completed. Please check the technical details.';
-          break;
-        default:
-          // null: not a reactivation, or one whose ticket was already Resolved
-          // under this concern, so the reconnection had already run.
-          break;
-      }
-
-      // Reactivation onto a different LCP/NAP/Port.
-      //
-      // Every outcome is reported, not just the failures. The PPPoE username
-      // encodes the line, so a rename changes what the customer's router has to
-      // authenticate with — the technician standing at the ONU is the one person
-      // who can act on that, and they only find out here.
-      switch (response.data.reactivate_radius_status) {
-        case 'success':
-          successMessage += '\n\nPPPoE username updated in RADIUS for the new LCP/NAP/Port.';
-          break;
-        case 'radius_failed':
-          successMessage += '\n\nWarning: the PPPoE username was updated in the database but RADIUS could not be reached. The rename has been queued and will be retried automatically — the customer may not reconnect until it lands.';
-          break;
-        case 'no_username':
-          successMessage += '\n\nNote: no PPPoE username is recorded for this account, so there was nothing to rename in RADIUS.';
-          break;
-        case 'no_account':
-          successMessage += '\n\nNote: no billing account matches this service order, so the RADIUS rename was skipped.';
-          break;
-        case 'exception':
-          successMessage += '\n\nWarning: the RADIUS rename could not be attempted. Please check the technical details.';
-          break;
-        default:
-          // 'no_change' and null: the line did not move, or the generated name
-          // was the one already in use. Nothing happened and nothing to say.
-          break;
       }
 
       // Restriction / Disconnection Messages (Joined logic)
@@ -2026,6 +1572,18 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               />
             </div>
 
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}>PPPOE Password</label>
+              <input
+                type="text"
+                value={formData.pppoePassword || ''}
+                readOnly
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
+                  }`}
+              />
+            </div>
+
             {!isPulloutByAdmin && (
               <>
                 <div>
@@ -2154,27 +1712,38 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       <p className="text-xs" style={{ color: colorPalette?.primary || '#7c3aed' }}>This entry is required</p>
                     </div>
                   )}
-                  {/* Stamped by the API the day a technician moves the Visit
-                      Status, and only then. Read-only here: the column is
-                      derived server-side, so it is never sent back up. */}
-                  {visitStatusDate && (
-                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      Visit Status Date: {visitStatusDate}
-                    </p>
-                  )}
                 </div>
 
-                <SearchableField
-                  label="Assigned Email"
-                  value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
-                  onSelect={(val, option) => handleInputChange('assignedEmail', option?.email || val)}
-                  options={[{ name: 'None', email: 'None' }, ...technicianUsers]}
-                  optionLabelKey="name"
-                  isDarkMode={isDarkMode}
-                  error={errors.assignedEmail}
-                  required
-                  placeholder="Select Technician"
-                />
+                {/* Read-only for technicians: reassigning a visit is a dispatcher
+                    decision, so a technician sees who it is assigned to but cannot
+                    change it. Same treatment as Concern / Concern Remarks below. */}
+                {isTechnician ? (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                      }`}>Assigned Email<span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      // Resolved to the technician's name, matching what the editable
+                      // SearchableField displays, rather than showing the raw email.
+                      value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
+                      readOnly
+                      className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
+                        } ${errors.assignedEmail ? 'border-red-500' : ''}`}
+                    />
+                  </div>
+                ) : (
+                  <SearchableField
+                    label="Assigned Email"
+                    value={[{ name: 'None', email: 'None' }, ...technicianUsers].find(t => t.email === formData.assignedEmail)?.name || formData.assignedEmail}
+                    onSelect={(val, option) => handleInputChange('assignedEmail', option?.email || val)}
+                    options={[{ name: 'None', email: 'None' }, ...technicianUsers]}
+                    optionLabelKey="name"
+                    isDarkMode={isDarkMode}
+                    error={errors.assignedEmail}
+                    required
+                    placeholder="Select Technician"
+                  />
+                )}
 
                 {formData.visitStatus === 'Done' && (
                   <>
@@ -2182,7 +1751,21 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       label="Repair Category"
                       value={formData.repairCategory}
                       onSelect={(val) => handleInputChange('repairCategory', val)}
-                      options={repairCategoryOptions}
+                      options={[
+                        { name: 'None' },
+                        { name: 'Fiber Relaying' },
+                        { name: 'Migrate' },
+                        { name: 'others' },
+                        { name: 'Pullout' },
+                        { name: 'Reboot/Reconfig Router' },
+                        { name: 'Relocate Router' },
+                        { name: 'Relocate' },
+                        { name: 'Replace Patch Cord' },
+                        { name: 'Replace Router' },
+                        { name: 'Resplice' },
+                        { name: 'Transfer LCP/NAP/PORT' },
+                        { name: 'Update Vlan' }
+                      ]}
                       optionLabelKey="name"
                       isDarkMode={isDarkMode}
                       error={errors.repairCategory}
@@ -2191,65 +1774,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     />
 
 
-                    {/* Reactivation: the line the account is coming back on.
-                        Both optional — most reactivations restore the customer to
-                        the port they left on, and leaving these blank says exactly
-                        that. Filling either one is what renames the PPPoE account
-                        in RADIUS, because the username is built from LCP, NAP and
-                        port. The router serial, VLAN and model are not offered:
-                        replacing hardware is a different repair category. */}
-                    {isReactivateCategory(formData.repairCategory) && (
-                      <>
-                        <div className={`px-3 py-2 rounded text-xs ${isDarkMode ? 'bg-gray-800 text-gray-400' : 'bg-gray-100 text-gray-600'}`}>
-                          Leave both blank if the account is coming back on the same line.
-                          Setting either one renames the customer's PPPoE username in RADIUS
-                          to match the new LCP / NAP / Port.
-                        </div>
-
-                        <SearchableField
-                          label="New LCP-NAP"
-                          value={formData.newLcpnap}
-                          onSelect={(val) => handleInputChange('newLcpnap', val)}
-                          options={lcpnaps}
-                          optionLabelKey="lcpnap_name"
-                          isDarkMode={isDarkMode}
-                          error={errors.newLcpnap}
-                          placeholder="Search LCP-NAP..."
-                        />
-
-                        <div>
-                          <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                            }`}>New Port</label>
-                          <div className="relative">
-                            <select
-                              value={formData.newPort}
-                              onChange={(e) => handleInputChange('newPort', e.target.value)}
-                              className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                                } ${errors.newPort ? 'border-red-500' : ''}`}
-                            >
-                              <option value="">{formData.newLcpnap ? 'Select Port' : 'Select LCP-NAP first'}</option>
-                              {Array.from({ length: totalPorts }, (_, i) => {
-                                const portVal = `P${(i + 1).toString().padStart(2, '0')}`;
-                                const isUsed = usedPorts.includes(portVal);
-                                const isSelected = formData.newPort === portVal;
-
-                                if (isUsed && !isSelected) return null;
-
-                                return (
-                                  <option key={portVal} value={portVal}>
-                                    {portVal}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                            <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                              }`} size={20} />
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                    {RELOCATION_CATEGORIES.includes(formData.repairCategory) && (
+                    {(formData.repairCategory === 'Migrate' || formData.repairCategory === 'Relocate' || formData.repairCategory === 'Relocate Router' || formData.repairCategory === 'Transfer LCP/NAP/PORT') && (
                       <>
                         <div>
                           <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -2719,7 +2244,10 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       label="Visit By"
                       value={formData.visitBy}
                       onSelect={(val) => handleInputChange('visitBy', val)}
-                      options={[{ name: 'None' }, ...technicians]}
+                      // Excludes whoever is already in the other two fields, matching
+                      // the Done branch above. Without this, Visit By was the one
+                      // picker that let the same technician be chosen twice.
+                      options={[{ name: 'None' }, ...technicians.filter(tech => tech.name !== formData.visitWith && tech.name !== formData.visitWithOther)]}
                       optionLabelKey="name"
                       isDarkMode={isDarkMode}
                       error={errors.visitBy}
@@ -2791,8 +2319,11 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 label="Concern"
                 value={formData.concern}
                 onSelect={(val) => handleInputChange('concern', val)}
-                options={concernOptions}
+                // Concern is a required field, so 'None' was never a valid answer — it is
+                // not a sentinel anywhere either, just an extra entry prepended to the list.
+                options={concerns}
                 optionLabelKey="concern_name"
+                placeholderOption="Select Concern"
                 isDarkMode={isDarkMode}
                 error={errors.concern}
                 required
@@ -2814,107 +2345,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   required
                   placeholder="Select New Plan"
                 />
-              </div>
-            )}
-
-
-            {formData.concern === 'Relocation' && canEditRelocationAddress && (
-              <div className="mt-4 space-y-4">
-                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                  New customer address. Optional &mdash; leave unchanged if the address is the same.
-                  Saved to the customer record only when Support Status is <strong>Resolved</strong>.
-                </p>
-
-                {hasPendingAddressEdits && !isSupportStatusResolved && (
-                  <p className="text-xs" style={{ color: colorPalette?.primary || '#7c3aed' }}>
-                    Support Status is &ldquo;{formData.supportStatus || 'not set'}&rdquo;, so these
-                    address changes will not be saved yet. Set Support Status to Resolved to apply them.
-                  </p>
-                )}
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                    }`}>Region</label>
-                  <div className="relative">
-                    <select
-                      value={formData.region}
-                      onChange={(e) => handleInputChange('region', e.target.value)}
-                      className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                        }`}
-                    >
-                      <option value="">Select Region</option>
-                      {formData.region && !regions.some(reg => reg.name === formData.region) && (
-                        <option value={formData.region}>{formData.region}</option>
-                      )}
-                      {regions.map(region => (
-                        <option key={region.id} value={region.name}>{region.name}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                      }`} size={20} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                    }`}>City</label>
-                  <div className="relative">
-                    <select
-                      value={formData.city}
-                      onChange={(e) => handleInputChange('city', e.target.value)}
-                      disabled={!formData.region}
-                      className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary appearance-none disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                        }`}
-                    >
-                      <option value="">{formData.region ? 'Select City' : 'Select Region First'}</option>
-                      {formData.city && !getFilteredCities().some(city => city.name === formData.city) && (
-                        <option value={formData.city}>{formData.city}</option>
-                      )}
-                      {getFilteredCities().map(city => (
-                        <option key={city.id} value={city.name}>{city.name}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                      }`} size={20} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                    }`}>Barangay</label>
-                  <div className="relative">
-                    <select
-                      value={formData.barangay}
-                      onChange={(e) => handleInputChange('barangay', e.target.value)}
-                      disabled={!formData.city}
-                      className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary appearance-none disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                        }`}
-                    >
-                      <option value="">{formData.city ? 'Select Barangay' : 'Select City First'}</option>
-                      {formData.barangay && !getFilteredBarangays().some(brgy => brgy.barangay === formData.barangay) && (
-                        <option value={formData.barangay}>{formData.barangay}</option>
-                      )}
-                      {getFilteredBarangays().map(brgy => (
-                        <option key={brgy.id} value={brgy.barangay}>{brgy.barangay}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                      }`} size={20} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                    }`}>Address</label>
-                  <input
-                    type="text"
-                    value={formData.address}
-                    onChange={(e) => handleInputChange('address', e.target.value)}
-                    placeholder="House no., street, subdivision"
-                    className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
-                      }`}
-                  />
-                </div>
               </div>
             )}
 
@@ -3003,23 +2433,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   </p>
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400/80' : 'text-amber-700/80'}`}>
                     Saving this service order with "Done" visit status and "Migrate" repair category will automatically regenerate the RADIUS username based on the technical details pattern (same as Job Order). The password will remain unchanged.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {reactivateLineMove().length > 0 && (
-              <div className={`p-3 rounded-lg flex items-start space-x-3 mb-4 ${isDarkMode ? 'bg-amber-900/30 border border-amber-800' : 'bg-amber-50 border border-amber-200'
-                }`}>
-                <div className={`mt-0.5 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`}>
-                  <CheckCircle size={18} />
-                </div>
-                <div>
-                  <p className={`text-sm font-medium ${isDarkMode ? 'text-amber-300' : 'text-amber-800'}`}>
-                    Reactivation Moves the Line ({reactivateLineMove().map(f => f.toUpperCase()).join(', ')})
-                  </p>
-                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400/80' : 'text-amber-700/80'}`}>
-                    This reactivation puts the account on a different LCP / NAP / Port, so saving it will regenerate the customer's PPPoE username and rename the account in RADIUS. The password stays the same. The customer's router must be reconfigured with the new username before it can reconnect.
                   </p>
                 </div>
               </div>

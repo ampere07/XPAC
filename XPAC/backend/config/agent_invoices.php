@@ -8,8 +8,12 @@ return [
     |--------------------------------------------------------------------------
     */
 
-    // Prefix for the invoice number: ATSS-AGT-000001.
-    'number_prefix' => env('AGENT_INVOICE_PREFIX', 'ATSS-AGT'),
+    // Prefix for the invoice number: GOWISER-AGT-000001.
+    'number_prefix' => env('AGENT_INVOICE_PREFIX', 'GOWISER-AGT'),
+
+    // The company name printed at the top of the invoice when no header
+    // artwork is installed (see resources/images/README.md).
+    'brand_name' => env('AGENT_INVOICE_BRAND', 'GOWISER'),
 
     // How many digits the running number is padded to.
     'number_padding' => 6,

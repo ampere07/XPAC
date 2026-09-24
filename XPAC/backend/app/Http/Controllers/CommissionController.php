@@ -13,7 +13,7 @@ use App\Models\AgentBalance;
 use App\Models\BillingConfig;
 use App\Models\User;
 use App\Models\AuditTrailLog;
-use App\Support\Permissions;
+use App\Support\AgentAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -37,7 +37,7 @@ class CommissionController extends Controller
             $userRole = strtolower($user->role->role_name ?? '');
 
             // Non-admins can only see their own history
-            if (!in_array($userRole, self::ADMIN_ROLES, true)) {
+            if (!AgentAccess::canReadAll($user)) {
                 $agentId = $user->id;
             }
 
@@ -145,7 +145,7 @@ class CommissionController extends Controller
             $userRole = strtolower($user->role->role_name ?? '');
 
             // Non-admins can only see their own history
-            if (!in_array($userRole, self::ADMIN_ROLES, true)) {
+            if (!AgentAccess::canReadAll($user)) {
                 $agentId = $user->id;
             }
 
@@ -223,6 +223,10 @@ class CommissionController extends Controller
                 'incentives' => $agentBalance ? (float)$agentBalance->incentives : 0,
                 'bonus' => $agentBalance ? (float)($agentBalance->bonus ?? 0) : 0,
                 'achievement' => $agentBalance ? (float)($agentBalance->achievement ?? 0) : 0,
+                // Amounts raised but not yet approved, by payout type, so a
+                // payout screen can cap a new cash-out against what is not
+                // already spoken for. Additive; older clients ignore it.
+                'pending_payouts' => $agentId ? $this->pendingPayoutTotals((int) $agentId) : (object) [],
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -239,6 +243,12 @@ class CommissionController extends Controller
             $user = auth()->user();
             if (!$user) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            // Raising a payout (including one raised from an agent invoice) is
+            // an administrator's act.
+            if ($denied = AgentAccess::denyUnless($user, AgentAccess::KEY_RAISE_PAYOUT, 'raise an agent payout')) {
+                return $denied;
             }
 
             // A payout raised from an agent invoice carries only the agent and
@@ -265,7 +275,7 @@ class CommissionController extends Controller
                 // falls through to a COMMISSION debit for anything it does not
                 // recognise, so a typo used to take money out of the wrong
                 // bucket silently and irreversibly.
-                'type'          => ['nullable', 'string', 'max:50', Rule::in(self::PAYOUT_TYPES)],
+                'type'          => ['nullable', 'string', 'max:50', Rule::in(self::RAISABLE_PAYOUT_TYPES)],
                 'from_invoice'  => 'nullable|boolean',
             ]);
 
@@ -294,6 +304,23 @@ class CommissionController extends Controller
                 $validated['proof_of_payment'] = $validated['proof_of_payment'] ?? '';
             }
             
+            // A pending payout has not marked its job orders paid yet (that
+            // happens on approval), so without this the same referrals could be
+            // selected into a second payout and paid twice once both approve.
+            if (!empty($jobOrderIds)) {
+                $alreadyPending = array_values(array_intersect(
+                    array_map('intval', $jobOrderIds),
+                    $this->pendingJobOrderIds((int) $validated['agent_id'])
+                ));
+                if ($alreadyPending !== []) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Some of these job orders are already on a payout awaiting approval. Approve or reject that payout first.',
+                        'pending_job_order_ids' => $alreadyPending,
+                    ], 422);
+                }
+            }
+
             $customerNamesStr = null;
             if (!empty($jobOrderIds)) {
                 $jobOrdersForNames = JobOrder::whereIn('id', $jobOrderIds)->with('application')->get();
@@ -377,7 +404,7 @@ class CommissionController extends Controller
             $userRole = strtolower($user->role->role_name ?? '');
 
             // Non-admins can only see their own history
-            if (!in_array($userRole, self::ADMIN_ROLES, true)) {
+            if (!AgentAccess::canReadAll($user)) {
                 $agentId = $user->id;
             }
 
@@ -451,6 +478,11 @@ class CommissionController extends Controller
             $user = auth()->user();
             if (!$user) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            // Adding a bonus is an administrator's act against an agent.
+            if ($denied = AgentAccess::denyUnless($user, [AgentAccess::KEY_BONUS, 'commission.create'], 'add a bonus')) {
+                return $denied;
             }
 
             $validated = $request->validate([
@@ -699,6 +731,13 @@ class CommissionController extends Controller
                 $query->whereDate('date_installed', '<=', $endDate);
             }
 
+            // Referrals already on a payout awaiting approval are not offered
+            // again: they are marked paid only when that payout is approved.
+            $pendingIds = $agentId ? $this->pendingJobOrderIds((int) $agentId) : [];
+            if ($pendingIds !== []) {
+                $query->whereNotIn('id', $pendingIds);
+            }
+
             $query->with('application')
             ->orderBy('id', 'asc');
 
@@ -754,7 +793,7 @@ class CommissionController extends Controller
             $userRole  = strtolower($user->role->role_name ?? '');
 
             // Non-admins can only see their own incentive history.
-            if (!in_array($userRole, self::ADMIN_ROLES, true)) {
+            if (!AgentAccess::canReadAll($user)) {
                 $agentId = $user->id;
             }
 
@@ -887,6 +926,23 @@ class CommissionController extends Controller
         'achievement',
     ];
 
+    /**
+     * The types a client may raise through storeHistory() or set at approval.
+     *
+     * PAYOUT_TYPES minus 'achievement': that type is written (already Approved)
+     * only by storeAchievement(), which credits the achievement column itself.
+     */
+    public const RAISABLE_PAYOUT_TYPES = [
+        'commission',
+        'incentives',
+        'incentives_payout',
+        'Bonus',
+        'Bonus_payout',
+        'balance',
+        'all',
+    ];
+
+
     /** Message shown when a payout has been recorded and is awaiting approval. */
     private function pendingMessageFor(?string $type): string
     {
@@ -925,23 +981,18 @@ class CommissionController extends Controller
     /**
      * Refuse a caller who may not sign payouts off, or null when they may.
      *
-     * Defence in depth. ApiAccessControl already demands `agent-payout.approve`
-     * for these routes, but the four approve/reject methods carried no role
-     * check of their own — only an ORGANISATION check — so the middleware table
-     * was the single thing standing between an agent and approving their own
-     * payout. A route registered without the middleware, or a rule lost from
-     * the map, would have been enough.
-     *
-     * Asks the permission layer rather than matching a role name, so a custom
-     * role holding the key is accepted exactly as the middleware accepts it.
+     * A payout needs agent-payout.approve, a bonus bonus-history.payout (see
+     * App\Support\AgentAccess); of the seeded roles only Administrator and
+     * SuperAdmin hold either. The four approve/reject methods call this before
+     * anything else, so an agent can never approve their own payout.
      */
-    private function denyUnlessMayApprove($user)
+    private function denyUnlessMayApprove($user, string $key = AgentAccess::KEY_APPROVE_PAYOUT)
     {
-        if (Permissions::allows($user, 'agent-payout.approve')) {
+        if (AgentAccess::allows($user, $key)) {
             return null;
         }
 
-        Log::warning('[Agent Payout] Approval refused for a caller without agent-payout.approve', [
+        Log::warning('[Agent Payout] Approval refused for a non-administrator', [
             'user_id' => $user->id ?? null,
             'role_id' => $user->role_id ?? null,
         ]);
@@ -950,6 +1001,60 @@ class CommissionController extends Controller
             'success' => false,
             'message' => 'You do not have permission to approve or reject a payout.',
         ], 403);
+    }
+
+    /**
+     * Job orders already named by one of this agent's Pending commission
+     * payouts. Empty (never an error) on a database that predates the
+     * approval-status migration.
+     *
+     * @return int[]
+     */
+    private function pendingJobOrderIds(int $agentId): array
+    {
+        try {
+            $rows = AgentCommissionHistory::where('agent_id', $agentId)
+                ->where('status', self::STATUS_PENDING)
+                ->whereNotNull('job_order_ids')
+                ->pluck('job_order_ids');
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($rows as $stored) {
+            $decoded = is_array($stored) ? $stored : json_decode((string) $stored, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $id) {
+                    $ids[(int) $id] = true;
+                }
+            }
+        }
+        unset($ids[0]);
+
+        return array_keys($ids);
+    }
+
+    /**
+     * Sum of this agent's Pending commission-ledger payouts, keyed by type.
+     *
+     * @return array<string, float>|object
+     */
+    private function pendingPayoutTotals(int $agentId)
+    {
+        try {
+            $totals = AgentCommissionHistory::where('agent_id', $agentId)
+                ->where('status', self::STATUS_PENDING)
+                ->selectRaw("COALESCE(type, 'commission') as payout_type, SUM(total_amount) as total")
+                ->groupBy('payout_type')
+                ->pluck('total', 'payout_type')
+                ->map(fn ($v) => (float) $v)
+                ->all();
+        } catch (\Throwable $e) {
+            return (object) [];
+        }
+
+        return $totals === [] ? (object) [] : $totals;
     }
 
     /** The identity recorded against an approval or rejection. */
@@ -1032,6 +1137,12 @@ class CommissionController extends Controller
             $agentBalance->update(['bonus' => $bonus + $amount]);
         } elseif ($history->type === 'Bonus_payout') {
             $agentBalance->update(['bonus' => max(0, $bonus - $amount)]);
+        } elseif ($history->type === 'achievement') {
+            // A reward credit (storeAchievement() writes these already Approved
+            // and credits the column itself). Never a commission debit, which
+            // is where the final else would otherwise send it.
+            $achievement = max(0, (float) ($agentBalance->achievement ?? 0));
+            $agentBalance->update(['achievement' => $achievement + $amount]);
         } elseif ($history->type === 'balance') {
             // The spendable balance, kept separate from commission earnings so
             // each can be paid out on its own.
@@ -1260,23 +1371,57 @@ class CommissionController extends Controller
 
             // Details supplied at approval time.
             //
-            // A payout raised from an agent invoice is recorded with only the
-            // agent and the invoice number — the amount, type, proof and remarks
-            // are asked for here instead, when somebody is actually signing it
-            // off. They are written before the movement is applied, so the
-            // balance moves by the figure just entered rather than the zero the
-            // record was created with.
-            $details = $request->validate([
+            // The contract: an EMPTY body approves the record exactly as it was
+            // raised — its stored type, amount, proof and remarks. A body may
+            // only FILL fields the record does not have yet, which is the case
+            // for a payout raised from an agent invoice (recorded with just the
+            // agent and the invoice number; the amount and proof are entered
+            // when somebody signs it off). It can never change a value the
+            // record already carries, and it can never change the TYPE: the
+            // type decides which bucket moves and in which direction, so a
+            // client re-typing an "Add Incentives" credit as "all" would take
+            // money out of every bucket instead of adding it to one.
+            //
+            // Validated by hand rather than $request->validate(): a
+            // ValidationException here would be swallowed by the catch below and
+            // reported as a 500, and the transaction is already open.
+            $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
                 'total_amount'     => 'nullable|numeric|min:0',
-                'type'             => 'nullable|string|max:50',
                 'remarks'          => 'nullable|string',
                 'proof_of_payment' => 'nullable|string',
             ]);
 
-            $details = array_filter($details, fn ($v) => $v !== null && $v !== '');
+            if ($validator->fails()) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors'  => $validator->errors(),
+                ], 422);
+            }
 
-            if ($details !== []) {
-                $history->forceFill($details)->save();
+            $requestedType = $request->input('type');
+            if ($requestedType !== null && $requestedType !== '' && $requestedType !== $history->type) {
+                Log::warning('[Agent Payout] Ignoring a type change requested at approval', [
+                    'history_id' => $history->id,
+                    'stored'     => $history->type,
+                    'requested'  => $requestedType,
+                ]);
+            }
+
+            $fill = [];
+            foreach (array_filter($validator->validated(), fn ($v) => $v !== null && $v !== '') as $field => $value) {
+                $missing = $field === 'total_amount'
+                    ? (float) ($history->total_amount ?? 0) <= 0
+                    : trim((string) ($history->{$field} ?? '')) === '';
+
+                if ($missing) {
+                    $fill[$field] = $value;
+                }
+            }
+
+            if ($fill !== []) {
+                $history->forceFill($fill)->save();
                 $history->refresh();
             }
 
@@ -1439,7 +1584,7 @@ class CommissionController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            if ($denied = $this->denyUnlessMayApprove($user)) {
+            if ($denied = $this->denyUnlessMayApprove($user, AgentAccess::KEY_BONUS)) {
                 return $denied;
             }
 
@@ -1526,7 +1671,7 @@ class CommissionController extends Controller
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            if ($denied = $this->denyUnlessMayApprove($user)) {
+            if ($denied = $this->denyUnlessMayApprove($user, AgentAccess::KEY_BONUS)) {
                 return $denied;
             }
 
@@ -1600,7 +1745,8 @@ class CommissionController extends Controller
 
     private function isAdminUser($user): bool
     {
-        return in_array(strtolower($user->role->role_name ?? ''), self::ADMIN_ROLES, true);
+        // GOWISER: role-based, see App\Support\AgentAccess.
+        return AgentAccess::canReadAll($user);
     }
 
     /**
@@ -2471,7 +2617,9 @@ class CommissionController extends Controller
             ]);
 
             // Non-admins can only claim for themselves, whatever agent_id they send.
-            $isAdmin = $this->isAdminUser($user);
+            // Claiming for SOMEONE ELSE credits their balance, so that needs a
+            // real administrator, not merely a role that may read everything.
+            $isAdmin = AgentAccess::allows($user, AgentAccess::KEY_BONUS);
             $agentId = $isAdmin ? ($validated['agent_id'] ?? $user->id) : $user->id;
 
             $agent = \App\Models\User::find($agentId);

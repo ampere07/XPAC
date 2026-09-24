@@ -46,14 +46,6 @@ export interface XenditReconcileRow {
    * operator reads and what the table orders by can never drift apart.
    */
   date_created: string | null;
-  /**
-   * `settled_at` pre-formatted by the backend, paired with `date_created`.
-   *
-   * The table renders both timestamps in the operator's own timezone rather than from
-   * these, so a payment settled at 00:30 UTC does not read as the previous day; these
-   * are what a CSV or an API consumer gets.
-   */
-  date_paid: string | null;
   updated_at: string | null;
   expiry_date: string | null;
   payment_date: string | null;

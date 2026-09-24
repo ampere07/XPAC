@@ -9,8 +9,11 @@ import { useCommissionStore } from '../store/commissionStore';
 import { CommissionData, PayoutHistoryData } from '../types/commission';
 import CommissionDetails from '../components/CommissionDetails';
 import CommissionPayoutModal from '../modals/CommissionPayoutModal';
+import BonusPayoutModal from '../modals/BonusPayoutModal';
+import AgentPayoutModal from '../modals/AgentPayoutModal';
+import { usePayoutApproval } from '../hooks/usePayoutApproval';
 import { useAgentStore } from '../store/agentStore';
-import usePermissions from '../hooks/usePermissions';
+import { usePermissions } from '../hooks/usePermissions';
 import { StandardPage, RecordCard } from '../components/common';
 
 // Forced light mode to match the ~50 already-migrated pages.
@@ -21,7 +24,14 @@ const isDarkMode = false;
 // which decides the same thing server-side.
 const ADMIN_ROLES = ['administrator', 'superadmin', 'headtech'];
 
-// The transaction kind, labelled the way ATSS2_0's Agent Payout table labels it.
+// Keys that make the API return every agent's rows (AgentAccess::READ_ALL_KEYS).
+const READ_ALL_KEYS = [
+    'commission', 'agent-payout', 'agent-management', 'team-agent', 'agent-payout.approve',
+    'bonus-history.payout', 'agent-invoices.generate', 'agent-invoices.status',
+    'agent-invoices.payout', 'commission.create',
+];
+
+// The transaction kind, labelled the way the web Agent Payout table labels it.
 //
 // `type` is a loose column on agent_commission_history — commission, incentives,
 // incentives_payout, Bonus, Bonus_payout, all, achievement — so an unrecognised
@@ -90,22 +100,47 @@ const Commission: React.FC = () => {
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage, setItemsPerPage] = useState(25);
 
-    // An agent opens this page to read their own history; recording a payout
-    // against an agent is the administrator's act, and the API refuses it
-    // without the key, so the button is not offered without it either.
-    const { can } = usePermissions();
-    const canPayOut = can('bonus-history.payout');
+    // An agent opens this page to read their own history. Recording a payout
+    // needs commission.create, adding a bonus bonus-history.payout, and settling
+    // a Pending payout agent-payout.approve (all seeded to Administrator and
+    // SuperAdmin only). The API checks the same keys, so a control is only
+    // offered to someone whose request would succeed.
+    const { can, ready: permissionsReady } = usePermissions();
+    const canPayOut = permissionsReady && can('commission.create');
+    const canAddBonus = permissionsReady && can('bonus-history.payout');
+    const canApprovePayout = permissionsReady && can('agent-payout.approve');
+    // A custom role granted this page (or any agent-module admin key) is served
+    // every agent's rows by the API (AgentAccess::canReadAll); narrowing those
+    // to its own id would leave it an empty list. Seeded roles are unaffected:
+    // 1 and 7 are already admin viewers by name, and the Agent holds none of
+    // these keys.
+    const readsEveryAgent = isAdminViewer || (permissionsReady && can(READ_ALL_KEYS));
 
     const [selectedRecord, setSelectedRecord] = useState<CommissionData | PayoutHistoryData | null>(null);
     const [showDetails, setShowDetails] = useState(false);
 
     const [showPayoutModal, setShowPayoutModal] = useState(false);
+    // "Add Bonus", as the pre-port page offered on its Bonus tab. It writes to
+    // agent_bonus_history (POST /commissions/bonus-history), which this list
+    // does not show; the record is created Pending.
+    const [showBonusModal, setShowBonusModal] = useState(false);
 
     const { fetchAgents } = useAgentStore();
 
     const fetchData = async () => {
         await fetchCommissions(true);
     };
+
+    // Approve / reject a Pending payout (canApprovePayout). See
+    // hooks/usePayoutApproval.
+    const { handleApproval, approvalPending, approveRecord, setApproveRecord } = usePayoutApproval(
+        (settled, status) => {
+            setSelectedRecord((current: any) =>
+                current && current.id === settled?.id ? { ...current, status } : current
+            );
+            handleRefresh();
+        }
+    );
 
     const handleRefresh = async () => {
         setRefreshing(true);
@@ -176,7 +211,7 @@ const Commission: React.FC = () => {
             // rows. The API already does this for a non-admin account; repeating
             // it here means a role the server counts as an administrator can
             // never leak another agent's payouts into an agent's screen.
-            if (!isAdminViewer) {
+            if (!readsEveryAgent) {
                 if (userId === null) return false;
                 if (Number(row.agent_id) !== Number(userId)) return false;
             }
@@ -192,7 +227,7 @@ const Commission: React.FC = () => {
             }
             return matchesSearch;
         });
-    }, [payoutHistory, identityReady, isAdminViewer, userId, searchTerm, dateFrom, dateTo]);
+    }, [payoutHistory, identityReady, readsEveryAgent, userId, searchTerm, dateFrom, dateTo]);
 
     const handleRowClick = (record: CommissionData | PayoutHistoryData) => {
         setSelectedRecord(record);
@@ -402,6 +437,9 @@ const Commission: React.FC = () => {
                         data={selectedRecord}
                         type="payouts"
                         isMobile
+                        onApprove={canApprovePayout ? (record) => handleApproval(record, 'approve') : undefined}
+                        onReject={canApprovePayout ? (record) => handleApproval(record, 'reject') : undefined}
+                        approvalPending={approvalPending}
                         onClose={() => { setShowDetails(false); setSelectedRecord(null); }}
                         onPrevious={currentIndex > 0 ? handlePrevious : undefined}
                         onNext={currentIndex !== -1 && currentIndex < filteredData.length - 1 ? handleNext : undefined}
@@ -409,14 +447,27 @@ const Commission: React.FC = () => {
                 ) : null
             }
             toolbarActions={
-                canPayOut ? (
-                    <TouchableOpacity
-                        onPress={() => setShowPayoutModal(true)}
-                        style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, backgroundColor: primaryColor }}
-                    >
-                        <Plus size={14} color="#ffffff" />
-                        <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '600' }}>Add</Text>
-                    </TouchableOpacity>
+                canPayOut || canAddBonus ? (
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                        {canPayOut && (
+                        <TouchableOpacity
+                            onPress={() => setShowPayoutModal(true)}
+                            style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, backgroundColor: primaryColor }}
+                        >
+                            <Plus size={14} color="#ffffff" />
+                            <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '600' }}>Add</Text>
+                        </TouchableOpacity>
+                        )}
+                        {canAddBonus && (
+                        <TouchableOpacity
+                            onPress={() => setShowBonusModal(true)}
+                            style={{ height: 38, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: primaryColor, backgroundColor: '#ffffff' }}
+                        >
+                            <Plus size={14} color={primaryColor} />
+                            <Text style={{ color: primaryColor, fontSize: 13, fontWeight: '600' }}>Bonus</Text>
+                        </TouchableOpacity>
+                        )}
+                    </View>
                 ) : null
             }
         >
@@ -424,6 +475,35 @@ const Commission: React.FC = () => {
                 isOpen={showPayoutModal}
                 onClose={() => setShowPayoutModal(false)}
                 onSuccess={() => { setShowPayoutModal(false); fetchData(); }}
+            />
+
+            {/* Shows the server's own message on success, which says the bonus
+                is Pending until an administrator approves it. */}
+            <BonusPayoutModal
+                isOpen={showBonusModal}
+                onClose={() => setShowBonusModal(false)}
+                onSuccess={() => { setShowBonusModal(false); fetchData(); }}
+            />
+
+            {/* Approval form, only for a Pending record still missing its amount
+                / proof (raised from an invoice). Keeps the record's own type. */}
+            <AgentPayoutModal
+                isOpen={approveRecord !== null}
+                onClose={() => setApproveRecord(null)}
+                onSuccess={() => {
+                    const settled = approveRecord;
+                    setApproveRecord(null);
+                    setSelectedRecord((current: any) =>
+                        current && current.id === settled?.id ? { ...current, status: 'Approved' } : current
+                    );
+                    handleRefresh();
+                }}
+                approveId={approveRecord?.id}
+                approveRefNumber={approveRecord?.ref_number}
+                approveType={approveRecord?.type ?? null}
+                approveAmount={approveRecord?.total_amount ?? null}
+                agentId={approveRecord?.agent_id}
+                agentName={approveRecord?.agent_name}
             />
         </StandardPage>
     );

@@ -55,7 +55,7 @@
            It sits in the reserved top band, above the content box, so it can
            never land on a row, the totals block or the sign-off.
            On page one it falls over the header artwork's top right. Nothing of
-           substance is there: the ATSS FIBER wordmark occupies the left third
+           substance is there: the company wordmark occupies the left third
            (x 62-273pt, and lower down at that), leaving nearly 280pt of
            clearance. All that lies under the figure is the pale watermark wash
            that covers the whole header — nothing darker than luminance 236 —
@@ -77,7 +77,7 @@
            substitute the real count. This rule only reserves the space. */
 
         /* ── Header ─────────────────────────────────────────────────────── */
-        /* The supplied artwork carries the ATSS FIBER mark and the watermark,
+        /* The supplied artwork carries the company mark and the watermark,
            and runs the full width of the page, so it sits outside .sheet's
            padding. The negative top margin cancels the reserved top band, so
            page one still opens with the artwork flush to the paper edge. */

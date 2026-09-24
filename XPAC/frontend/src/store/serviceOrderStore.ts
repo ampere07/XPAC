@@ -1,15 +1,6 @@
 import { create } from 'zustand';
 import { getServiceOrders, ServiceOrderData } from '../services/serviceOrderService';
 
-// visit_status_date is a DATE column, but the driver and JSON casting between
-// here and it can hand it back as "2026-09-05", "2026-09-05 00:00:00" or a full
-// ISO string. Keep the leading date and drop whatever follows, so the table and
-// the details panel never show a midnight that is really just an absent time.
-const toDateOnly = (value?: string | null): string => {
-  const match = String(value ?? '').match(/^\d{4}-\d{2}-\d{2}/);
-  return match ? match[0] : '';
-};
-
 export interface ServiceOrder {
     id: string;
     ticketId: string;
@@ -25,7 +16,11 @@ export interface ServiceOrder {
     plan: string;
     provider: string;
     affiliate: string;
+    /** 'Prepaid' | 'Postpaid' from the billing account. Empty when the account has neither set. */
+    generationType: string;
     username: string;
+    /** From technical_details, falling back to the account's install job order. */
+    pppoePassword: string;
     connectionType: string;
     routerModemSN: string;
     lcp: string;
@@ -35,8 +30,6 @@ export interface ServiceOrder {
     concern: string;
     concernRemarks: string;
     visitStatus: string;
-    /** The day a technician last moved visitStatus, "YYYY-MM-DD", or ''. */
-    visitStatusDate: string;
     visitBy: string;
     visitWith: string;
     visitWithOther: string;
@@ -87,9 +80,6 @@ export interface ServiceOrder {
     start_time?: string | null;
     end_time?: string | null;
     organization_id?: number | null;
-    // Whether an administrator released this service order to the technician
-    // ahead of their queue. Locked (false) until they do.
-    technicianEnabled?: boolean;
 }
 
 export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => {
@@ -108,7 +98,10 @@ export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => 
         plan: order.plan || '',
         provider: order.group_name || '',
         affiliate: order.group_name || '',
+        generationType: order.generation_type || '',
         username: order.username || '',
+        // Resolved by ServiceOrderApiController from technical_details.
+        pppoePassword: order.pppoe_password || '',
         connectionType: order.connection_type || '',
         routerModemSN: order.router_modem_sn || '',
         lcp: order.lcp || order.old_lcp || '',
@@ -118,7 +111,6 @@ export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => 
         concern: order.concern || '',
         concernRemarks: order.concern_remarks || '',
         visitStatus: order.visit_status || '',
-        visitStatusDate: toDateOnly(order.visit_status_date),
         visitBy: order.visit_by_user || '',
         visitWith: order.visit_with || '',
         visitWithOther: '',
@@ -169,11 +161,6 @@ export const transformServiceOrder = (order: ServiceOrderData): ServiceOrder => 
         start_time: order.start_time || null,
         end_time: order.end_time || null,
         organization_id: (order as any).organization_id || null,
-        // Read straight off the column so the technician lock always reflects
-        // the database. MySQL hands tinyint back as 1/0 or "1"/"0".
-        technicianEnabled: (order as any).technician_enabled === true
-            || (order as any).technician_enabled === 1
-            || (order as any).technician_enabled === '1',
     };
 };
 

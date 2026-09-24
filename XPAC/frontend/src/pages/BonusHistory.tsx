@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Gift, Plus, RefreshCw, Search, Loader2, CalendarRange, X } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { commissionService } from '../services/commissionService';
-import { usePermissions } from '../hooks/usePermissions';
+import { getAgentAccess } from '../utils/agentAccess';
 import { getStoredAgentIdentity } from '../utils/agentReferral';
 import BonusPayoutModal from '../modals/BonusPayoutModal';
 
@@ -80,11 +80,10 @@ const CARD_HEADLINE_KEYS = ['total_amount', 'status'];
  * an administrator can never put another agent's payouts on an agent's screen.
  */
 const BonusHistory: React.FC = () => {
-    const { can } = usePermissions();
     // Raising a bonus is an administrator's act against an agent, so the button
     // has no place on the agent's own reading of their history — whatever keys
     // the account happens to hold.
-    const canManagePayouts = can('agent-payout');
+    const canManagePayouts = useMemo(() => getAgentAccess().canManageBonus, []);
 
     // Read once: the signed-in user does not change while the page is open, and
     // reading it up front means the first render is already the right one.

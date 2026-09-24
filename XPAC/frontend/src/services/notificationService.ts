@@ -9,10 +9,19 @@ export interface Notification {
   created_at?: string;
   formatted_date: string;
   // Consolidated fields
-  type?: 'application' | 'job_order_done';
+  /**
+   * `transaction_revert` is only ever present for a superadmin — the backend omits
+   * it entirely for every other role rather than relying on the UI to hide it.
+   */
+  type?: 'application' | 'job_order_done' | 'service_order_done' | 'service_order_charge_claimed' | 'transaction_revert';
   title?: string;
   message?: string;
   timestamp?: number;
+  /**
+   * Who claimed the charge. Only sent for `service_order_charge_claimed`, and null
+   * on an order whose visit_by_user was never filled in.
+   */
+  technician?: string | null;
 }
 
 export interface NotificationResponse {

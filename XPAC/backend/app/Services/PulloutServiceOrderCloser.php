@@ -23,7 +23,7 @@ use Throwable;
  *
  * which matched nothing. On pullout service orders that column only ever holds
  * 'For Visit', 'Failed' or 'Resolved' — 'In Progress' and 'Reschedule' are
- * visit_status values. The rule had therefore never once fired, against 1,830
+ * visit_status values. The rule had therefore never once fired, against
  * genuinely open pullouts.
  *
  * Both copies were also reached only from inside the RADIUS reconnect routine,

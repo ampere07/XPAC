@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -27,6 +27,7 @@ import { createJobOrderItems, JobOrderItem } from '../services/jobOrderItemServi
 import apiClient from '../config/api';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
+import { startTimeVisitTeam } from '../utils/visitTeam';
 
 interface Region {
   id: number;
@@ -132,6 +133,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
   // const currentUser = getCurrentUser(); // Removed synchronous call
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('unknown@ampere.com');
+  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -140,6 +142,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
         if (authData) {
           const user = JSON.parse(authData);
           setCurrentUserEmail(user.email || 'unknown@ampere.com');
+          setCurrentUser(user);
         }
       } catch (error) {
         console.error('Error getting current user:', error);
@@ -208,6 +211,29 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [technicians, setTechnicians] = useState<Array<{ email: string; name: string }>>([]);
+
+  // Memoised because it feeds the initialisation effect's dependency array
+  // below; a fresh array each render would re-run that effect on every pass.
+  const visitTeam = useMemo(
+    () => startTimeVisitTeam(jobOrderData?.technicians),
+    [jobOrderData?.technicians]
+  );
+
+  /**
+   * The signed-in user expressed as a technician NAME.
+   *
+   * visit_by holds a display name, not an email, and the Visit With / Visit With
+   * (Other) pickers exclude the current pick with `t.name !== formData.visit_by`.
+   * Resolving through the technicians list keeps that comparison working;
+   * full_name / email are only fallbacks for a signed-in user who is not in the
+   * technician list.
+   */
+  const currentTechnicianName = useMemo(() => {
+    const email = (currentUser?.email || '').trim().toLowerCase();
+    const match = technicians.find(t => (t.email || '').trim().toLowerCase() === email);
+
+    return match?.name || currentUser?.full_name || currentUser?.email || '';
+  }, [technicians, currentUser]);
   const [lcpnaps, setLcpnaps] = useState<LCPNAP[]>([]);
   const [ports, setPorts] = useState<Port[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
@@ -743,9 +769,13 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 contractTemplate: (jobOrderData.Contract_Template || jobOrderData.contract_template || '1').toString(),
                 assignedEmail: jobOrderData.Assigned_Email || jobOrderData.assigned_email || 'Office',
                 itemName1: jobOrderData.Item_Name_1 || jobOrderData.item_name_1 || '',
-                visit_by: jobOrderData.Visit_By || jobOrderData.visit_by || '',
-                visit_with: jobOrderData.Visit_With || jobOrderData.visit_with || '',
-                visit_with_other: jobOrderData.Visit_With_Other || jobOrderData.visit_with_other || '',
+                // What the job order already records wins — re-opening a
+                // processed job must never rewrite what was actually submitted.
+                // The Start Timer team is the fallback, so a technician who
+                // already named the team when starting does not name it twice.
+                visit_by: jobOrderData.Visit_By || jobOrderData.visit_by || visitTeam[0] || '',
+                visit_with: jobOrderData.Visit_With || jobOrderData.visit_with || visitTeam[1] || '',
+                visit_with_other: jobOrderData.Visit_With_Other || jobOrderData.visit_with_other || visitTeam[2] || '',
                 statusRemarks: jobOrderData.Status_Remarks || jobOrderData.status_remarks || '',
                 ip: jobOrderData.IP || jobOrderData.ip || ''
               }));
@@ -793,9 +823,10 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
           contractTemplate: (jobOrderData.Contract_Template || jobOrderData.contract_template || '1').toString(),
           assignedEmail: jobOrderData.Assigned_Email || jobOrderData.assigned_email || 'Office',
           itemName1: jobOrderData.Item_Name_1 || jobOrderData.item_name_1 || '',
-          visit_by: jobOrderData.Visit_By || jobOrderData.visit_by || '',
-          visit_with: jobOrderData.Visit_With || jobOrderData.visit_with || '',
-          visit_with_other: jobOrderData.Visit_With_Other || jobOrderData.visit_with_other || '',
+          // Same precedence as the application-backed branch above.
+          visit_by: jobOrderData.Visit_By || jobOrderData.visit_by || visitTeam[0] || '',
+          visit_with: jobOrderData.Visit_With || jobOrderData.visit_with || visitTeam[1] || '',
+          visit_with_other: jobOrderData.Visit_With_Other || jobOrderData.visit_with_other || visitTeam[2] || '',
           statusRemarks: jobOrderData.Status_Remarks || jobOrderData.status_remarks || '',
           ip: jobOrderData.IP || jobOrderData.ip || ''
         }));
@@ -803,7 +834,28 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
       fetchApplicationData();
     }
-  }, [jobOrderData, isOpen]);
+  }, [jobOrderData, isOpen, visitTeam]);
+
+  /**
+   * Last-resort fallback for Visit By: the signed-in technician.
+   *
+   * Deliberately a separate effect. The technicians list loads asynchronously,
+   * so folding `currentTechnicianName` into the initialisation effect above
+   * would re-run it — re-fetching the application and overwriting whatever the
+   * technician had already typed — the moment that list arrived.
+   *
+   * Only fills a field that is still empty, so the job order's own value and
+   * the Start Timer team both keep precedence.
+   */
+  useEffect(() => {
+    if (!isOpen || !currentTechnicianName) return;
+
+    setFormData(prev => {
+      if (prev.visit_by.trim()) return prev;
+
+      return { ...prev, visit_by: currentTechnicianName };
+    });
+  }, [isOpen, currentTechnicianName]);
 
   const handleInputChange = (field: keyof JobOrderEditFormData, value: string | File | null) => {
     setFormData(prev => {
@@ -2044,7 +2096,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                     <option value={formData.assignedEmail}>{formData.assignedEmail}</option>
                   )}
                   {technicians.map((technician, index) => (
-                    <option key={index} value={technician.email}>{technician.email}</option>
+                    <option key={index} value={technician.email}>{technician?.name || technician.email}</option>
                   ))}
                 </select>
                 <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'

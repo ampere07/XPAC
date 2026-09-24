@@ -3,7 +3,6 @@ import { Alert, Keyboard, DeviceEventEmitter } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoFileSystem from 'expo-file-system/legacy';
-import { saveImagesToGallery } from '../utils/saveImagesToGallery';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -15,9 +14,9 @@ import apiClient from '../config/api';
 import { getAllInventoryItems, InventoryItem } from '../services/inventoryItemService';
 import { createServiceOrderItems, ServiceOrderItem } from '../services/serviceOrderItemService';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
+import { startTimeVisitTeam } from '../utils/visitTeam';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { concernService, Concern } from '../services/concernService';
-import { getBillingRecordDetails } from '../services/billingService';
 import { getAllLCPNAPs, LCPNAP } from '../services/lcpnapService';
 import { technicianService } from '../services/technicianService';
 
@@ -45,6 +44,7 @@ export interface ServiceOrderEditFormData {
   emailAddress: string;
   plan: string;
   username: string;
+  pppoePassword: string;
   connectionType: string;
   routerModemSN: string;
   lcp: string;
@@ -98,36 +98,6 @@ export interface ImageFiles {
   portLabelImageFile: ImagePicker.ImagePickerAsset | null;
 }
 
-/**
- * billing_status.id 5 is Pullout — the account has been physically pulled out
- * and its portal login disabled (see App\Support\PulloutCategory on the server,
- * which is what disables it).
- *
- * The only ticket worth raising against an account in that state is the one
- * that brings it back, so the Concern and Repair Category pickers collapse to
- * the reactivation option. Offering "Relocate" or "Replace Router" on a
- * pulled-out account invites a visit for a service that is not connected.
- */
-const PULLOUT_BILLING_STATUS_ID = 5;
-
-/** Spelled both ways across the app; the server accepts either. */
-const REACTIVATE_SPELLINGS = ['reactivate', 'reactivation'];
-
-const isReactivateOption = (value?: string | null): boolean =>
-  REACTIVATE_SPELLINGS.includes(String(value ?? '').toLowerCase().replace(/\s+/g, ''));
-
-/** Every repair category, and the one a pulled-out account may be given. */
-const REPAIR_CATEGORIES = [
-  'Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout',
-  'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord',
-  'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan',
-];
-
-const REACTIVATE_REPAIR_CATEGORY = REPAIR_CATEGORIES.find(isReactivateOption)!;
-
-/** Offered when the concern catalog carries no reactivation entry of its own. */
-const REACTIVATE_CONCERN_FALLBACK = 'Reactivate';
-
 export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onClose: () => void, onSave: (data: any) => void) => {
   const serviceOrderId = serviceOrderData?.id;
   const isMountedRef = useRef(true);
@@ -137,7 +107,6 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
 
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
   const [currentUser, setCurrentUser] = useState<UserData | null>(null);
-  const [billingStatusId, setBillingStatusId] = useState<number | null>(null);
   const [isContentReady, setIsContentReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -176,6 +145,13 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   const [orderItems, setOrderItems] = useState<OrderItem[]>([{ itemId: '', quantity: '' }]);
   const [formData, setFormData] = useState<ServiceOrderEditFormData>(initialFormState);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /**
+   * Bumped every time a save is rejected for missing fields.
+   *
+   * A counter rather than a boolean: two failed saves in a row must both scroll,
+   * and a boolean that is already true produces no change for the view to react to.
+   */
+  const [validationFailedAt, setValidationFailedAt] = useState(0);
   const [imageFiles, setImageFiles] = useState<ImageFiles>({
     timeInFile: null,
     modemSetupFile: null,
@@ -193,6 +169,20 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   const [searchQueries, setSearchQueries] = useState<Record<string, string>>({});
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
   const [activeTechField, setActiveTechField] = useState<'visitBy' | 'visitWith' | 'visitWithOther' | null>(null);
+
+  /**
+   * Reset the technician search whenever a different picker takes over.
+   *
+   * Visit By / Visit With / Visit With (Other) all share the single `technician`
+   * search key, and it was previously only cleared when the whole modal closed.
+   * A query typed while choosing Visit By therefore carried over and kept
+   * filtering the list when Visit With was opened next — so most technicians
+   * simply were not there, which looked like the options being arbitrarily
+   * limited. Every picker now opens showing the full list.
+   */
+  useEffect(() => {
+    setSearchQueries(prev => (prev.technician ? { ...prev, technician: '' } : prev));
+  }, [activeTechField]);
 
   const currentUserEmail = currentUser?.email_address || currentUser?.email || 'unknown@ampere.com';
   const isTechnician = useMemo(() => {
@@ -596,6 +586,9 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     setFormData(finalData);
 
     if (!validateForm(finalData, orderItems, imageFiles, usedPorts, setErrors)) {
+      // Tells the modal to scroll to the first offending field, so the technician
+      // is not left scrolling a long form to find what the alert is about.
+      setValidationFailedAt(n => n + 1);
       Alert.alert('Error', 'Check required fields.');
       return;
     }
@@ -640,42 +633,6 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
         boxReadingImageFile: 'box_reading_image_url',
         portLabelImageFile: 'speedtest_image_url'
       };
-
-      // What each photo is called in the gallery. The form's own keys carry a
-      // "File" suffix that means nothing to a technician looking through their
-      // camera roll, so each one is given the plain name of the thing it is a
-      // picture of.
-      const galleryFieldNames: Record<string, string> = {
-        timeInFile: 'time_in_image',
-        modemSetupFile: 'modem_setup_image',
-        timeOutFile: 'time_out_image',
-        clientSignatureFile: 'client_signature_image',
-        proofImageFile: 'proof_image',
-        setupImageFile: 'setup_image',
-        routerReadingImageFile: 'router_reading_image',
-        boxReadingImageFile: 'box_reading_image',
-        portLabelImageFile: 'port_label_image'
-      };
-
-      // Keep a copy on the phone BEFORE anything is uploaded, so a failed
-      // upload or a lost connection cannot leave the technician with no record
-      // of the visit. Filed as "<field>, <first name> <last name>".
-      //
-      // Awaited so the copies exist before the first request goes out, but
-      // never allowed to throw: the submission matters more than the keepsake.
-      await saveImagesToGallery(
-        Object.keys(fileKeyMap).map(fKey => ({
-          field: galleryFieldNames[fKey] || fKey,
-          uri: (imageFiles as any)[fKey]?.uri
-        })),
-        String(
-          serviceOrderData?.full_name
-          || serviceOrderData?.fullName
-          || finalData?.fullName
-          || ''
-        ).trim()
-      );
-
       for (const [fKey, aKey] of Object.entries(fileKeyMap)) {
         const asset = (imageFiles as any)[fKey];
         if (asset) {
@@ -751,35 +708,6 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
   };
 
   // Filtered Lists for Pickers
-  // The account's billing status decides what the pickers may offer, so it is
-  // read when the modal opens and cleared when it closes — a stale 5 left behind
-  // from the previous record would narrow the next one wrongly.
-  useEffect(() => {
-    const accountNo = serviceOrderData?.accountNumber || serviceOrderData?.account_no;
-
-    if (!isOpen || !accountNo) {
-      setBillingStatusId(null);
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const details = await getBillingRecordDetails(String(accountNo));
-        if (!cancelled) setBillingStatusId(details?.billing_status_id ?? null);
-      } catch (error) {
-        // Not fatal: leaving it null shows the full lists, which is the
-        // behaviour this screen had before the narrowing existed.
-        if (!cancelled) setBillingStatusId(null);
-        console.error('Error fetching billing status:', error);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [isOpen, serviceOrderData]);
-
-  const isPulledOut = billingStatusId === PULLOUT_BILLING_STATUS_ID;
-
   const filtered = useMemo(() => ({
     inventory: [
       { id: 'none', item_name: 'None' } as any,
@@ -800,27 +728,14 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     supportStatuses: ['Resolved', 'Failed', 'In Progress', 'For Visit'].filter(s => s.toLowerCase().includes((searchQueries.supportStatus || '').toLowerCase())),
     visitStatuses: ['Done', 'In Progress', 'Failed', 'Reschedule'].filter(s => s.toLowerCase().includes((searchQueries.visitStatus || '').toLowerCase())),
     assignedEmails: technicians.filter(t => t.name.toLowerCase().includes((searchQueries.assignedEmail || '').toLowerCase()) || t.email.toLowerCase().includes((searchQueries.assignedEmail || '').toLowerCase())),
-    repairCategories: (isPulledOut ? [REACTIVATE_REPAIR_CATEGORY] : REPAIR_CATEGORIES)
-      .filter(s => s.toLowerCase().includes((searchQueries.repairCategory || '').toLowerCase())),
+    repairCategories: ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord', 'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'].filter(s => s.toLowerCase().includes((searchQueries.repairCategory || '').toLowerCase())),
     ports: (() => {
       const ports = Array.from({ length: totalPorts }, (_, i) => `P${(i + 1).toString().padStart(2, '0')}`);
       const available = ports.filter(p => !usedPorts.some(up => up.toUpperCase() === p.toUpperCase()));
       return available.filter(p => p.toLowerCase().includes((searchQueries.port || '').toLowerCase()));
     })(),
     vlans: vlans.filter(v => v.toLowerCase().includes((searchQueries.vlan || '').toLowerCase())),
-    // `concern` is a free string on service_orders and the update path never maps
-    // it back to support_concern.id, so a reactivation entry the catalog happens
-    // not to carry can still be offered and saved.
-    concerns: (() => {
-      if (!isPulledOut) {
-        return concerns.filter(c => c.concern_name.toLowerCase().includes((searchQueries.concern || '').toLowerCase()));
-      }
-      const fromCatalog = concerns.filter(c => isReactivateOption(c.concern_name));
-      const available = fromCatalog.length > 0
-        ? fromCatalog
-        : [{ concern_name: REACTIVATE_CONCERN_FALLBACK } as Concern];
-      return available.filter(c => c.concern_name.toLowerCase().includes((searchQueries.concern || '').toLowerCase()));
-    })(),
+    concerns: concerns.filter(c => c.concern_name.toLowerCase().includes((searchQueries.concern || '').toLowerCase())),
     plans: plans.map(p => `${p.name} - ${parseFloat(p.price.toString())}`).filter(p => p.toLowerCase().includes((searchQueries.plan || '').toLowerCase())),
   }), [
     inventoryItems, searchQueries.inventory, lcpnaps, searchQueries.lcpnaps, 
@@ -828,12 +743,11 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     activeTechField, formData.visitBy, formData.visitWith, formData.visitWithOther,
     searchQueries.supportStatus, searchQueries.visitStatus, searchQueries.assignedEmail,
     searchQueries.repairCategory, totalPorts, usedPorts, searchQueries.port,
-    vlans, searchQueries.vlan, concerns, searchQueries.concern, plans, searchQueries.plan,
-    isPulledOut
+    vlans, searchQueries.vlan, concerns, searchQueries.concern, plans, searchQueries.plan
   ]);
 
   return {
-    formData, setFormData, errors, setErrors, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
+    formData, setFormData, errors, setErrors, validationFailedAt, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
     handleInputChange, handleImageUpload, handleSave: handleSaveInternal,
     activePicker, setActivePicker, searchQueries, setSearchQueries, filtered,
     orderItems, setOrderItems, activeItemIndex, setActiveItemIndex, handleItemChange,
@@ -856,6 +770,11 @@ const initialFormState: ServiceOrderEditFormData = {
 
 const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
   const normPort = (p: any) => { if (!p) return ''; const n = String(p).replace(/[^\d]/g, ''); return n ? `P${n.padStart(2, '0')}` : ''; };
+  // Pre-fill the visit team from the Start Timer selection. All three are required
+  // to save, so without this a technician who already named the team when starting
+  // has to name it again here. What the order already records always wins —
+  // re-opening a completed order must never rewrite what was actually submitted.
+  const visitTeam = startTimeVisitTeam(d.technicians);
   const formatDate = (s: string) => { if (!s) return ''; try { const d = new Date(s); return d.toISOString().split('T')[0]; } catch(e) { return s.split(' ')[0]; } };
   
   const repairCatList = ['Fiber Relaying', 'Migrate', 'Reactivation', 'others', 'Pullout', 'Reboot/Reconfig Router', 'Relocate Router', 'Relocate', 'Replace Patch Cord', 'Replace Router', 'Resplice', 'Transfer LCP/NAP/PORT', 'Update Vlan'];
@@ -881,6 +800,7 @@ const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
     emailAddress: d.emailAddress || d.email_address || '',
     plan: d.plan || '',
     username: d.username || '',
+    pppoePassword: d.pppoePassword || d.pppoe_password || '',
     connectionType: (() => {
       const t = (d.connectionType || d.connection_type || 'Fiber').toLowerCase();
       if (t === 'antenna') return 'Antenna';
@@ -893,7 +813,11 @@ const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
     supportStatus,
     visitStatus,
     repairCategory,
-    visitBy: d.visitBy || d.visit_by || '', visitWith: d.visitWith || d.visit_with || '', visitWithOther: d.visitWithOther || d.visit_with_other || '',
+    // visit_by_user is the actual column; the camelCase and visit_by spellings are
+    // kept for payloads that have already been through the context mapper.
+    visitBy: d.visitBy || d.visit_by_user || d.visit_by || visitTeam[0] || '',
+    visitWith: d.visitWith || d.visit_with || visitTeam[1] || '',
+    visitWithOther: d.visitWithOther || d.visit_with_other || visitTeam[2] || '',
     visitRemarks: d.visitRemarks || d.visit_remarks || '', clientSignature: d.clientSignature || d.client_signature_url || d.client_signature || '',
     timeIn: d.timeIn || d.image1_url || d.time_in || '', modemSetupImage: d.modemSetupImage || d.image2_url || d.modem_setup_image || '',
     timeOut: d.timeOut || d.image3_url || d.time_out || '', assignedEmail: d.assignedEmail || d.assigned_email || '', concern: d.concern || '',
@@ -920,9 +844,7 @@ const mapFormToApi = (f: ServiceOrderEditFormData, uploads: any, user: string, o
     updated_by_user: user,
     concern: f.concern,
     concern_remarks: f.concernRemarks,
-    // An empty field parses to NaN, which serialises as JSON null and the API
-    // reads as a ₱0 charge — backing out anything already posted.
-    service_charge: Number.isFinite(parseFloat(f.serviceCharge)) ? parseFloat(f.serviceCharge) : 0,
+    service_charge: parseFloat(f.serviceCharge),
     status: f.status,
     new_plan: f.concern === 'Upgrade/Downgrade Plan' ? f.newPlan : '',
     // Base technical info (old/current values)
@@ -1004,6 +926,10 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
     if (f.visitStatus === 'Done') {
       if (!items.some(i => i.itemId && i.quantity && i.itemId !== 'None') && !items.some(i => i.itemId === 'None')) e.items = 'Required item or "None"';
       if (!f.visitBy) e.visitBy = 'Required';
+      // Enforced in both visit branches below, because renderInput marks Visit Remarks with an
+      // asterisk in both — until now the asterisk was the only thing stopping a blank submit,
+      // which is to say nothing was. Trimmed, so a field of spaces is not a record of the visit.
+      if (!f.visitRemarks?.trim()) e.visitRemarks = 'Required';
       const reloc = ['Migrate', 'Relocate', 'Transfer LCP/NAP/PORT', 'Reactivation'];
       if (reloc.includes(f.repairCategory)) {
         if ((f.repairCategory === 'Migrate' || f.repairCategory === 'Reactivation') && !f.newRouterModemSN) e.newRouterModemSN = 'Required';
@@ -1028,6 +954,8 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
       if (!f.visitBy) e.visitBy = 'Required';
       if (!f.visitWith) e.visitWith = 'Required';
       if (!f.visitWithOther) e.visitWithOther = 'Required';
+      // A rescheduled or failed visit is exactly the case where the reason matters most.
+      if (!f.visitRemarks?.trim()) e.visitRemarks = 'Required';
     }
   }
   if (f.supportStatus === 'Failed' || (f.supportStatus === 'For Visit' && f.visitStatus === 'Failed')) {

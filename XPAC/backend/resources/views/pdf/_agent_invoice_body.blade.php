@@ -11,7 +11,7 @@
 
      Expects: $invoice, $customerPages, $showReferrer, $peso, $invoiceDateLabel,
               $billedToLabel, $periodLabel, $headerImage --}}
-{{-- Header artwork: the ATSS FIBER mark and watermark, full page width. --}}
+{{-- Header artwork: the company mark, full page width, when resources/images/agentinvoiceheader.png is installed. --}}
 @if ($headerImage)
     <img class="header-art" src="{{ $headerImage }}" alt="">
 @endif
@@ -20,7 +20,7 @@
 
     @unless ($headerImage)
         {{-- Artwork missing: the invoice still has to be a usable document. --}}
-        <div class="brand-fallback"><span class="name">ATSS FIBER</span></div>
+        <div class="brand-fallback"><span class="name">{{ $brandName ?? 'GOWISER' }}</span></div>
     @endunless
 
     <div class="banner">BOOTH - REFERRAL</div>

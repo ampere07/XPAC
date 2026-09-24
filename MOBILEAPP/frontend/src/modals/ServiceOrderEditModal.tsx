@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef } from 'react';
 import { View, Text, TextInput, ScrollView, Modal, Pressable, Image, ActivityIndicator, Platform, KeyboardAvoidingView, StyleSheet, Alert, TouchableOpacity, DeviceEventEmitter } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X, ChevronDown, Search, Check, ChevronLeft, Camera, Plus } from 'lucide-react-native';
@@ -31,7 +31,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
 
   const {
-    formData, errors, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
+    formData, errors, validationFailedAt, loading, isContentReady, colorPalette, isTechnician, currentUserEmail,
     handleInputChange, handleImageUpload, handleSave,
     activePicker, setActivePicker, searchQueries, setSearchQueries, filtered,
     orderItems, setOrderItems, activeItemIndex, setActiveItemIndex, handleItemChange,
@@ -43,15 +43,77 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
   const activeColor = colorPalette?.primary || '#7c3aed';
 
-  // The day a technician last moved this ticket's Visit Status, as the API
-  // stored it. A DATE column, but MySQL drivers and JSON casting between them
-  // can hand it back as "2026-09-05", "2026-09-05 00:00:00" or an ISO string,
-  // so keep the leading date and drop whatever follows.
-  const visitStatusDate = useMemo(() => {
-    const raw = serviceOrderData?.visit_status_date ?? serviceOrderData?.visitStatusDate;
-    const match = String(raw ?? '').match(/^\d{4}-\d{2}-\d{2}/);
-    return match ? match[0] : '';
-  }, [serviceOrderData]);
+  // ─── Scroll-to-first-error ─────────────────────────────────────────────────
+  //
+  // The form is long enough that "Check required fields." used to leave the
+  // technician scrolling to find which one. On a rejected save the view now jumps
+  // to the topmost offending field, which its own error state already outlines red.
+
+  const scrollViewRef = useRef<ScrollView>(null);
+  /** Current scroll position, so a measured field can be turned into an absolute offset. */
+  const scrollOffsetRef = useRef(0);
+  const fieldAnchors = useRef<Record<string, View | null>>({});
+
+  const registerAnchor = useCallback((key: string) => (node: View | null) => {
+    // Only clears its own entry: some fields are rendered by more than one branch,
+    // and an unmounting branch must not wipe the anchor another just registered.
+    if (node) fieldAnchors.current[key] = node;
+    else if (fieldAnchors.current[key] === null) delete fieldAnchors.current[key];
+  }, []);
+
+  /** Distance kept above the field so its label, not just its outline, is on screen. */
+  const SCROLL_ERROR_PADDING = 90;
+
+  const scrollToFirstError = useCallback((keys: string[]) => {
+    const scroller = scrollViewRef.current;
+    if (!scroller || keys.length === 0) return;
+
+    // measureInWindow rather than measureLayout: no node handles, and it behaves
+    // the same on both React Native architectures.
+    const measure = (node: View) => new Promise<number | null>(resolve => {
+      try {
+        node.measureInWindow((_x, y) => resolve(typeof y === 'number' ? y : null));
+      } catch {
+        resolve(null);
+      }
+    });
+
+    Promise.all([
+      measure(scroller as unknown as View),
+      ...keys.map(key => {
+        const node = fieldAnchors.current[key];
+        return node ? measure(node) : Promise.resolve(null);
+      }),
+    ]).then(([scrollerY, ...fieldYs]) => {
+      if (scrollerY === null) return;
+
+      // The topmost error on screen, not the first the validator happened to add —
+      // fields are not checked in the order they are laid out.
+      const topMost = fieldYs.filter((y): y is number => y !== null).sort((a, b) => a - b)[0];
+      if (topMost === undefined) return;
+
+      const target = scrollOffsetRef.current + (topMost - scrollerY) - SCROLL_ERROR_PADDING;
+      scroller.scrollTo({ y: Math.max(0, target), animated: true });
+    }).catch(() => {
+      // A field that cannot be measured is not worth failing over; the red outline
+      // still marks it.
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!validationFailedAt) return;
+    const failed = Object.keys(errors);
+    if (failed.length === 0) return;
+
+    // Next frame, so error markup that only renders once errors are in state has
+    // mounted before anything is measured.
+    const id = requestAnimationFrame(() => scrollToFirstError(failed));
+    return () => cancelAnimationFrame(id);
+    // Keyed on the counter alone: re-running whenever `errors` changes would drag
+    // the view back to the top as the technician fixes each field.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validationFailedAt]);
+
 
   const renderInput = useCallback((
     field: keyof ServiceOrderEditFormData,
@@ -60,7 +122,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     keyboardType: 'default' | 'numeric' | 'email-address' = 'default',
     multiline = false
   ) => (
-    <View style={styles.inputGroup}>
+    <View ref={registerAnchor(field as string)} collapsable={false} style={styles.inputGroup}>
       <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
         {label} {editable && !['accountNo', 'dateInstalled', 'fullName', 'contactNumber', 'emailAddress', 'plan', 'username', 'modifiedBy'].includes(field) && <Text style={styles.required}>*</Text>}
       </Text>
@@ -82,9 +144,10 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       />
       {errors[field] ? <Text style={styles.errorText}>{errors[field]}</Text> : null}
     </View>
-  ), [formData, errors, isDarkMode, handleInputChange]);
+  ), [formData, errors, isDarkMode, handleInputChange, registerAnchor]);
 
-  const renderPickerTrigger = useCallback((field: string, label: string, value: string, placeholder: string, required = false) => (
+  const renderPickerTrigger = useCallback((field: string, label: string, value: string, placeholder: string, required = false, errorKey: string = field) => (
+    <View ref={registerAnchor(errorKey)} collapsable={false}>
     <SearchablePickerTrigger
       label={label}
       value={value}
@@ -92,12 +155,13 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         setActivePicker(field);
         setSearchQueries({ ...searchQueries, [field]: '' });
       }}
-      error={errors[field]}
+      error={errors[errorKey]}
       isDarkMode={isDarkMode}
       placeholder={placeholder}
       required={required}
     />
-  ), [errors, isDarkMode, searchQueries, setActivePicker, setSearchQueries]);
+    </View>
+  ), [errors, isDarkMode, searchQueries, setActivePicker, setSearchQueries, registerAnchor]);
 
   if (!isOpen) return null;
 
@@ -158,7 +222,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <Text style={styles.loadingText}>Loading form...</Text>
                 </View>
               ) : (
-                <ScrollView style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent} scrollEnabled={scrollEnabled} keyboardShouldPersistTaps="handled">
+                <ScrollView ref={scrollViewRef} style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent} scrollEnabled={scrollEnabled} keyboardShouldPersistTaps="handled" onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }} scrollEventThrottle={16}>
 
                   {/* Base Info */}
                   {renderInput('accountNo', 'Account No', false)}
@@ -168,6 +232,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   {renderInput('emailAddress', 'Email Address', false)}
                   {renderInput('plan', 'Plan', false)}
                   {renderInput('username', 'Username', false)}
+                  {renderInput('pppoePassword', 'PPPOE Password', false)}
                   {renderInput('fullAddress', 'Full Address', false, 'default', true)}
 
                   {/* Connection Type */}
@@ -193,44 +258,49 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   </View>
 
                   {formData.supportStatus === 'Failed' && (
-                    <ImagePreview
-                              saveToGalleryOnCapture={false}
-                      label="Proof Image *"
-                      imageUrl={imageFiles.proofImageFile?.uri || formData.proofImage}
-                      onUpload={(file) => handleImageUpload('proofImageFile', file)}
-                      error={errors.proofImageFile}
-                      isDarkMode={isDarkMode}
-                      colorPrimary={activeColor}
-                    />
+                    <View ref={registerAnchor('proofImageFile')} collapsable={false}>
+                      <ImagePreview
+                        label="Proof Image *"
+                        imageUrl={imageFiles.proofImageFile?.uri || formData.proofImage}
+                        onUpload={(file) => handleImageUpload('proofImageFile', file)}
+                        error={errors.proofImageFile}
+                        isDarkMode={isDarkMode}
+                        colorPrimary={activeColor}
+                      />
+                    </View>
                   )}
 
                   {formData.supportStatus === 'For Visit' && (
                     <>
                       {renderPickerTrigger('visitStatus', 'Visit Status', formData.visitStatus, 'Select Visit Status', true)}
 
-                      {/* Stamped by the API the day a technician moves the Visit
-                          Status, and only then. Read-only here: the column is
-                          derived server-side, so it is never sent back up. */}
-                      {visitStatusDate && (
+                      {/* Read-only for technicians: reassigning a visit is a dispatcher
+                          decision, so a technician sees who it is assigned to but cannot
+                          change it. Same treatment as Support Status above. */}
+                      {isTechnician ? (
                         <View style={styles.inputGroup}>
-                          <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>Visit Status Date</Text>
+                          <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
+                            Assigned Email <Text style={styles.required}>*</Text>
+                          </Text>
                           <TextInput
                             style={[styles.textInput, { backgroundColor: isDarkMode ? '#374151' : '#f3f4f6', color: isDarkMode ? '#9ca3af' : '#6b7280' }]}
-                            value={visitStatusDate}
+                            value={formData.assignedEmail}
                             editable={false}
                           />
                         </View>
+                      ) : (
+                        <View ref={registerAnchor('assignedEmail')} collapsable={false}>
+                          <SearchablePickerTrigger
+                            label="Assigned Email"
+                            value={formData.assignedEmail}
+                            onPress={() => setActivePicker('assignedEmail')}
+                            error={errors.assignedEmail}
+                            isDarkMode={isDarkMode}
+                            placeholder="Select Technician"
+                            required={true}
+                          />
+                        </View>
                       )}
-
-                      <SearchablePickerTrigger
-                        label="Assigned Email"
-                        value={formData.assignedEmail}
-                        onPress={() => setActivePicker('assignedEmail')}
-                        error={errors.assignedEmail}
-                        isDarkMode={isDarkMode}
-                        placeholder="Select Technician"
-                        required={true}
-                      />
 
                       {formData.visitStatus === 'Done' && (
                         <>
@@ -261,7 +331,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                                         {formData.routerModel || "Validated Modem SN to Get Router Model..."}
                                       </Text>
                                     </View>
-                                    {errors.routerModel ? <Text style={styles.errorText}>{errors.routerModel}</Text> : null}
+                                    {errors.routerModel ? <View ref={registerAnchor('routerModel')} collapsable={false}><Text style={styles.errorText}>{errors.routerModel}</Text></View> : null}
                                   </View>
 
                                   <View style={styles.inputGroup}>
@@ -301,12 +371,12 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                                         placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
                                       />
                                     </View>
-                                    {errors.newRouterModemSN ? <Text style={styles.errorText}>{errors.newRouterModemSN}</Text> : null}
+                                    {errors.newRouterModemSN ? <View ref={registerAnchor('newRouterModemSN')} collapsable={false}><Text style={styles.errorText}>{errors.newRouterModemSN}</Text></View> : null}
                                   </View>
                                 </>
                               )}
-                              {renderPickerTrigger('lcpnaps', 'New LCP-NAP', formData.newLcpnap, 'Select LCP-NAP', true)}
-                              {renderPickerTrigger('port', 'New Port', formData.newPort, 'Select Port', true)}
+                              {renderPickerTrigger('lcpnaps', 'New LCP-NAP', formData.newLcpnap, 'Select LCP-NAP', true, 'newLcpnap')}
+                              {renderPickerTrigger('port', 'New Port', formData.newPort, 'Select Port', true, 'newPort')}
                               {renderPickerTrigger('vlan', 'New VLAN', formData.newVlan, 'Select VLAN', true)}
                             </>
                           )}
@@ -334,7 +404,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                                     {formData.routerModel || "Validated Modem SN to Get Router Model..."}
                                   </Text>
                                 </View>
-                                {errors.routerModel ? <Text style={styles.errorText}>{errors.routerModel}</Text> : null}
+                                {errors.routerModel ? <View ref={registerAnchor('routerModel')} collapsable={false}><Text style={styles.errorText}>{errors.routerModel}</Text></View> : null}
                               </View>
 
                               <View style={styles.inputGroup}>
@@ -374,7 +444,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                                     placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
                                   />
                                 </View>
-                                {errors.newRouterModemSN ? <Text style={styles.errorText}>{errors.newRouterModemSN}</Text> : null}
+                                {errors.newRouterModemSN ? <View ref={registerAnchor('newRouterModemSN')} collapsable={false}><Text style={styles.errorText}>{errors.newRouterModemSN}</Text></View> : null}
                               </View>
                             </>
                           )}
@@ -384,9 +454,15 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                           {/* Reactivation images moved to above items */}
 
                           {/* VISIT BY / WITH */}
-                          <SearchablePickerTrigger label="Visit By" value={formData.visitBy} onPress={() => { setActiveTechField('visitBy'); setActivePicker('technician'); }} error={errors.visitBy} isDarkMode={isDarkMode} required />
-                          <SearchablePickerTrigger label="Visit With" value={formData.visitWith} onPress={() => { setActiveTechField('visitWith'); setActivePicker('technician'); }} error={errors.visitWith} isDarkMode={isDarkMode} />
-                          <SearchablePickerTrigger label="Visit With Other" value={formData.visitWithOther} onPress={() => { setActiveTechField('visitWithOther'); setActivePicker('technician'); }} error={errors.visitWithOther} isDarkMode={isDarkMode} />
+                          <View ref={registerAnchor('visitBy')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit By" value={formData.visitBy} onPress={() => { setActiveTechField('visitBy'); setActivePicker('technician'); }} error={errors.visitBy} isDarkMode={isDarkMode} required />
+                          </View>
+                          <View ref={registerAnchor('visitWith')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit With" value={formData.visitWith} onPress={() => { setActiveTechField('visitWith'); setActivePicker('technician'); }} error={errors.visitWith} isDarkMode={isDarkMode} />
+                          </View>
+                          <View ref={registerAnchor('visitWithOther')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit With Other" value={formData.visitWithOther} onPress={() => { setActiveTechField('visitWithOther'); setActivePicker('technician'); }} error={errors.visitWithOther} isDarkMode={isDarkMode} />
+                          </View>
 
                           {renderInput('visitRemarks', 'Visit Remarks')}
 
@@ -471,59 +547,69 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                               </View>
                             )}
                             {errors.clientSignatureFile && (
-                              <Text style={[styles.errorText, { color: '#ef4444', marginTop: 4 }]}>{errors.clientSignatureFile}</Text>
+                              <View ref={registerAnchor('clientSignatureFile')} collapsable={false}><Text style={[styles.errorText, { color: '#ef4444', marginTop: 4 }]}>{errors.clientSignatureFile}</Text></View>
                             )}
                           </View>
 
                           {/* IMAGE UPLOAD SECTION - Grouped together above items */}
-                          <ImagePreview saveToGalleryOnCapture={false} label="Time In Image" required={true} imageUrl={imageFiles.timeInFile?.uri || formData.timeIn} onUpload={(file) => handleImageUpload('timeInFile', file)} error={errors.timeInFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                          <View ref={registerAnchor('timeInFile')} collapsable={false}>
+                            <ImagePreview label="Time In Image" required={true} imageUrl={imageFiles.timeInFile?.uri || formData.timeIn} onUpload={(file) => handleImageUpload('timeInFile', file)} error={errors.timeInFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                          </View>
 
                           {formData.repairCategory?.toLowerCase() !== 'reactivation' && (
-                            <ImagePreview saveToGalleryOnCapture={false} label="Modem Setup Image" required={true} imageUrl={imageFiles.modemSetupFile?.uri || formData.modemSetupImage} onUpload={(file) => handleImageUpload('modemSetupFile', file)} error={errors.modemSetupFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                            <View ref={registerAnchor('modemSetupFile')} collapsable={false}>
+                              <ImagePreview label="Modem Setup Image" required={true} imageUrl={imageFiles.modemSetupFile?.uri || formData.modemSetupImage} onUpload={(file) => handleImageUpload('modemSetupFile', file)} error={errors.modemSetupFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                            </View>
                           )}
 
                           {formData.repairCategory?.toLowerCase() === 'reactivation' && (
                             <>
-                              <ImagePreview
-                              saveToGalleryOnCapture={false}
-                                label="Setup Image *"
-                                imageUrl={imageFiles.setupImageFile?.uri || formData.setupImage}
-                                onUpload={(file) => handleImageUpload('setupImageFile', file)}
-                                error={errors.setupImageFile}
-                                isDarkMode={isDarkMode}
-                                colorPrimary={activeColor}
-                              />
-                              <ImagePreview
-                              saveToGalleryOnCapture={false}
-                                label="Router Reading Image *"
-                                imageUrl={imageFiles.routerReadingImageFile?.uri || formData.routerReadingImage}
-                                onUpload={(file) => handleImageUpload('routerReadingImageFile', file)}
-                                error={errors.routerReadingImageFile}
-                                isDarkMode={isDarkMode}
-                                colorPrimary={activeColor}
-                              />
-                              <ImagePreview
-                              saveToGalleryOnCapture={false}
-                                label="Box Reading Image *"
-                                imageUrl={imageFiles.boxReadingImageFile?.uri || formData.boxReadingImage}
-                                onUpload={(file) => handleImageUpload('boxReadingImageFile', file)}
-                                error={errors.boxReadingImageFile}
-                                isDarkMode={isDarkMode}
-                                colorPrimary={activeColor}
-                              />
-                              <ImagePreview
-                              saveToGalleryOnCapture={false}
-                                label="Port Label Image *"
-                                imageUrl={imageFiles.portLabelImageFile?.uri || formData.portLabelImage}
-                                onUpload={(file) => handleImageUpload('portLabelImageFile', file)}
-                                error={errors.portLabelImageFile}
-                                isDarkMode={isDarkMode}
-                                colorPrimary={activeColor}
-                              />
+                              <View ref={registerAnchor('setupImageFile')} collapsable={false}>
+                                <ImagePreview
+                                  label="Setup Image *"
+                                  imageUrl={imageFiles.setupImageFile?.uri || formData.setupImage}
+                                  onUpload={(file) => handleImageUpload('setupImageFile', file)}
+                                  error={errors.setupImageFile}
+                                  isDarkMode={isDarkMode}
+                                  colorPrimary={activeColor}
+                                />
+                              </View>
+                              <View ref={registerAnchor('routerReadingImageFile')} collapsable={false}>
+                                <ImagePreview
+                                  label="Router Reading Image *"
+                                  imageUrl={imageFiles.routerReadingImageFile?.uri || formData.routerReadingImage}
+                                  onUpload={(file) => handleImageUpload('routerReadingImageFile', file)}
+                                  error={errors.routerReadingImageFile}
+                                  isDarkMode={isDarkMode}
+                                  colorPrimary={activeColor}
+                                />
+                              </View>
+                              <View ref={registerAnchor('boxReadingImageFile')} collapsable={false}>
+                                <ImagePreview
+                                  label="Box Reading Image *"
+                                  imageUrl={imageFiles.boxReadingImageFile?.uri || formData.boxReadingImage}
+                                  onUpload={(file) => handleImageUpload('boxReadingImageFile', file)}
+                                  error={errors.boxReadingImageFile}
+                                  isDarkMode={isDarkMode}
+                                  colorPrimary={activeColor}
+                                />
+                              </View>
+                              <View ref={registerAnchor('portLabelImageFile')} collapsable={false}>
+                                <ImagePreview
+                                  label="Port Label Image *"
+                                  imageUrl={imageFiles.portLabelImageFile?.uri || formData.portLabelImage}
+                                  onUpload={(file) => handleImageUpload('portLabelImageFile', file)}
+                                  error={errors.portLabelImageFile}
+                                  isDarkMode={isDarkMode}
+                                  colorPrimary={activeColor}
+                                />
+                              </View>
                             </>
                           )}
 
-                          <ImagePreview saveToGalleryOnCapture={false} label="Time Out Image *" required={true} imageUrl={imageFiles.timeOutFile?.uri || formData.timeOut} onUpload={(file) => handleImageUpload('timeOutFile', file)} error={errors.timeOutFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                          <View ref={registerAnchor('timeOutFile')} collapsable={false}>
+                            <ImagePreview label="Time Out Image *" required={true} imageUrl={imageFiles.timeOutFile?.uri || formData.timeOut} onUpload={(file) => handleImageUpload('timeOutFile', file)} error={errors.timeOutFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                          </View>
 
                           {/* ITEMS SECTION */}
                           <View style={styles.inputGroup}>
@@ -560,7 +646,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                                 </View>
                               </View>
                             ))}
-                            {errors.items && <Text style={styles.errorText}>{errors.items}</Text>}
+                            {errors.items && <View ref={registerAnchor('items')} collapsable={false}><Text style={styles.errorText}>{errors.items}</Text></View>}
                           </View>
 
                           <Pressable
@@ -575,12 +661,20 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
                       {(formData.visitStatus === 'Reschedule' || formData.visitStatus === 'Failed') && (
                         <>
-                          <SearchablePickerTrigger label="Visit By" value={formData.visitBy} onPress={() => { setActiveTechField('visitBy'); setActivePicker('technician'); }} error={errors.visitBy} isDarkMode={isDarkMode} required />
-                          <SearchablePickerTrigger label="Visit With" value={formData.visitWith} onPress={() => { setActiveTechField('visitWith'); setActivePicker('technician'); }} error={errors.visitWith} isDarkMode={isDarkMode} required />
-                          <SearchablePickerTrigger label="Visit With Other" value={formData.visitWithOther} onPress={() => { setActiveTechField('visitWithOther'); setActivePicker('technician'); }} error={errors.visitWithOther} isDarkMode={isDarkMode} required />
+                          <View ref={registerAnchor('visitBy')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit By" value={formData.visitBy} onPress={() => { setActiveTechField('visitBy'); setActivePicker('technician'); }} error={errors.visitBy} isDarkMode={isDarkMode} required />
+                          </View>
+                          <View ref={registerAnchor('visitWith')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit With" value={formData.visitWith} onPress={() => { setActiveTechField('visitWith'); setActivePicker('technician'); }} error={errors.visitWith} isDarkMode={isDarkMode} required />
+                          </View>
+                          <View ref={registerAnchor('visitWithOther')} collapsable={false}>
+                            <SearchablePickerTrigger label="Visit With Other" value={formData.visitWithOther} onPress={() => { setActiveTechField('visitWithOther'); setActivePicker('technician'); }} error={errors.visitWithOther} isDarkMode={isDarkMode} required />
+                          </View>
                           {renderInput('visitRemarks', 'Visit Remarks')}
                           {formData.visitStatus === 'Failed' && (
-                            <ImagePreview saveToGalleryOnCapture={false} label="Proof Image" required={true} imageUrl={imageFiles.proofImageFile?.uri || formData.proofImage} onUpload={(file) => handleImageUpload('proofImageFile', file)} error={errors.proofImageFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                            <View ref={registerAnchor('proofImageFile')} collapsable={false}>
+                              <ImagePreview label="Proof Image" required={true} imageUrl={imageFiles.proofImageFile?.uri || formData.proofImage} onUpload={(file) => handleImageUpload('proofImageFile', file)} error={errors.proofImageFile} isDarkMode={isDarkMode} colorPrimary={activeColor} />
+                            </View>
                           )}
                         </>
                       )}
@@ -594,7 +688,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     ) : renderPickerTrigger('concern', 'Concern', formData.concern, 'Select Concern', true)}
                   </View>
 
-                  {formData.concern === 'Upgrade/Downgrade Plan' && renderPickerTrigger('plan', 'New Plan', formData.newPlan, 'Select New Plan', true)}
+                  {formData.concern === 'Upgrade/Downgrade Plan' && renderPickerTrigger('plan', 'New Plan', formData.newPlan, 'Select New Plan', true, 'newPlan')}
 
                   {renderInput('concernRemarks', 'Concern Remarks', !isTechnician)}
                   {renderInput('modifiedBy', 'Modified By', false)}

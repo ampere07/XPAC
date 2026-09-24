@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AlertTriangle, Circle, ChevronLeft, ChevronRight, Menu, ChevronDown, RefreshCw, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, Columns3 } from 'lucide-react';
+import { AlertTriangle, Circle, ChevronLeft, ChevronRight, Menu, ChevronDown, RefreshCw, ChevronsLeft, ChevronsRight, ArrowUp, ArrowDown, Columns3, Filter } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import { useTableColumns } from './globalfunctions/useTableColumns';
 import DisconnectionLogsDetails from '../components/DisconnectionLogsDetails';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { useDisconnectionStore } from '../store/disconnectionStore';
 import { DisconnectionLogRecord } from '../services/disconnectionService';
+import TableFunnelFilter, { FunnelColumn } from '../filter/TableFunnelFilter';
+import { useFunnelFilter } from '../filter/useFunnelFilter';
 
 
 
@@ -95,6 +97,34 @@ const DisconnectionLogs: React.FC = () => {
     { key: 'reconnectionFee', label: 'Reconnection Fee', width: 'min-w-36' },
     { key: 'daysDisconnected', label: 'Days Disconnected', width: 'min-w-36' },
     { key: 'disconnectionCode', label: 'Disconnection Code', width: 'min-w-36' }
+  ];
+
+  /**
+   * One filter entry per table column above, so every column the table can show is filterable.
+   * Keys match allColumns exactly - the table renders each cell from record[key] and the filter
+   * reads the same key. Money and day counts are ranges, so "who has been off for more than N
+   * days" is answerable in the table rather than in an export.
+   */
+  const funnelColumns: FunnelColumn[] = [
+    { key: 'date', label: 'Date', dataType: 'datetime' },
+    { key: 'accountNo', label: 'Account No.', dataType: 'varchar' },
+    { key: 'username', label: 'Username', dataType: 'varchar' },
+    { key: 'remarks', label: 'Remarks', dataType: 'text' },
+    { key: 'sessionId', label: 'Session ID', dataType: 'varchar' },
+    { key: 'status', label: 'Status', dataType: 'checklist' },
+    { key: 'customerName', label: 'Full Name', dataType: 'varchar' },
+    { key: 'address', label: 'Address', dataType: 'text' },
+    { key: 'contactNumber', label: 'Contact Number', dataType: 'varchar' },
+    { key: 'emailAddress', label: 'Email Address', dataType: 'varchar' },
+    { key: 'plan', label: 'Plan', dataType: 'checklist' },
+    { key: 'balance', label: 'Account Balance', dataType: 'decimal' },
+    { key: 'disconnectionDate', label: 'Disconnection Date', dataType: 'datetime' },
+    { key: 'disconnectedBy', label: 'Disconnected By', dataType: 'varchar' },
+    { key: 'reason', label: 'Reason', dataType: 'checklist' },
+    { key: 'appliedDate', label: 'Applied Date', dataType: 'datetime' },
+    { key: 'reconnectionFee', label: 'Reconnection Fee', dataType: 'decimal' },
+    { key: 'daysDisconnected', label: 'Days Disconnected', dataType: 'int' },
+    { key: 'disconnectionCode', label: 'Disconnection Code', dataType: 'varchar' },
   ];
 
   const {
@@ -202,6 +232,15 @@ const DisconnectionLogs: React.FC = () => {
     });
   }, [logRecords, searchQuery, statementDateFrom, statementDateTo, userOrgId]);
 
+  // Applied here, on the search-narrowed set, so the sidebar counts, the tab counts and the
+  // table all describe the same rows. Customer.tsx applies its funnel at the same point; a
+  // filter applied further down would leave the counts describing the unfiltered set.
+  const funnel = useFunnelFilter({
+    storageKey: 'disconnectionLogsFunnelFilters',
+    columns: funnelColumns,
+    rows: globalFilteredRecords,
+  });
+
   const formatDateTime = (dateStr?: string): string => {
     if (!dateStr) return '-';
     try {
@@ -264,7 +303,7 @@ const DisconnectionLogs: React.FC = () => {
   // Memoize location items for performance
   const locationItems: LocationItem[] = useMemo(() => {
     // Only records matching the global filters and the selected month if not 'All'
-    let filteredForLocations = globalFilteredRecords.filter(record => {
+    let filteredForLocations = funnel.filteredRows.filter(record => {
       return selectedDate === 'All' || (record.date && record.date.startsWith(selectedDate));
     });
 
@@ -290,11 +329,11 @@ const DisconnectionLogs: React.FC = () => {
     });
 
     return items;
-  }, [globalFilteredRecords, selectedDate]);
+  }, [funnel.filteredRows, selectedDate]);
 
   const dateItems = useMemo(() => {
     // Only records matching the global filters and the selected location if not 'all'
-    let filteredForMonths = globalFilteredRecords.filter(record => {
+    let filteredForMonths = funnel.filteredRows.filter(record => {
       return selectedLocation === 'all' || (record.cityId !== undefined && record.cityId === Number(selectedLocation));
     });
 
@@ -318,9 +357,10 @@ const DisconnectionLogs: React.FC = () => {
       all: filteredForMonths.length,
       dates: sortedMonths
     };
-  }, [globalFilteredRecords, selectedLocation]);
+  }, [funnel.filteredRows, selectedLocation]);
 
   // Memoize filtered records for performance
+
   const filteredLogRecords = useMemo(() => {
     let filtered = logRecords.filter(record => {
       // Organization filter — mirrors applicationmanagement.tsx logic exactly
@@ -582,7 +622,7 @@ const DisconnectionLogs: React.FC = () => {
                 backgroundColor: colorPalette?.primary || '#7c3aed'
               } : {}}
             >
-              {globalFilteredRecords.length}
+              {funnel.filteredRows.length}
             </span>
           </button>
 
@@ -747,6 +787,24 @@ const DisconnectionLogs: React.FC = () => {
                   placeholder="Search disconnection logs..."
                 />
               </div>
+              <button
+                className={`flex-shrink-0 px-4 py-2 rounded text-sm transition-colors flex items-center ${funnel.activeCount > 0
+                  ? 'text-white'
+                  : isDarkMode
+                    ? 'hover:bg-gray-700 text-white bg-gray-800 border-gray-700'
+                    : 'hover:bg-gray-200 text-gray-900 bg-white border border-gray-300'
+                  }`}
+                style={funnel.activeCount > 0 ? { backgroundColor: colorPalette?.primary || '#7c3aed' } : {}}
+                onClick={funnel.open}
+                title={funnel.activeCount > 0
+                  ? `Active Filters:\n${Object.keys(funnel.activeFilters).map(funnel.labelFor).join('\n')}`
+                  : 'Column Filters'}
+              >
+                <Filter className="h-5 w-5" />
+                {funnel.activeCount > 0 && (
+                  <span className="ml-2 text-xs font-bold">{funnel.activeCount}</span>
+                )}
+              </button>
               <div className="relative flex-shrink-0" ref={filterDropdownRef}>
                 <button
                   onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
@@ -996,6 +1054,12 @@ const DisconnectionLogs: React.FC = () => {
           />
         </div>
       )}
+
+      <TableFunnelFilter
+        {...funnel.panelProps}
+        title="Disconnection Log Filters"
+        subtitle="Refine your disconnection log results"
+      />
     </div>
   );
 };

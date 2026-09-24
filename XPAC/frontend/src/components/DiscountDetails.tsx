@@ -1,15 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info, Edit } from 'lucide-react';
+import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info } from 'lucide-react';
 import { update } from '../services/discountService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
 import { CircleArrowRight, Loader } from 'lucide-react';
-import { usePermissions } from '../hooks/usePermissions';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 
 const CustomerDetails = React.lazy(() => import('./CustomerDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
-const DiscountFormModal = React.lazy(() => import('../modals/DiscountFormModal'));
 
 const formatDate = (dateString: string | null | undefined, includeTime: boolean = false): string => {
   if (!dateString) return '-';
@@ -66,18 +65,16 @@ interface DiscountDetailsProps {
   discountRecord: DiscountRecord;
   onClose?: () => void;
   onApproveSuccess?: () => void;
-  onEditSuccess?: () => void;
   onViewCustomer?: (accountNo: string) => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
 
-const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onEditSuccess, onViewCustomer, onPrevious, onNext }) => {
+const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onViewCustomer, onPrevious, onNext }) => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [showApproveButton, setShowApproveButton] = useState<boolean>(false);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [isApproving, setIsApproving] = useState<boolean>(false);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
@@ -85,8 +82,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
   const startXRef = useRef<number>(0);
   const startWidthRef = useRef<number>(0);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
-  const { can: hasPermission } = usePermissions();
-  const canEdit = hasPermission('discounts.add') && !!discountRecord.id;
 
   // Overlay states
   const [loadingCustomerOverlay, setLoadingCustomerOverlay] = useState(false);
@@ -222,15 +217,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
     setShowConfirmModal(false);
   };
 
-  const handleEditSaved = () => {
-    setIsEditModalOpen(false);
-    if (onEditSuccess) {
-      onEditSuccess();
-    } else if (onApproveSuccess) {
-      onApproveSuccess();
-    }
-  };
-
   return (
     <div className={`flex flex-col relative md:border-l overflow-hidden ${
       isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
@@ -298,19 +284,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
               <ChevronRight size={18} />
             </button>
           </div>
-          {canEdit && (
-            <button
-              onClick={() => setIsEditModalOpen(true)}
-              className={`px-3 py-1 rounded text-sm transition-colors flex items-center space-x-1 border ${isDarkMode
-                ? 'border-gray-600 text-gray-200 hover:bg-gray-700'
-                : 'border-gray-300 text-gray-700 hover:bg-gray-200'
-                }`}
-              title="Edit Discount"
-            >
-              <Edit size={16} />
-              <span>Edit</span>
-            </button>
-          )}
           {showApproveButton && (
             <button
               onClick={handleApprove}
@@ -634,17 +607,6 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
             </React.Suspense>
           )}
         </div>
-      )}
-
-      {isEditModalOpen && (
-        <React.Suspense fallback={null}>
-          <DiscountFormModal
-            isOpen={isEditModalOpen}
-            discountId={discountRecord.id}
-            onClose={() => setIsEditModalOpen(false)}
-            onSave={handleEditSaved}
-          />
-        </React.Suspense>
       )}
 
       {/* Not Found Modal */}

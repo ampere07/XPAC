@@ -29,7 +29,6 @@ import { formatToGMT8MySQL } from '../utils/dateUtils';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
-import { authFetch } from '../config/api';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -162,7 +161,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
     const fetchCategories = async () => {
       if (!isOpen) return;
       try {
-        const response = await authFetch(`${API_BASE_URL}/work-categories`);
+        const response = await fetch(`${API_BASE_URL}/work-categories`);
         const result = await response.json();
         if (result.success && result.data) {
           setCategories(result.data);
@@ -537,7 +536,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                   >
                     <Picker.Item label="Select User" value="" />
                     {assignees.map(t => (
-                      <Picker.Item key={t.email} label={t.email} value={t.email} />
+                      <Picker.Item key={t.email} label={t?.name || t.email} value={t.email} />
                     ))}
                     {formData.assign_to && !assignees.some(t => t.email === formData.assign_to) && (
                       <Picker.Item label={formData.assign_to} value={formData.assign_to} />

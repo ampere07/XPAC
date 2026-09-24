@@ -8,7 +8,6 @@ import {
   RefreshControl,
   Dimensions,
   Linking,
-  Alert,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import {
@@ -25,7 +24,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import apiClient from '../config/api';
-import { usePermissions } from '../hooks/usePermissions';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import AddReportModal from '../modals/AddReportModal';
 
@@ -109,24 +107,10 @@ const Reports: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  /**
-   * Whether scheduled reports are being emailed automatically.
-   *
-   * null until the setting has been read — the switch stays hidden rather than
-   * flashing "off" and inviting someone to turn on something already on.
-   */
-  const [autoSend, setAutoSend] = useState<boolean | null>(null);
-  const [isSavingAutoSend, setIsSavingAutoSend] = useState(false);
-
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
-
-  // The API demands reports.manage to write the setting, so the switch asks
-  // for the same key rather than for a role id.
-  const { can } = usePermissions();
-  const canManageReports = can('reports.manage');
 
   const primary = colorPalette?.primary || '#7c3aed';
   const { width } = Dimensions.get('window');
@@ -179,54 +163,6 @@ const Reports: React.FC = () => {
   useEffect(() => {
     if (accessChecked && !accessDenied) fetchReports();
   }, [accessChecked, accessDenied]);
-
-  /** Read the setting once the page is open to whoever is reading it. */
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiClient.get<{ success: boolean; data?: { auto_send_enabled?: boolean } }>(
-          '/reports/settings'
-        );
-        if (!cancelled && res.data?.success) {
-          setAutoSend(Boolean(res.data.data?.auto_send_enabled));
-        }
-      } catch {
-        // Leaving it null hides the switch, which is the right outcome for a
-        // reader whose role cannot read the setting.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  /** Changing it needs 'reports.manage', which is what the API asks for. */
-  const handleToggleAutoSend = async () => {
-    if (autoSend === null || isSavingAutoSend) return;
-
-    const next = !autoSend;
-    setIsSavingAutoSend(true);
-    try {
-      const res = await apiClient.put<{
-        success: boolean;
-        message?: string;
-        data: { auto_send_enabled: boolean };
-      }>('/reports/settings', { auto_send_enabled: next });
-
-      if (!res.data?.success) {
-        throw new Error(res.data?.message || 'Failed to update the setting.');
-      }
-
-      setAutoSend(Boolean(res.data.data?.auto_send_enabled));
-      await fetchReports(true);
-    } catch (err: any) {
-      Alert.alert(
-        'Could not change the setting',
-        err?.response?.data?.message || err?.message || 'Failed to update the setting.'
-      );
-    } finally {
-      setIsSavingAutoSend(false);
-    }
-  };
 
   // Auto silent-refresh every 15 minutes.
   useEffect(() => {
@@ -444,25 +380,6 @@ const Reports: React.FC = () => {
             colorPalette={colorPalette}
             placeholder="Search reports…"
           />
-          {autoSend !== null && canManageReports && (
-            <TouchableOpacity
-              onPress={handleToggleAutoSend}
-              disabled={isSavingAutoSend}
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: autoSend ? '#16a34a' : '#d1d5db',
-                backgroundColor: autoSend ? '#dcfce7' : '#ffffff',
-                opacity: isSavingAutoSend ? 0.6 : 1,
-              }}
-            >
-              <Text style={{ fontSize: 11, fontWeight: '700', color: autoSend ? '#15803d' : '#6b7280' }}>
-                {isSavingAutoSend ? 'Saving…' : autoSend ? 'AUTO-SEND ON' : 'AUTO-SEND OFF'}
-              </Text>
-            </TouchableOpacity>
-          )}
           <TouchableOpacity
             onPress={() => fetchReports(true)}
             style={{ padding: 10, borderRadius: 8, backgroundColor: primary, alignItems: 'center', justifyContent: 'center' }}

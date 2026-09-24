@@ -12,34 +12,25 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-/*
-|--------------------------------------------------------------------------
-| PUBLIC
-|--------------------------------------------------------------------------
-|
-| Everything an applicant needs, and nothing else. A member of the public
-| filling in the form has no account, so these must stay open: the form
-| itself, the reference data it is built from, and the submission.
-|
-| Read-only throughout, apart from the submission. Nothing here returns an
-| existing applicant's details or changes any setting.
-|
-*/
+// Authentication Routes
+Route::post('/login', [AuthController::class, 'login']);
+Route::post('/logout', [AuthController::class, 'logout']);
+Route::get('/user', [AuthController::class, 'user']);
 
-Route::post('/login', [AuthController::class, 'login'])
-    // Ten attempts a minute per IP. Password guessing against this endpoint
-    // was otherwise limited only by how fast an attacker could send requests.
-    ->middleware('throttle:10,1');
+// Dashboard Routes (Protected)
+Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
+Route::get('/dashboard/recent-applications', [DashboardController::class, 'recentApplications']);
 
-// The application form's own submission.
-Route::post('/application/store', [ApplicationController::class, 'store'])
-    ->middleware('throttle:20,1');
-
-// How the form is laid out. Read-only — updating it is an administrator's job
-// and now lives in the protected group below.
+// Form UI Settings Routes
 Route::get('/form-ui/settings', [FormUIController::class, 'getSettings']);
+Route::post('/form-ui/settings', [FormUIController::class, 'updateSettings']);
 
-// Address pickers.
+Route::post('/application/store', [ApplicationController::class, 'store']);
+
+Route::get('/applications', [ApplicationController::class, 'index']);
+Route::get('/applications/{id}', [ApplicationController::class, 'show']);
+Route::patch('/applications/{id}/status', [ApplicationController::class, 'updateStatus']);
+
 Route::get('/regions', [GeographicController::class, 'getRegions']);
 Route::get('/cities', [GeographicController::class, 'getCities']);
 Route::get('/barangays', [GeographicController::class, 'getBarangays']);
@@ -52,66 +43,14 @@ Route::get('/city', [GeographicController::class, 'getCities']);
 Route::get('/barangay', [GeographicController::class, 'getBarangays']);
 Route::get('/village', [GeographicController::class, 'getVillages']);
 
-// What the applicant is choosing between. Reading the catalogue is public;
-// changing it is not.
+// Plan Management Routes - Using plan_list table
 Route::get('/plans', [PlanController::class, 'index']);
 Route::get('/plans/{id}', [PlanController::class, 'show']);
+Route::post('/plans', [PlanController::class, 'store']);
+Route::put('/plans/{id}', [PlanController::class, 'update']);
+Route::delete('/plans/{id}', [PlanController::class, 'destroy']);
+
 Route::get('/promo_list', [PromoController::class, 'index']);
-
-/*
-|--------------------------------------------------------------------------
-| PROTECTED — requires a valid bearer token
-|--------------------------------------------------------------------------
-|
-| Everything below was previously callable by anybody who knew the URL. That
-| included the full applicant list and every individual application, both of
-| which carry names, addresses and contact numbers; the endpoint that changes
-| an application's status; and the plan and form-settings writes.
-|
-| See EnsureApiTokenIsValid for why the token travels in a header rather than
-| a cookie — the same reason the SPA works inside an in-app browser.
-|
-*/
-
-Route::middleware('auth.token')->group(function () {
-    Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/user', [AuthController::class, 'user']);
-
-    // Dashboard
-    Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
-    Route::get('/dashboard/recent-applications', [DashboardController::class, 'recentApplications']);
-
-    // Applicant records. These are the personal details of real people.
-    Route::get('/applications', [ApplicationController::class, 'index']);
-    Route::get('/applications/{id}', [ApplicationController::class, 'show']);
-    Route::patch('/applications/{id}/status', [ApplicationController::class, 'updateStatus']);
-
-    // Changing what the form asks for.
-    Route::post('/form-ui/settings', [FormUIController::class, 'updateSettings']);
-
-    // Changing the catalogue an applicant is quoted from.
-    Route::post('/plans', [PlanController::class, 'store']);
-    Route::put('/plans/{id}', [PlanController::class, 'update']);
-    Route::delete('/plans/{id}', [PlanController::class, 'destroy']);
-});
-
-/*
-|--------------------------------------------------------------------------
-| OPERATIONS & DIAGNOSTICS — requires a valid bearer token
-|--------------------------------------------------------------------------
-|
-| These were all public. Between them they disclosed the last hundred lines of
-| the application log, the Google service-account address, the database schema
-| with sample rows, and offered anyone who found the URL a way to clear the
-| cache — which, since sessions for this API live in the cache, signed every
-| administrator out.
-|
-| None of it is applicant-facing, so all of it is now behind the same token as
-| the rest of the administrative API.
-|
-*/
-
-Route::middleware('auth.token')->group(function () {
 
 // Image Queue Monitoring Routes
 Route::get('/image-queue/stats', function () {
@@ -183,10 +122,6 @@ Route::get('/debug/tables', function () {
     }
 });
 
-}); // end of the token-protected operations group
-
-// Deliberately public: an uptime monitor has no credentials, and this returns
-// nothing but a fixed string and the clock.
 Route::get('/health', function () {
     return response()->json([
         'status' => 'ok',
@@ -194,8 +129,6 @@ Route::get('/health', function () {
         'message' => 'AmpereCBMS API is running'
     ]);
 });
-
-Route::middleware('auth.token')->group(function () {
 
 Route::get('/debug/form-ui-structure', function () {
     try {
@@ -259,5 +192,3 @@ Route::get('/debug/latest-logs', function () {
     }
 });
 
-
-}); // end of the token-protected diagnostics group

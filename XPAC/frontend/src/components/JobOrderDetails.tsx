@@ -3,7 +3,7 @@ import {
   X, ExternalLink, Edit, Settings, Loader, ArrowRightCircle, Paperclip,
   ChevronLeft, ChevronRight
 } from 'lucide-react';
-import { updateJobOrder, approveJobOrder, getRelatedDetailsUpdateLogs, enableJobOrderForTechnician } from '../services/jobOrderService';
+import { updateJobOrder, approveJobOrder, getRelatedDetailsUpdateLogs } from '../services/jobOrderService';
 import apiClient from '../config/api';
 import { getBillingStatuses, BillingStatus } from '../services/lookupService';
 import { JobOrderDetailsProps } from '../types/jobOrder';
@@ -13,7 +13,6 @@ import JobOrderEditFormModal from '../modals/JobOrderEditFormModal';
 import JOAttachmentModal from '../modals/JOAttachmentModal';
 import ApprovalConfirmationModal from '../modals/ApprovalConfirmationModal';
 import ConfirmationModal from '../modals/MoveToJoModal';
-import PreInstalledModal from '../modals/PreInstalledModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getApplication } from '../services/applicationService';
 import RelatedDataTable from './RelatedDataTable';
@@ -25,7 +24,6 @@ import { User as UserType } from '../types/api';
 import { getBillingRecords, getBillingRecordDetails, BillingDetailRecord } from '../services/billingService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
 import { isAgentUser } from '../utils/agentReferral';
-import { isClosedForTechnicianQueue, isTechnicianEnabled, TECHNICIAN_LOCKED_MESSAGE } from '../utils/technicianJobOrderAccess';
 import { usePermissions } from '../hooks/usePermissions';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
@@ -34,12 +32,10 @@ const CustomerDetails = React.lazy(() => import('./CustomerDetails'));
 const InventoryDetails = React.lazy(() => import('./InventoryDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
 
-// Pre Installed is held closed while the flow behind it is being reworked.
-// The button stays visible so the feature does not look removed — flip this to
-// false to hand it back, no other change needed.
-const PRE_INSTALLED_UNDER_MAINTENANCE = true;
+/** Placeholder for always-rendered fields that hold no value. */
+const NOT_SET = 'Not Set';
 
-const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, onRefresh, isMobile = false, onPrevious, onNext, onExpandSection, isTechnicianLocked = false }) => {
+const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, onRefresh, isMobile = false, onPrevious, onNext, onExpandSection }) => {
   const [localIsMobile, setLocalIsMobile] = useState<boolean>(window.innerWidth < 768);
   useEffect(() => {
     const handleResize = () => {
@@ -61,24 +57,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   const [isAttachmentModalOpen, setIsAttachmentModalOpen] = useState(false);
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [isFailedModalOpen, setIsFailedModalOpen] = useState(false);
-  const [isPreInstalledModalOpen, setIsPreInstalledModalOpen] = useState(false);
-  // Tracked separately from `loading` so the modal's own button shows the
-  // spinner and cannot be pressed twice, without disabling the whole panel.
-  const [preInstalledSaving, setPreInstalledSaving] = useState(false);
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [isEnablingTechnician, setIsEnablingTechnician] = useState(false);
-  const [enableTechnicianError, setEnableTechnicianError] = useState<string | null>(null);
-  /**
-   * Local echo of technician_enabled after a successful enable.
-   *
-   * The list refresh is what makes the change permanent everywhere; this only
-   * keeps the button honest in the moment between the two. Cleared whenever a
-   * different job order is opened so it can never leak across records.
-   */
-  const [technicianEnabledOverride, setTechnicianEnabledOverride] = useState<boolean | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [applicationData, setApplicationData] = useState<Application | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -173,6 +154,10 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     'billingStatus',
     'billingDay',
     'choosePlan',
+    'generationType',
+    'vip',
+    'vatType',
+    'withholding',
     'statusRemarks',
     'remarks',
     'installationLandmark',
@@ -292,20 +277,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         setUserRole(role);
         setRoleId(id);
 
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try {
-              const parsed = JSON.parse(userData.permissions);
-              perms = Array.isArray(parsed) ? parsed : [];
-            } catch (e) {
-              perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-            }
-          }
-        }
-        setUserPermissions(perms);
 
         const isAgent = isAgentUser(role, id);
         const isTechnician = role === 'technician' || String(id) === '2';
@@ -346,10 +317,11 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     }
   }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
-  const { can: hasPermission } = usePermissions();
+  const { can } = usePermissions();
+
+  // One answer for every role, from config/permissions.ts: the seeded role's
+  // table (as the web draws it) or a custom role's server-resolved list.
+  const hasPermission = (permission: string): boolean => can(permission);
 
   useEffect(() => {
     const fetchBillingStatuses = async () => {
@@ -620,13 +592,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   };
 
   const handleDoneClick = () => {
-    // A locked job order opens for reading, but not for editing: this form is how
-    // the work gets recorded, and JobOrderController refuses the update anyway.
-    if (isTechnicianLocked) {
-      setError(TECHNICIAN_LOCKED_MESSAGE);
-      return;
-    }
-
     if (hasPermission('job-order.admin-edit')) {
       setIsDoneModalOpen(true);
     } else if (hasPermission('job-order.tech-edit')) {
@@ -682,23 +647,51 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
 
         let message = 'Job Order approved successfully! Customer, billing account, and technical details have been created.';
 
+        // A VIP job order is approved as a standard postpaid account, so the prepaid pay-first
+        // steps are skipped even when the customer signed up under a prepaid billing type. Stated
+        // here because the difference is otherwise invisible until someone opens the account.
+        if (response.data?.vip_enabled) {
+          message += '\n\nApproved as VIP: the account was created Active and is handled the same as a postpaid customer — no prepaid restriction was applied.';
+        }
+
         if (userCreated) {
           message += `\n\nCustomer Login Credentials:\nUsername: ${accountNumber}\nPassword: ${contactNumber}`;
         }
 
-        // Update the ONU name in SmartOLT using the PPPoE username (best-effort).
+        // Update the ONU's location details in SmartOLT — name, address and contact (best-effort).
         const sn = jobOrder.Modem_Router_SN || jobOrder.modem_router_sn || jobOrder.Modem_SN || jobOrder.modem_sn;
         const pppoeUsername = jobOrder.Username || jobOrder.username || jobOrder.pppoe_username;
+
+        // SmartOLT's "Address or comment" is one free-text field, so the installation address is
+        // composed into a single readable line. Empty parts are dropped rather than leaving
+        // stray commas.
+        const smartOltAddress = [
+          jobOrder.Installation_Address || jobOrder.installation_address || jobOrder.Address,
+          jobOrder.Barangay,
+          jobOrder.City,
+          jobOrder.Region,
+        ].filter(Boolean).join(', ');
+
+        const smartOltContact = jobOrder.Mobile_Number || jobOrder.Contact_Number || '';
 
         if (sn && pppoeUsername) {
           try {
             const smartOltResponse = await apiClient.post('/smart-olt/update-name', {
               sn,
               pppoe_username: pppoeUsername,
+              // Omitted when blank so a missing value never blanks out what is already in SmartOLT.
+              ...(smartOltAddress ? { address_or_comment: smartOltAddress } : {}),
+              ...(smartOltContact ? { contact: smartOltContact } : {}),
             });
 
             if ((smartOltResponse.data as any)?.success) {
-              message += `\n\nSmartOLT ONU name updated to: ${pppoeUsername}`;
+              const updated = (smartOltResponse.data as any)?.updated || {};
+              const extras = [
+                updated.address ? 'address' : null,
+                updated.contact ? 'contact' : null,
+              ].filter(Boolean).join(' and ');
+              message += `\n\nSmartOLT ONU updated — name: ${pppoeUsername}`;
+              if (extras) message += ` (also ${extras})`;
             } else {
               const smartOltMsg = (smartOltResponse.data as any)?.message || 'Unknown error';
               message += `\n\nNote: Could not update SmartOLT ONU name (${smartOltMsg}).`;
@@ -781,9 +774,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   };
 
   const shouldShowEditButton = () => {
-    // Nothing to offer on a job order that is waiting its turn.
-    if (isTechnicianLocked) return false;
-
     const billingStatus = (jobOrder.billing_status || jobOrder.Billing_Status || '').toLowerCase();
     const onsiteStatus = (jobOrder.Onsite_Status || jobOrder.onsite_status || '').toLowerCase();
 
@@ -800,64 +790,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
 
     return false;
   };
-
-  // ── Technician queue release ────────────────────────────────────────────────
-  // Technicians work their job orders oldest first: everything newer is greyed
-  // out until either the older work moves forward or an administrator releases
-  // one early. This is that release.
-
-  const isAdminUser = (): boolean => {
-    const lowerRole = (userRole || '').toLowerCase().trim();
-    return lowerRole === 'administrator' || lowerRole === 'superadmin' || roleId === 1 || roleId === 7;
-  };
-
-  const technicianEnabled = technicianEnabledOverride ?? isTechnicianEnabled(jobOrder);
-
-  // Offered for administrators on any job order a technician still owes work on,
-  // including one that has been rescheduled — that is precisely the case where
-  // they cannot pick it back up without being released. A job order that is
-  // finished, failed or cancelled has nothing left to release.
-  const shouldShowEnableTechnicianButton = () =>
-    isAdminUser() && !isClosedForTechnicianQueue(jobOrder);
-
-  const handleEnableTechnicianClick = async () => {
-    if (isEnablingTechnician || technicianEnabled) return;
-
-    if (!jobOrder.id) {
-      setEnableTechnicianError('Cannot enable job order: Missing ID');
-      return;
-    }
-
-    setEnableTechnicianError(null);
-    setIsEnablingTechnician(true);
-
-    try {
-      const response = await enableJobOrderForTechnician(jobOrder.id);
-
-      if (response?.success) {
-        setTechnicianEnabledOverride(true);
-        setSuccessMessage('Job order enabled. The technician can now start it.');
-        setShowSuccessModal(true);
-        if (onRefresh) {
-          onRefresh();
-        }
-      } else {
-        setEnableTechnicianError(response?.message || 'Failed to enable job order for the technician');
-      }
-    } catch (err: any) {
-      setEnableTechnicianError(
-        err.response?.data?.message || err.message || 'Failed to enable job order for the technician'
-      );
-    } finally {
-      setIsEnablingTechnician(false);
-    }
-  };
-
-  // A different record is a different lock state.
-  useEffect(() => {
-    setTechnicianEnabledOverride(null);
-    setEnableTechnicianError(null);
-  }, [jobOrder.id]);
 
   const shouldShowFailedButton = () => {
     const onsiteStatus = String(jobOrder.Onsite_Status || jobOrder.onsite_status || '').toLowerCase().trim();
@@ -930,69 +862,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
     }
   };
 
-  const handlePreInstalledClick = () => {
-    setIsPreInstalledModalOpen(true);
-  };
-
-  /**
-   * Record the pre-installation visit.
-   *
-   * Written through the same updateJobOrder() every other action on this panel
-   * uses, so the change picks up the update log and the technician lock without
-   * needing an endpoint of its own.
-   *
-   * The timestamp is built from the browser clock in the server's own
-   * 'Y-m-d H:i:s' shape rather than sent as an ISO string, which the API would
-   * read as UTC and store several hours out.
-   */
-  const handlePreInstalledSave = async (remarks: string) => {
-    if (preInstalledSaving || !jobOrder.id) return;
-
-    const trimmed = (remarks || '').trim();
-    if (!trimmed) {
-      setErrorMessage('Pre installed remarks are required.');
-      setShowErrorModal(true);
-      return;
-    }
-
-    try {
-      setPreInstalledSaving(true);
-
-      const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, '0');
-      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
-        + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-
-      const response = await updateJobOrder(jobOrder.id, {
-        pre_installed: 'preinstalled',
-        pre_remarks: trimmed,
-        pre_installed_datetime: stamp
-      });
-
-      if (response.success) {
-        setIsPreInstalledModalOpen(false);
-        setSuccessMessage('Job Order marked as Pre Installed!');
-        setShowSuccessModal(true);
-        if (onRefresh) {
-          onRefresh();
-        }
-      } else {
-        setErrorMessage(response.message || 'Failed to save pre installed details');
-        setShowErrorModal(true);
-      }
-    } catch (err: any) {
-      // The API's own message first: a refusal to record the visit explains why
-      // (no email on the account, for one), and "Request failed with status
-      // code 422" would hide it.
-      setErrorMessage(
-        err.response?.data?.message || err.message || 'An error occurred while saving pre installed details'
-      );
-      setShowErrorModal(true);
-    } finally {
-      setPreInstalledSaving(false);
-    }
-  };
-
   const getFieldLabel = (fieldKey: string): string => {
     const labels: Record<string, string> = {
       timestamp: 'Timestamp',
@@ -1007,6 +876,8 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       billingStatus: 'Billing Status',
       billingDay: 'Billing Day',
       choosePlan: 'Choose Plan',
+      generationType: 'Billing Type',
+      vatType: 'VAT Type',
       statusRemarks: 'Status Remarks',
       remarks: 'Remarks',
       installationLandmark: 'Installation Landmark',
@@ -1249,6 +1120,65 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         );
 
+      // Billing Type / VIP / VAT / Withholding are ALWAYS rendered, even with no value, so the
+      // details panel keeps a stable shape and a missing setting is visibly missing rather than
+      // silently absent. NOT_SET is the placeholder for "no value stored".
+      case 'generationType':
+        const generationType = jobOrder.generation_type || jobOrder.Generation_Type;
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>Billing Type:</div>
+            <div className={valueClass}>{generationType || NOT_SET}</div>
+          </div>
+        );
+
+      // VAT and withholding are suppressed on a VIP job order — the rule the JO Assign Form
+      // enforces by disabling both checkboxes when VIP is ticked.
+      case 'vip': {
+        // Explicit false is a real answer ("No"), not a missing value — only null/undefined,
+        // meaning a job order predating the column, reads as unset.
+        const vipExpiration = jobOrder.vip_expiration;
+        const vipLabel = jobOrder.vip_enabled
+          // Date-only: the model casts vip_expiration to a datetime, so formatDate would tack a
+          // meaningless "12:00 AM" onto what the form captured as a plain date.
+          ? `Yes${vipExpiration ? ` — expires ${formatOnlyDate(vipExpiration)}` : ''}`
+          : (jobOrder.vip_enabled === false ? 'No' : NOT_SET);
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>VIP:</div>
+            <div className={valueClass}>{vipLabel}</div>
+          </div>
+        );
+      }
+
+      case 'vatType': {
+        // Ticked reads as "VAT Included" — the bill the customer receives includes VAT, which is
+        // the wording used on the job order. The computation is unchanged: VAT is added on top of
+        // the plan price.
+        // Falls back to the legacy text for job orders created before vat_enabled existed.
+        const vatType = jobOrder.vat_enabled === true || jobOrder.vat_enabled === false
+          ? (jobOrder.vat_enabled ? 'VAT Included' : 'No VAT')
+          : (jobOrder.vat_type || jobOrder.Vat_Type || NOT_SET);
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>VAT:</div>
+            <div className={valueClass}>{vatType}</div>
+          </div>
+        );
+      }
+
+      case 'withholding': {
+        const withholdingLabel = jobOrder.withholding_enabled
+          ? `${jobOrder.withholding_percentage ?? 0}%`
+          : (jobOrder.withholding_enabled === false ? 'No' : NOT_SET);
+        return (
+          <div className={baseFieldClass}>
+            <div className={labelClass}>Withholding:</div>
+            <div className={valueClass}>{withholdingLabel}</div>
+          </div>
+        );
+      }
+
       case 'statusRemarks':
         const statusRemarks = jobOrder.Status_Remarks || jobOrder.status_remarks;
         if (!statusRemarks) return null;
@@ -1268,7 +1198,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={valueClass}>{remarks}</div>
           </div>
         );
-
 
       case 'installationLandmark':
         const installationLandmark = jobOrder.Installation_Landmark || jobOrder.installation_landmark || jobOrder.landmark || applicationData?.landmark;
@@ -2135,22 +2064,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
 
           <div className="flex items-center space-x-2 flex-wrap gap-y-1">
 
-            {shouldShowEnableTechnicianButton() && (
-              <button
-                className={`px-2 py-1 rounded-sm flex items-center text-sm font-medium whitespace-nowrap ${technicianEnabled
-                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                  }`}
-                onClick={handleEnableTechnicianClick}
-                disabled={technicianEnabled || isEnablingTechnician}
-                title={technicianEnabled
-                  ? 'The technician can already start this job order'
-                  : 'Let the technician start this job order without finishing their older ones first'}
-              >
-                {isEnablingTechnician && <Loader className="h-3 w-3 mr-1 animate-spin" />}
-                <span>{technicianEnabled ? 'Enabled' : (isEnablingTechnician ? 'Enabling...' : 'Enable')}</span>
-              </button>
-            )}
             {shouldShowApproveButton() && (
               <button
                 className="bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded-sm flex items-center text-sm whitespace-nowrap"
@@ -2168,21 +2081,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               >
                 <span>Failed</span>
               </button>
-            )}
-            {hasPermission('job-order.pre-install') && (
-            <button
-              className={`text-white px-2 py-1 rounded-sm flex items-center transition-colors text-sm font-medium whitespace-nowrap ${PRE_INSTALLED_UNDER_MAINTENANCE
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-amber-600 hover:bg-amber-700'}`}
-              onClick={handlePreInstalledClick}
-              disabled={PRE_INSTALLED_UNDER_MAINTENANCE || loading || preInstalledSaving}
-              title={jobOrder.pre_installed
-                ? `Already recorded${jobOrder.pre_installed_datetime ? ' on ' + formatDate(jobOrder.pre_installed_datetime) : ''}`
-                  + `${jobOrder.preinstalled_updated_by ? ' by ' + jobOrder.preinstalled_updated_by : ''} — click to update`
-                : 'Record a pre-installation visit'}
-            >
-              <span>{jobOrder.pre_installed ? 'Pre Installed ✓' : 'Pre Installed'}</span>
-            </button>
             )}
             {shouldShowEditButton() && (
               <button
@@ -2347,15 +2245,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         )}
 
-        {enableTechnicianError && (
-          <div className={`p-3 m-3 rounded ${isDarkMode
-            ? 'bg-red-900 bg-opacity-20 border border-red-700 text-red-400'
-            : 'bg-red-100 border border-red-300 text-red-700'
-            }`}>
-            {enableTechnicianError}
-          </div>
-        )}
-
         <div className={`flex-1 overflow-y-auto w-full ${activeIsMobile ? 'pb-24' : ''}`}>
           <div className={`max-w-2xl mx-auto py-4 px-3 sm:py-6 sm:px-4 ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
             }`}>
@@ -2495,14 +2384,6 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
         cancelText="Cancel"
         onConfirm={handleFailedConfirm}
         onCancel={() => setIsFailedModalOpen(false)}
-      />
-
-      <PreInstalledModal
-        isOpen={isPreInstalledModalOpen}
-        saving={preInstalledSaving}
-        initialRemarks={jobOrder.pre_remarks}
-        onSave={handlePreInstalledSave}
-        onCancel={() => setIsPreInstalledModalOpen(false)}
       />
 
       <ConfirmationModal

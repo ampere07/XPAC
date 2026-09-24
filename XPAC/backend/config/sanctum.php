@@ -4,7 +4,7 @@ use Laravel\Sanctum\Sanctum;
 
 return [
 
-    'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', 'backend.atssfiber.ph,sync.atssfiber.ph,localhost:3000')),
+    'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', 'backend.gowiser.ph,sync.gowiser.ph')),
 
     'guard' => ['web'],
 

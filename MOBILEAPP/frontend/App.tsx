@@ -3,18 +3,17 @@ import './global.css';
 import Login from './src/pages/Login';
 import Dashboard from './src/pages/Dashboard';
 import { UserData } from './src/types/api';
-import { initializeCsrf, loadCookies, clearCookies, SESSION_EXPIRED_EVENT } from './src/config/api';
+import apiClient, { initializeCsrf, loadCookies, clearCookies } from './src/config/api';
 import { userSettingsService } from './src/services/userSettingsService';
 import PaymentResultModal from './src/components/PaymentResultModal';
 import SplashScreen from './src/components/SplashScreen';
-import SessionExpiredModal from './src/components/SessionExpiredModal';
 import { settingsColorPaletteService } from './src/services/settingsColorPaletteService';
 import { PaymentSuccessProvider } from './src/contexts/PaymentSuccessContext';
 import IdleWarningModal from './src/modals/IdleWarningModal';
 import AutoTimeOutWarningModal from './src/modals/AutoTimeOutWarningModal';
 import { techInOutService } from './src/services/techInOutService';
 
-import { View, AppState, DeviceEventEmitter, PanResponder, Platform } from 'react-native';
+import { View, AppState, PanResponder, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Linking from 'expo-linking';
@@ -41,8 +40,6 @@ function App() {
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [paymentRef, setPaymentRef] = useState('');
 
-  const [showSessionExpired, setShowSessionExpired] = useState(false);
-
   const [showIdleWarning, _setShowIdleWarning] = useState(false);
   const isWarningVisible = useRef(false);
 
@@ -54,87 +51,32 @@ function App() {
     _setShowIdleWarning(visible);
   };
 
-  // Mirrors isLoggedIn for the session-expired listener, which is bound once on
-  // mount and would otherwise close over the value from that first render.
-  const isLoggedInRef = useRef(false);
-  useEffect(() => { isLoggedInRef.current = isLoggedIn; }, [isLoggedIn]);
-
-  /**
-   * Whether the idle timers apply to whoever is signed in.
-   *
-   * They did not check. A customer who left the app signed in — which is exactly
-   * what customers are told to do, so that opening it and paying is instant — was
-   * logged out after two hours of not touching the screen, and handleLogout wipes
-   * authData, authToken and the cookie jar. The auto-time-out reminder directly
-   * below already gates on role; this simply did not.
-   *
-   * Staff keep the timeout: their sessions carry other people's billing data on
-   * shared devices, which is the reason it exists. Customers see only their own
-   * account, and the credential is theirs on their own phone.
-   *
-   * A ref as well as a value, because the AppState listener is bound once and
-   * would otherwise close over the role from the first render.
-   */
-  const idleLogoutApplies = !!userData
-    && String(userData.role || '').toLowerCase() !== 'customer'
-    && Number(userData.role_id) !== 3;
-  const idleLogoutAppliesRef = useRef(false);
-  useEffect(() => {
-    idleLogoutAppliesRef.current = idleLogoutApplies;
-
-    // Timers armed before the role was known must not outlive it.
-    if (!idleLogoutApplies) {
-      if (warningTimer.current) clearTimeout(warningTimer.current);
-      if (logoutTimer.current) clearTimeout(logoutTimer.current);
-      setShowIdleWarning(false);
-    }
-  }, [idleLogoutApplies]);
-
   const lastInteractionTime = useRef<number>(Date.now());
-  /** When the app was last backgrounded, so that span can be discounted on resume. */
-  const suspendedAt = useRef<number | null>(null);
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const warningTimer = useRef<NodeJS.Timeout | null>(null);
 
   const handleLogout = async () => {
+    // Tell the server first. Dropping the local cookies alone leaves the session and the
+    // recaller cookie alive server-side, and for technicians it also leaves their one allowed
+    // session slot claimed — so their next sign-in on this same device would ask them to
+    // confirm a takeover of themselves. Failure here must still clear the client, so the user
+    // is never stuck signed in.
+    try {
+      await apiClient.post('/logout');
+    } catch (error) {
+      console.error('[App] Server logout failed; clearing local session anyway:', error);
+    }
+
     // Remove user data and cookies from AsyncStorage
     await AsyncStorage.removeItem('authData');
     await AsyncStorage.removeItem('authToken');
     await clearCookies();
     setUserData(null);
     setIsLoggedIn(false);
-    setShowSessionExpired(false);
     setShowIdleWarning(false);
     if (warningTimer.current) clearTimeout(warningTimer.current);
     if (logoutTimer.current) clearTimeout(logoutTimer.current);
   };
-
-  /**
-   * Sign out when the server says the credential is dead.
-   *
-   * Handled here rather than on the screen that happened to make the request:
-   * the credential is the app's, not one page's, so any 401 anywhere means the
-   * same thing and every screen behind it is equally unusable. The customer
-   * dashboard used to try to work this out for itself by matching '401' against
-   * an error message the context never put there — it therefore never fired, and
-   * a customer with an expired token sat on a dashboard reading Unavailable with
-   * no way to know they simply needed to sign in again.
-   *
-   * The modal is shown before logging out rather than after, so the customer is
-   * told why they are being returned to the login screen instead of just landing
-   * there. handleLogout runs on confirm and clears both credentials, the cookie
-   * jar and isLoggedIn — the old dashboard-local handler only removed authData,
-   * which left the app on a screen it could not load until it was restarted.
-   */
-  useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener(SESSION_EXPIRED_EVENT, () => {
-      // Only while signed in: a 401 raised on the way out, or by a stray request
-      // that outlived the logout, must not put this in front of the login screen.
-      if (isLoggedInRef.current) setShowSessionExpired(true);
-    });
-
-    return () => subscription.remove();
-  }, []);
 
   const resetTimer = () => {
     lastInteractionTime.current = Date.now();
@@ -149,7 +91,7 @@ function App() {
       setShowIdleWarning(false);
     }
 
-    if (isLoggedIn && idleLogoutAppliesRef.current) {
+    if (isLoggedIn) {
       warningTimer.current = setTimeout(() => {
         setShowIdleWarning(true);
       }, WARNING_TIMEOUT);
@@ -240,24 +182,7 @@ function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
-      // Time the app spent suspended is not time the user sat idle in front of
-      // it. React Native freezes JS in the background, so every pending timer
-      // fires at once on resume and this comparison sees the whole gap — which
-      // is why reopening the app the next morning logged you straight out
-      // instead of after two hours of genuine inactivity. Credit the suspended
-      // span back before comparing.
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
-        suspendedAt.current = Date.now();
-        return;
-      }
-
-      if (nextAppState === 'active' && suspendedAt.current !== null) {
-        lastInteractionTime.current += Date.now() - suspendedAt.current;
-        suspendedAt.current = null;
-      }
-
-      // Customers are never logged out by inactivity — see idleLogoutApplies.
-      if (nextAppState === 'active' && isLoggedIn && idleLogoutAppliesRef.current) {
+      if (nextAppState === 'active' && isLoggedIn) {
         const timeSinceLastInteraction = Date.now() - lastInteractionTime.current;
         if (timeSinceLastInteraction >= IDLE_TIMEOUT) {
           handleLogout();
@@ -432,13 +357,10 @@ function App() {
         <Login onLogin={handleLogin} />
       )}
 
-      <SessionExpiredModal
-        isOpen={showSessionExpired}
-        onConfirm={() => {
-          setShowSessionExpired(false);
-          handleLogout();
-        }}
-      />
+      {/* Google Play requires a prominent disclosure immediately before any location permission
+          request. Mounted here, outside the logged-in branch, so services/locationGateway can show
+          it from any screen and for any role. */}
+      <LocationDisclosureHost />
 
       {versionConfig && (
         <ForceUpdateModal
@@ -449,11 +371,6 @@ function App() {
           onClose={() => setShowUpdateModal(false)}
         />
       )}
-
-      {/* Location prominent disclosure. Mounted at the root so it can be shown before
-          ANY location permission request, on any screen and for any role — required by
-          Google Play's User Data policy. */}
-      <LocationDisclosureHost />
     </View>
       </ErrorBoundary>
     </SafeAreaProvider>

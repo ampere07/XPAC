@@ -1,11 +1,11 @@
 #!/usr/bin/env php
 <?php
 
-/*
- * Standalone Payment Worker Cron Script
- * Path: /home/atsscbms/web/backend.atssfiber.ph/public_html/payment-worker-cron.php
- * Cron: */2 * * * * /usr/bin/php /home/atsscbms/web/backend.atssfiber.ph/public_html/payment-worker-cron.php
- */
+// /*
+//  * Standalone Payment Worker Cron Script
+//  * Path: /home/gowiser/web/backend.gowiser.ph/public_html/payment-worker-cron.php
+//  * Cron: */2 * * * * /usr/bin/php /home/gowiser/web/backend.gowiser.ph/public_html/payment-worker-cron.php
+//  */
 
 // Bootstrap Laravel
 require __DIR__.'/vendor/autoload.php';

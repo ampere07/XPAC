@@ -42,6 +42,8 @@ export interface ServiceOrderData {
   priority_level?: string;
   visit_by_user?: string;
   visit_with?: string;
+  /** Was missing from this type, which is why the context could never load it. */
+  visit_with_other?: string;
   visit_remarks?: string;
   support_remarks?: string;
   service_charge?: number;
@@ -76,6 +78,8 @@ export interface ServiceOrderData {
   city?: string;
   barangay?: string;
   referred_by?: string;
+  // The agent the stored referral names; referred_by itself is the display name.
+  referred_by_agent_id?: number | null;
   proof_of_billing_url?: string;
   government_valid_id_url?: string;
   second_government_valid_id_url?: string;
@@ -152,26 +156,6 @@ export const updateServiceOrder = async (id: string, serviceOrderData: Partial<S
     return response.data;
   } catch (error) {
     console.error('Error updating service order:', error);
-    throw error;
-  }
-};
-
-/**
- * Release a service order to its technician ahead of their queue.
- *
- * Administrator-only on the server, so the flag cannot be flipped by the
- * technician whose queue it governs.
- */
-export const enableServiceOrderForTechnician = async (id: string | number) => {
-  try {
-    const idStr = id.toString();
-    const authData = await AsyncStorage.getItem('authData');
-    const currentUser = authData ? JSON.parse(authData) : null;
-    const payload = currentUser?.email ? { updated_by_user: currentUser.email } : {};
-    const response = await apiClient.post<ApiResponse<any>>(`/service-orders/${idStr}/enable-technician`, payload);
-    return response.data;
-  } catch (error) {
-    console.error('Error enabling service order for technician:', error);
     throw error;
   }
 };

@@ -206,7 +206,7 @@ const WorkOrderFunnelFilter: React.FC<WorkOrderFunnelFilterProps> = ({
   };
 
   const groupedColumns = {
-    work_orders: allColumns.filter(col => col.table === 'work_orders')
+    work_orders: allColumns.filter(col => col.table === 'work_orders').sort((a, b) => a.label.localeCompare(b.label))
   };
 
   const renderFilterInput = () => {

@@ -64,8 +64,7 @@ export const getBillingRecords = async (page: number = 1, perPage: number = 50):
         city: item.City || '',
         region: item.Region || '',
         usageType: item.Usage_Type || item.usage_type || '',
-        lcpnapport: item.LCP_NAP_PORT || item.LCPNAPPORT || '',
-        sessionGroup: item.session_group || ''
+        lcpnapport: item.LCP_NAP_PORT || item.LCPNAPPORT || ''
       }));
 
       return {
@@ -127,8 +126,7 @@ export const getBillingRecordDetails = async (id: string): Promise<BillingDetail
         barangay: item.Barangay || '',
         city: item.City || '',
         region: item.Region || '',
-        usageType: item.Usage_Type || item.usage_type || '',
-        sessionGroup: item.session_group || ''
+        usageType: item.Usage_Type || item.usage_type || ''
       };
 
       const detailRecord: BillingDetailRecord = {

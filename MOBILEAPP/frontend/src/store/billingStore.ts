@@ -7,8 +7,6 @@ interface BillingStore {
     billingRecords: BillingRecord[];
     totalCount: number;
     isLoading: boolean;
-    /** True while the progressive page-by-page load is still streaming chunks in. */
-    isBackgroundLoading: boolean;
     error: string | null;
     lastFetchTimestamp: string | null;
     fetchBillingRecords: (force?: boolean) => Promise<void>;
@@ -21,18 +19,14 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
     billingRecords: [],
     totalCount: 0,
     isLoading: false,
-    isBackgroundLoading: false,
     error: null,
     lastFetchTimestamp: null,
 
     fetchBillingRecords: async (force = false) => {
-        const { billingRecords, isLoading, isBackgroundLoading } = get();
+        const { billingRecords, isLoading } = get();
 
-        // If already loading or data already exists (and not forcing), skip. The
-        // background check matters too: isLoading goes false after the first chunk, so
-        // without it a forced refresh would start a second loop alongside the running
-        // one, and the two accumulators would overwrite each other.
-        if (isLoading || isBackgroundLoading || (billingRecords.length > 0 && !force)) return;
+        // If already loading or data already exists (and not forcing), skip
+        if (isLoading || (billingRecords.length > 0 && !force)) return;
 
         set({ isLoading: true, error: null });
 
@@ -54,46 +48,37 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
             let currentPage = 2;
             let hasMore = result.hasMore;
 
-            set({ isBackgroundLoading: hasMore });
+            while (hasMore) {
+                try {
+                    const nextResult = await getBillingRecords(currentPage, CHUNK_SIZE);
 
-            try {
-                while (hasMore) {
-                    try {
-                        const nextResult = await getBillingRecords(currentPage, CHUNK_SIZE);
+                    if (nextResult && nextResult.data && nextResult.data.length > 0) {
+                        allFetchedRecords = [...allFetchedRecords, ...nextResult.data];
+                        set({
+                            billingRecords: [...allFetchedRecords],
+                            totalCount: nextResult.total || dbTotal
+                        });
 
-                        if (nextResult && nextResult.data && nextResult.data.length > 0) {
-                            allFetchedRecords = [...allFetchedRecords, ...nextResult.data];
-                            set({
-                                billingRecords: [...allFetchedRecords],
-                                totalCount: nextResult.total || dbTotal
-                            });
-
-                            currentPage++;
-                            hasMore = nextResult.hasMore;
-                        } else {
-                            hasMore = false;
-                        }
-                    } catch (chunkErr) {
-                        console.error('Error in progressive billing fetch:', chunkErr);
+                        currentPage++;
+                        hasMore = nextResult.hasMore;
+                    } else {
                         hasMore = false;
                     }
+                } catch (chunkErr) {
+                    console.error('Error in progressive billing fetch:', chunkErr);
+                    hasMore = false;
                 }
-            } finally {
-                set({ isBackgroundLoading: false });
             }
         } catch (err: any) {
             console.error('Error fetching billing records:', err);
             set({
                 error: err.message || 'Failed to load records',
-                isLoading: false,
-                isBackgroundLoading: false
+                isLoading: false
             });
         }
     },
 
     refreshBillingRecords: async () => {
-        // Never wipe the list out from under a load that is still streaming.
-        if (get().isLoading || get().isBackgroundLoading) return;
         set({ billingRecords: [] });
         await get().fetchBillingRecords(true);
     },
@@ -105,13 +90,7 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
     },
 
     refreshLatestData: async () => {
-        const { lastFetchTimestamp, isLoading, isBackgroundLoading } = get();
-
-        // The first load streams pages in the background, appending from its own local
-        // accumulator. Merging into the store mid-load would be overwritten by the next
-        // chunk anyway — and would merge against a partial list. Leave it alone.
-        if (isLoading || isBackgroundLoading) return;
-
+        const { lastFetchTimestamp } = get();
         set({ error: null });
         try {
             // Use updated_since to fetch only records changed since last fetch

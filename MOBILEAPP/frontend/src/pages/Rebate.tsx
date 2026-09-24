@@ -20,7 +20,7 @@ import {
   RefreshCw,
   FileText,
 } from 'lucide-react-native';
-import { StandardPage } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import RebateFormModal from '../modals/RebateFormModal';
 import RebateDetails from '../components/RebateDetails';
 import apiClient from '../config/api';
@@ -30,6 +30,7 @@ import BillingDetails from '../components/CustomerDetails';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 // Force light mode per RN migration conventions
@@ -54,9 +55,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -87,7 +88,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',
@@ -152,7 +152,6 @@ const Rebate: React.FC = () => {
   const [isLoadingDetails, setIsLoadingDetails] = useState<boolean>(false);
   const [userRole, setUserRole] = useState<string>('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [userOrgId, setUserOrgId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'sidebar' | 'list'>('list');
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
@@ -193,20 +192,6 @@ const Rebate: React.FC = () => {
             || null;
           setUserOrgId(orgId);
 
-          let perms: string[] = [];
-          if (userData.permissions) {
-            if (Array.isArray(userData.permissions)) {
-              perms = userData.permissions;
-            } else if (typeof userData.permissions === 'string') {
-              try {
-                const parsed = JSON.parse(userData.permissions);
-                perms = Array.isArray(parsed) ? parsed : [];
-              } catch (e) {
-                perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean);
-              }
-            }
-          }
-          setUserPermissions(perms);
         }
       } catch (error) {
         console.error('Error parsing auth data in Rebate:', error);
@@ -219,9 +204,8 @@ const Rebate: React.FC = () => {
     fetchRebateData();
   }, []);
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
   const { can: hasPermission } = usePermissions();
 
   const fetchRebateData = async (silent = false) => {
@@ -318,6 +302,15 @@ const Rebate: React.FC = () => {
   }, [searchQuery, selectedDate, itemsPerPage]);
 
   const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
+
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredRecords.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredRecords, currentPage, itemsPerPage]);
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) setCurrentPage(newPage);
+  };
 
   const handleExport = () => {
     if (!filteredRecords || filteredRecords.length === 0) return;
@@ -528,51 +521,383 @@ const Rebate: React.FC = () => {
   );
 
   // Pagination controls
-  // One layout, not two. This page used to branch into a tablet build with a
-  // permanent sidebar and a separate phone build with a drawer and a floating
-  // add button; the shell is responsive, so both are the same screen now.
-  return (
-    <StandardPage<RebateRecord>
-      data={filteredRecords}
-      keyExtractor={(item) => String(item.id)}
-      renderItem={(item) => renderItem({ item })}
-      searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
-      searchPlaceholder="Search Rebate records..."
-      drawerContent={<View style={{ flex: 1, paddingTop: 60 }}>{renderSidebar()}</View>}
-      drawerActive={selectedDate !== 'All'}
-      chips={selectedDate !== 'All' ? [{ key: '__month', label: 'Month', value: selectedDate }] : []}
-      onRemoveChip={() => setSelectedDate('All')}
-      onClearChips={() => setSelectedDate('All')}
-      onExport={handleExport}
-      exportDisabled={isLoading || filteredRecords.length === 0}
-      onRefresh={handleRefresh}
-      refreshDisabled={isLoading || isRefreshingManual}
-      isRefreshing={isLoading || isRefreshingManual}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={isLoading}
-      loadingText="Loading Rebate records..."
-      error={error}
-      onRetry={handleRefresh}
-      emptyText="No Rebate records found"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      isDarkMode={isDarkMode}
-      toolbarActions={
-        hasPermission('mass-rebate.add') ? (
+  const renderPagination = () => {
+    if (filteredRecords.length === 0) return null;
+    const startEntry = filteredRecords.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+    const endEntry = Math.min(currentPage * itemsPerPage, filteredRecords.length);
+
+    return (
+      <View style={{
+        borderTopWidth: 1,
+        borderTopColor: '#e5e7eb',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        backgroundColor: '#ffffff',
+      }}>
+        {/* Items per page row */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 8 }}>
+          <Text style={{ fontSize: 12, color: '#6b7280' }}>Show</Text>
+          {ITEMS_PER_PAGE_OPTIONS.map(opt => (
+            <TouchableOpacity
+              key={opt}
+              onPress={() => setItemsPerPage(opt)}
+              style={{
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 4,
+                backgroundColor: itemsPerPage === opt ? primaryColor : '#f3f4f6',
+                borderWidth: 1,
+                borderColor: itemsPerPage === opt ? primaryColor : '#e5e7eb',
+              }}
+            >
+              <Text style={{ fontSize: 12, color: itemsPerPage === opt ? '#ffffff' : '#374151', fontWeight: '500' }}>
+                {opt}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          <Text style={{ fontSize: 12, color: '#6b7280' }}>entries</Text>
+        </View>
+
+        {/* Page info */}
+        <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', marginBottom: 8 }}>
+          Showing {startEntry} to {endEntry} of {filteredRecords.length} results
+        </Text>
+
+        {/* Navigation */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
           <TouchableOpacity
-            onPress={() => setIsModalOpen(true)}
-            style={{ width: 38, height: 38, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: primaryColor }}
+            onPress={() => handlePageChange(1)}
+            disabled={currentPage === 1}
+            style={{ opacity: currentPage === 1 ? 0.4 : 1 }}
           >
-            <Text style={{ color: '#ffffff', fontSize: 22, fontWeight: '300', lineHeight: 26 }}>+</Text>
+            <ChevronsLeft size={20} color="#374151" />
           </TouchableOpacity>
-        ) : null
-      }
-    >
+          <TouchableOpacity
+            onPress={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 4,
+              backgroundColor: currentPage === 1 ? '#f3f4f6' : '#ffffff',
+              borderWidth: 1,
+              borderColor: '#e5e7eb',
+              opacity: currentPage === 1 ? 0.4 : 1,
+            }}
+          >
+            <ChevronLeft size={16} color="#374151" />
+          </TouchableOpacity>
+          <Text style={{ fontSize: 13, color: '#111827', paddingHorizontal: 8 }}>
+            Page {currentPage} of {totalPages || 1}
+          </Text>
+          <TouchableOpacity
+            onPress={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage === totalPages || totalPages === 0}
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 5,
+              borderRadius: 4,
+              backgroundColor: (currentPage === totalPages || totalPages === 0) ? '#f3f4f6' : '#ffffff',
+              borderWidth: 1,
+              borderColor: '#e5e7eb',
+              opacity: (currentPage === totalPages || totalPages === 0) ? 0.4 : 1,
+            }}
+          >
+            <ChevronRight size={16} color="#374151" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => handlePageChange(totalPages)}
+            disabled={currentPage === totalPages || totalPages === 0}
+            style={{ opacity: (currentPage === totalPages || totalPages === 0) ? 0.4 : 1 }}
+          >
+            <ChevronsRight size={20} color="#374151" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  // Tablet layout: sidebar always visible on left
+  if (isTablet) {
+    return (
+      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: '#f9fafb', paddingTop: 16 }}>
+        {/* Sidebar */}
+        <View style={{ width: 256 }}>
+          {renderSidebar()}
+        </View>
+
+        {/* Main list */}
+        <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+          {/* Toolbar */}
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            backgroundColor: '#ffffff',
+            borderBottomWidth: 1,
+            borderBottomColor: '#e5e7eb',
+            gap: 8,
+          }}>
+            <View style={{ flex: 1 }}>
+              <GlobalSearch
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                isDarkMode={isDarkMode}
+                colorPalette={colorPalette}
+                placeholder="Search Rebate records..."
+              />
+            </View>
+            <TouchableOpacity
+              onPress={handleExport}
+              disabled={isLoading || filteredRecords.length === 0}
+              style={{
+                padding: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: primaryColor,
+                backgroundColor: '#ffffff',
+                opacity: (isLoading || filteredRecords.length === 0) ? 0.5 : 1,
+              }}
+            >
+              <Download size={18} color={primaryColor} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleRefresh}
+              disabled={isLoading || isRefreshingManual}
+              style={{
+                padding: 8,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: primaryColor,
+                backgroundColor: '#ffffff',
+                opacity: (isLoading || isRefreshingManual) ? 0.5 : 1,
+              }}
+            >
+              <RefreshCw size={18} color={primaryColor} />
+            </TouchableOpacity>
+          </View>
+
+          {isLoading ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+              <ActivityIndicator size="large" color={primaryColor} />
+              <Text style={{ color: '#6b7280', fontSize: 14 }}>Loading Rebate records...</Text>
+            </View>
+          ) : error ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+              <Text style={{ color: '#ef4444', fontSize: 14 }}>{error}</Text>
+              <TouchableOpacity
+                onPress={handleRefresh}
+                style={{ backgroundColor: '#e5e7eb', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6 }}
+              >
+                <Text style={{ color: '#111827' }}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : filteredRecords.length === 0 ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <Text style={{ fontSize: 22, fontWeight: '700', color: primaryColor }}>Rebate</Text>
+              <Text style={{ fontSize: 15, color: '#9ca3af' }}>No Rebate records found</Text>
+            </View>
+          ) : (
+            <View style={{ flex: 1 }}>
+              <FlatList
+                data={paginatedRecords}
+                keyExtractor={(item) => String(item.id)}
+                renderItem={renderItem}
+                contentContainerStyle={{ paddingVertical: 8, paddingBottom: 16 }}
+                refreshControl={
+                  <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} />
+                }
+              />
+              {renderPagination()}
+            </View>
+          )}
+        </View>
+
+        {/* RebateDetails modal overlay for tablet */}
+        {selectedRebate && (
+          <Modal visible animationType="slide" onRequestClose={() => setSelectedRebate(null)}>
+            <RebateDetails
+              rebate={selectedRebate as any}
+              onClose={() => {
+                setSelectedRebate(null);
+                handleRefresh();
+              }}
+              onViewCustomer={handleViewCustomer}
+            />
+          </Modal>
+        )}
+
+        {/* Customer BillingDetails */}
+        {(selectedCustomer || isLoadingDetails) && (
+          <Modal visible animationType="slide" onRequestClose={() => setSelectedCustomer(null)}>
+            {isLoadingDetails ? (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#ffffff' }}>
+                <ActivityIndicator size="large" color={primaryColor} />
+                <Text style={{ marginTop: 12, color: '#6b7280' }}>Loading details...</Text>
+              </View>
+            ) : selectedCustomer ? (
+              <BillingDetails
+                billingRecord={convertCustomerDataToBillingDetail(selectedCustomer)}
+                onlineStatusRecords={[]}
+                onClose={() => setSelectedCustomer(null)}
+              />
+            ) : null}
+          </Modal>
+        )}
+
+        <RebateFormModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSave={() => {
+            setIsModalOpen(false);
+            handleRefresh();
+          }}
+        />
+      </View>
+    );
+  }
+
+  // Phone layout: sidebar as modal drawer, list as main view
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f9fafb', paddingTop: 60 }}>
+      {/* Sidebar drawer (modal) */}
+      <Modal
+        visible={showSidebar}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSidebar(false)}
+      >
+        <View style={{ flex: 1, flexDirection: 'row' }}>
+          <View style={{ width: '80%', maxWidth: 300 }}>
+            {renderSidebar()}
+          </View>
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }}
+            onPress={() => setShowSidebar(false)}
+          />
+        </View>
+      </Modal>
+
+      {/* Toolbar */}
+      <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        backgroundColor: '#ffffff',
+        borderBottomWidth: 1,
+        borderBottomColor: '#e5e7eb',
+        gap: 8,
+      }}>
+        <TouchableOpacity
+          onPress={() => setShowSidebar(true)}
+          style={{
+            padding: 8,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: '#d1d5db',
+            backgroundColor: '#ffffff',
+          }}
+        >
+          <Menu size={18} color="#374151" />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }}>
+          <GlobalSearch
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            isDarkMode={isDarkMode}
+            colorPalette={colorPalette}
+            placeholder="Search Rebate records..."
+          />
+        </View>
+        <TouchableOpacity
+          onPress={handleExport}
+          disabled={isLoading || filteredRecords.length === 0}
+          style={{
+            padding: 8,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: primaryColor,
+            backgroundColor: '#ffffff',
+            opacity: (isLoading || filteredRecords.length === 0) ? 0.5 : 1,
+          }}
+        >
+          <Download size={18} color={primaryColor} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleRefresh}
+          disabled={isLoading || isRefreshingManual}
+          style={{
+            padding: 8,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: primaryColor,
+            backgroundColor: '#ffffff',
+            opacity: (isLoading || isRefreshingManual) ? 0.5 : 1,
+          }}
+        >
+          <RefreshCw size={18} color={primaryColor} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Active filter indicator */}
+      {selectedDate !== 'All' && (
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 12,
+          paddingVertical: 6,
+          backgroundColor: `${primaryColor}11`,
+          borderBottomWidth: 1,
+          borderBottomColor: `${primaryColor}33`,
+          gap: 8,
+        }}>
+          <Text style={{ fontSize: 12, color: primaryColor, flex: 1 }}>
+            Filtered: {selectedDate}
+          </Text>
+          <TouchableOpacity onPress={() => setSelectedDate('All')}>
+            <Text style={{ fontSize: 12, color: primaryColor, fontWeight: '600' }}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {isLoading ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <ActivityIndicator size="large" color={primaryColor} />
+          <Text style={{ color: '#6b7280', fontSize: 14 }}>Loading Rebate records...</Text>
+        </View>
+      ) : error ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
+          <Text style={{ color: '#ef4444', fontSize: 14, textAlign: 'center' }}>{error}</Text>
+          <TouchableOpacity
+            onPress={handleRefresh}
+            style={{ backgroundColor: '#e5e7eb', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 6 }}
+          >
+            <Text style={{ color: '#111827' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : filteredRecords.length === 0 ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <Text style={{ fontSize: 22, fontWeight: '700', color: primaryColor }}>Rebate</Text>
+          <Text style={{ fontSize: 15, color: '#9ca3af' }}>No Rebate records found</Text>
+        </View>
+      ) : (
+        <View style={{ flex: 1 }}>
+          <FlatList
+            data={paginatedRecords}
+            keyExtractor={(item) => String(item.id)}
+            renderItem={renderItem}
+            contentContainerStyle={{ paddingVertical: 8, paddingBottom: 16 }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={primaryColor} />
+            }
+          />
+          {renderPagination()}
+        </View>
+      )}
+
+      {/* RebateDetails modal */}
       {selectedRebate && (
         <Modal visible animationType="slide" onRequestClose={() => setSelectedRebate(null)}>
           <RebateDetails
@@ -586,6 +911,7 @@ const Rebate: React.FC = () => {
         </Modal>
       )}
 
+      {/* Customer BillingDetails */}
       {(selectedCustomer || isLoadingDetails) && (
         <Modal visible animationType="slide" onRequestClose={() => setSelectedCustomer(null)}>
           {isLoadingDetails ? (
@@ -603,6 +929,7 @@ const Rebate: React.FC = () => {
         </Modal>
       )}
 
+      {/* Add Rebate modal */}
       <RebateFormModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -611,7 +938,32 @@ const Rebate: React.FC = () => {
           handleRefresh();
         }}
       />
-    </StandardPage>
+
+      {/* FAB for adding rebate on phone if permitted */}
+      {hasPermission('mass-rebate.add') && (
+        <TouchableOpacity
+          onPress={() => setIsModalOpen(true)}
+          style={{
+            position: 'absolute',
+            bottom: 24,
+            right: 20,
+            backgroundColor: primaryColor,
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            alignItems: 'center',
+            justifyContent: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.3,
+            shadowRadius: 6,
+            elevation: 6,
+          }}
+        >
+          <Text style={{ color: '#ffffff', fontSize: 28, fontWeight: '300', lineHeight: 32 }}>+</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 };
 

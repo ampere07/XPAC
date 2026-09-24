@@ -5,7 +5,6 @@ import { API_BASE_URL } from '../config/api';
 import PromoFormModal from '../modals/PromoFormModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
-import { authFetch } from '../config/api';
 import { usePageActions } from '../hooks/usePageActions';
 
 interface Promo {
@@ -156,7 +155,7 @@ const PromoList: React.FC = () => {
   const loadPromos = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const response = await authFetch(`${API_BASE_URL}/promos`, {
+      const response = await fetch(`${API_BASE_URL}/promos`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -206,7 +205,7 @@ const PromoList: React.FC = () => {
     showGlobalModal('loading', 'Deleting Promo', `Permanently removing "${promo.name}" from database...`);
 
     try {
-      const response = await authFetch(`${API_BASE_URL}/promos/${promo.id}`, {
+      const response = await fetch(`${API_BASE_URL}/promos/${promo.id}`, {
         method: 'DELETE',
         headers: {
           'Accept': 'application/json',

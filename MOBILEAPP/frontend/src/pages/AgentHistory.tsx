@@ -8,7 +8,7 @@ import { fetchAgentCommissionHistory, fetchAgentIncentiveHistory } from '../serv
 import { useJobOrderContext } from '../contexts/JobOrderContext';
 import { JobOrder } from '../types/jobOrder';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus } from '../utils/agentReferral';
+import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus, storedReferralOf } from '../utils/agentReferral';
 
 /**
  * A status word in the colour its state calls for.
@@ -149,8 +149,9 @@ const AgentHistory: React.FC = () => {
     const to = dateTo ? dayjs(dateTo).endOf('day').valueOf() : null;
 
     return jobOrders.filter(jo => {
-      const referredBy = jo.Referred_By || jo.referred_by || '';
-      if (!ownsReferral(referredBy)) return false;
+      // The stored value (an agent id for picker-made referrals), not the
+      // display name the API resolved it to.
+      if (!ownsReferral(storedReferralOf(jo))) return false;
 
       // Only completed ("done") job orders belong in Agent History.
       if (!isDoneOnsiteStatus(getOnsiteStatus(jo))) return false;

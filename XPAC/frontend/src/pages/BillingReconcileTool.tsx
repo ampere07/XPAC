@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Ban, Loader2, Play, RotateCcw } from 'lucide-react';
+import {
+  AlertTriangle, Ban, CalendarClock, CheckCircle2, FileWarning, Loader2, Play,
+  RefreshCw, RotateCcw, Search, X,
+} from 'lucide-react';
 import {
   billingReconcileService,
   type BillingReconcileAudit,
@@ -7,75 +10,26 @@ import {
   type BillingReconcileRow,
 } from '../services/billingReconcileService';
 import { useDataGrid, type DataGridColumn } from '../hooks/useDataGrid';
-import { useToolTheme } from '../hooks/useToolTheme';
-import { useStatusSlices } from '../hooks/useStatusSlices';
-import { useViewOptions } from '../hooks/useViewOptions';
-import { SelectAllHeaderCell } from '../components/DataGridControls';
-import { ToolShell, ToolToolbar, ToolDataTable, type SidebarSlice, type ToolNotice } from '../components/tools';
-import TableFunnelFilter, {
-  applyFunnelFilters,
-  deriveOptionsByKey,
-  type FilterValues,
-  type FunnelColumn,
-} from '../filter/TableFunnelFilter';
-import type { SliceDefinition } from '../services/statusSliceService';
-import type { GroupableColumn } from '../services/viewOptionsService';
+import {
+  ColumnMenu,
+  ExportButton,
+  PageSizeSelector,
+  SelectAllHeaderCell,
+  SortableHeaderCell,
+} from '../components/DataGridControls';
 
 interface BillingReconcileToolProps {
   isDarkMode?: boolean;
 }
 
 /**
- * Why an account due for billing this cycle produced no invoice, and how to clear it.
+ * How each reason is badged.
  *
- * Rebuilt onto the standard SYNC list frame — status sidebar, standard toolbar,
- * sortable grid, paginated footer — so it reads like Service Orders rather than like a
- * dashboard someone bolted a table to. Every action it had is unchanged: generate
- * through the same generator the nightly cron uses, dismiss for the cycle, restore.
- *
- * The reason vocabulary is still the server's. What is new is the plan slice: the
- * audit now says whether the plan linked to the account and the plan the subscriber
- * was sold name the same thing, judged on the first word the way Job Order account
- * creation judges it, so a price suffix stops reading as a discrepancy.
+ * Colour carries the operator's next action, not the severity of the word: green is
+ * "this one is ready, press Generate", amber is "fix the account first", grey is
+ * "nothing to do here". A reason the server adds later renders in the neutral style
+ * under its own server-supplied label rather than disappearing.
  */
-
-const MODULE_KEY = 'billing_reconcile';
-
-/**
- * The slices this screen opens with.
- *
- * Ordered by what an operator does first — money that can be recovered right now, then
- * the data faults in roughly the order they are caused — and colored so that green is
- * "act", amber and orange are "fix the account", red is "blocked", grey is "nothing to
- * do". Any of it can be reordered, recolored or hidden per operator.
- *
- * `all_reasons` is not among them: the "All" row above the list is that.
- */
-const SLICE_DEFINITIONS: SliceDefinition[] = [
-  { id: 'ready', label: 'Ready to Generate', color: '#10b981' },
-  { id: 'missing_billing_day', label: 'Missing Billing Day', color: '#f59e0b' },
-  { id: 'missing_plan', label: 'Missing / Unlinked Plan', color: '#f59e0b' },
-  { id: 'plan_mismatch', label: 'Plan Disagreement', color: '#ec4899' },
-  { id: 'zero_price', label: 'Plan Price is 0.00', color: '#f97316' },
-  { id: 'inactive_status', label: 'Not Active', color: '#ef4444' },
-  { id: 'open_job_order', label: 'Open Job Order', color: '#a855f7' },
-  { id: 'prepaid', label: 'Prepaid (Awaiting Renewal)', color: '#3b82f6' },
-  { id: 'already_invoiced', label: 'Already Invoiced', color: '#22c55e' },
-  { id: 'dismissed', label: 'Dismissed', color: '#6b7280' },
-];
-
-/**
- * Slices the server narrows for us, versus the one this screen applies itself.
- *
- * `plan_mismatch` is not a reason code — an account can be Ready and still have a plan
- * disagreement — so it cannot be pushed into the audit's `reason` parameter. It filters
- * the loaded rows instead.
- */
-const CLIENT_SLICES = new Set(['plan_mismatch']);
-
-/** Reasons whose rows the server only returns when explicitly asked for. */
-const NEEDS_INCLUDE_OK = new Set(['already_invoiced']);
-
 const REASON_TONES: Record<string, string> = {
   ready: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30',
   missing_billing_day: 'bg-amber-500/15 text-amber-500 border-amber-500/30',
@@ -112,7 +66,7 @@ const stamp = (value: string | null): string => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(parsed.getMonth() + 1)}/${pad(parsed.getDate())}/${parsed.getFullYear()}`;
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
 };
 
 /**
@@ -126,12 +80,9 @@ const COLUMNS: Array<DataGridColumn<BillingReconcileRow>> = [
   { key: 'account_no', label: 'Account No', value: (row) => row.account_no },
   { key: 'customer_name', label: 'Subscriber', value: (row) => row.customer_name ?? '' },
   { key: 'reason', label: 'Reason', value: (row) => row.reason_label },
-  { key: 'plan_name', label: 'Linked Plan', value: (row) => row.plan_name ?? '' },
-  // Shown by default: the whole point of the plan pass is that an operator can see the
-  // sold label beside the linked one and judge for themselves.
-  { key: 'desired_plan', label: 'Sold Plan', value: (row) => row.desired_plan ?? '' },
+  { key: 'plan_name', label: 'Plan', value: (row) => row.plan_name ?? '' },
+  // Numeric so the column orders by price, not by digit string.
   { key: 'plan_price', label: 'Plan Price', value: (row) => row.plan_price },
-  { key: 'suggested_plan_name', label: 'Suggested Plan', value: (row) => row.suggested_plan_name ?? '', defaultHidden: true },
   { key: 'billing_day', label: 'Billing Day', value: (row) => row.billing_day },
   { key: 'billing_status', label: 'Billing Status', value: (row) => row.billing_status ?? '' },
   { key: 'generation_type', label: 'Billing Type', value: (row) => row.generation_type ?? '', defaultHidden: true },
@@ -141,66 +92,42 @@ const COLUMNS: Array<DataGridColumn<BillingReconcileRow>> = [
   { key: 'actions', label: 'Actions', locked: true },
 ];
 
-/** Columns the funnel panel can narrow on, and the type each one filters as. */
-const FUNNEL_COLUMNS: FunnelColumn[] = [
-  { key: 'account_no', label: 'Account No', dataType: 'varchar' },
-  { key: 'customer_name', label: 'Subscriber', dataType: 'varchar' },
-  { key: 'reason_label', label: 'Reason', dataType: 'checklist' },
-  { key: 'plan_name', label: 'Linked Plan', dataType: 'checklist' },
-  { key: 'desired_plan', label: 'Sold Plan', dataType: 'varchar' },
-  { key: 'plan_price', label: 'Plan Price', dataType: 'decimal' },
-  { key: 'billing_day', label: 'Billing Day', dataType: 'int' },
-  { key: 'billing_status', label: 'Billing Status', dataType: 'checklist' },
-  { key: 'account_balance', label: 'Balance', dataType: 'decimal' },
-  { key: 'date_installed', label: 'Installed', dataType: 'date' },
-  { key: 'last_invoice_date', label: 'Last Invoice', dataType: 'date' },
-];
-
-/**
- * Columns this screen can be grouped, sorted and coloured by.
- *
- * A deliberately smaller set than the table's columns: grouping is only useful over a
- * value with few enough distinct entries to read as a tree, so an account number and a
- * balance are not offered. Billing day is, because "everything that bills on the 15th"
- * is a real worklist.
- */
-const GROUPABLE_COLUMNS: Array<GroupableColumn<BillingReconcileRow>> = [
-  { key: 'reason_label', label: 'Reason', value: (row) => row.reason_label },
-  { key: 'billing_status', label: 'Billing Status', value: (row) => row.billing_status },
-  { key: 'plan_name', label: 'Linked Plan', value: (row) => row.plan_name },
-  { key: 'desired_plan', label: 'Sold Plan', value: (row) => row.desired_plan },
-  { key: 'plan_match', label: 'Plan Agreement', value: (row) => row.plan_match },
-  { key: 'billing_day', label: 'Billing Day', value: (row) => row.billing_day },
-  { key: 'generation_type', label: 'Billing Type', value: (row) => row.generation_type },
-  { key: 'customer_name', label: 'Subscriber', value: (row) => row.customer_name },
-];
-
 const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode: isDarkModeProp }) => {
-  const { isDarkMode, colorPalette, isMobile } = useToolTheme(isDarkModeProp);
-  const { slices, visibleSlices, colorOf, save: saveSlices, reset: resetSlices } = useStatusSlices(
-    MODULE_KEY,
-    SLICE_DEFINITIONS
-  );
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    if (typeof isDarkModeProp === 'boolean') return isDarkModeProp;
+    const theme = localStorage.getItem('theme');
+    return theme === 'dark' || theme === null;
+  });
 
   const [data, setData] = useState<BillingReconcileAudit | null>(null);
   const [reasons, setReasons] = useState<BillingReconcileReasons | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<ToolNotice | null>(null);
+  const [notice, setNotice] = useState<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  /** The sidebar selection. 'all', a reason code, or a client-side slice id. */
-  const [slice, setSlice] = useState('all');
+  const [reasonFilter, setReasonFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [dayFilter, setDayFilter] = useState<number | ''>('');
   const [search, setSearch] = useState('');
   const [includeOk, setIncludeOk] = useState(false);
-
-  const [funnelOpen, setFunnelOpen] = useState(false);
-  const [funnelFilters, setFunnelFilters] = useState<FilterValues>({});
 
   const [dismissTarget, setDismissTarget] = useState<BillingReconcileRow[] | null>(null);
   const [dismissReason, setDismissReason] = useState('');
 
-  // Only the server-side slices become a `reason` parameter; the rest narrow locally.
-  const serverReason = slice !== 'all' && !CLIENT_SLICES.has(slice) ? slice : '';
+  useEffect(() => {
+    if (typeof isDarkModeProp === 'boolean') {
+      setIsDarkMode(isDarkModeProp);
+      return;
+    }
+    const check = () => {
+      const theme = localStorage.getItem('theme');
+      setIsDarkMode(theme === 'dark' || theme === null);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, [isDarkModeProp]);
 
   // ---- Data --------------------------------------------------------------
 
@@ -208,11 +135,11 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
     setLoading(true);
     try {
       const result = await billingReconcileService.getAudit({
-        reason: serverReason || undefined,
+        reason: reasonFilter || undefined,
+        billing_status: statusFilter || undefined,
+        billing_day: dayFilter,
         search: search.trim() || undefined,
-        // Already-invoiced rows are excluded from the default worklist server-side, so
-        // asking for that slice has to ask for them explicitly or it renders empty.
-        include_ok: includeOk || NEEDS_INCLUDE_OK.has(slice),
+        include_ok: includeOk,
       });
       setData(result);
     } catch (error: any) {
@@ -220,62 +147,20 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
     } finally {
       setLoading(false);
     }
-  }, [serverReason, search, includeOk, slice]);
+  }, [reasonFilter, statusFilter, dayFilter, search, includeOk]);
+
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
-    // The reason vocabulary comes from the server so the badges are built from the
-    // rules that produced them, not from a second copy in this file.
+    // The reason vocabulary comes from the server so the filter and the badges are
+    // built from the rules that produced them, not from a second copy in this file.
     billingReconcileService.getReasons().then(setReasons).catch(() => setReasons(null));
   }, []);
 
-  const allRows = useMemo(() => data?.rows ?? [], [data]);
+  // Memoized so the identity is stable: `data?.rows ?? []` would build a fresh array
+  // every render and invalidate everything downstream of it.
+  const rows = useMemo(() => data?.rows ?? [], [data]);
   const summary = data?.summary;
-
-  /**
-   * Dynamic grouping, sorting and per-value colours.
-   *
-   * Built over the whole worklist rather than the narrowed view, so a group count says
-   * how many rows exist under that value — not how many survived the search box.
-   */
-  const view = useViewOptions(MODULE_KEY, GROUPABLE_COLUMNS, allRows);
-
-  /** Rows after the sidebar slice and the funnel panel, before the grid's own search. */
-  const rows = useMemo(() => {
-    // Grouped, the sidebar selection is a path into the tree and it replaces the
-    // slice narrowing entirely — the two are competing answers to the same question.
-    let result = view.isGrouped ? view.filterByGroup(allRows, slice) : allRows;
-
-    if (!view.isGrouped && CLIENT_SLICES.has(slice)) {
-      result = result.filter((row) => row.plan_match === 'mismatch');
-    }
-
-    if (Object.keys(funnelFilters).length > 0) {
-      result = applyFunnelFilters(result, funnelFilters, (row, key) => {
-        switch (key) {
-          case 'reason_label': return row.reason_label;
-          case 'customer_name': return row.customer_name;
-          case 'plan_name': return row.plan_name;
-          case 'desired_plan': return row.desired_plan;
-          case 'billing_status': return row.billing_status;
-          default: return (row as any)[key];
-        }
-      });
-    }
-
-    return result;
-  }, [allRows, slice, funnelFilters, view]);
-
-  const funnelOptions = useMemo(
-    () =>
-      deriveOptionsByKey(allRows, FUNNEL_COLUMNS, (row, key) =>
-        key === 'reason_label' ? row.reason_label : (row as any)[key]
-      ),
-    [allRows]
-  );
 
   const grid = useDataGrid<BillingReconcileRow>({
     rows,
@@ -290,48 +175,14 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
   });
 
   const { selectedRows, clearSelection } = grid;
-  const { setSort } = grid;
 
-  /**
-   * Adopt the configured sort once the preferences have loaded.
-   *
-   * Applied to the grid rather than pre-sorting the rows, so a header click still wins
-   * for the rest of the session — the saved order is a starting point, not a lock.
-   */
-  const sortSignature = JSON.stringify(view.sortRules);
-  useEffect(() => {
-    if (!view.loaded || view.sortRules.length === 0) return;
-    setSort(view.sortRules);
-    // sortSignature stands in for the rules array, whose identity changes every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.loaded, sortSignature, setSort]);
-
-  /**
-   * Changing the grouping invalidates the selection.
-   *
-   * A node path from the previous hierarchy names levels that no longer exist, so it
-   * would silently match nothing and the table would render empty.
-   */
-  const groupSignature = view.options.groupBy.join('|');
-  useEffect(() => {
-    setSlice('all');
-  }, [groupSignature]);
-
-  const generatableSelection = useMemo(() => selectedRows.filter((row) => row.can_generate), [selectedRows]);
-  const dismissableSelection = useMemo(() => selectedRows.filter((row) => row.can_dismiss), [selectedRows]);
-
-  // ---- Sidebar -----------------------------------------------------------
-
-  const sidebarSlices: SidebarSlice[] = useMemo(
-    () =>
-      visibleSlices.map((definition) => ({
-        ...definition,
-        count:
-          definition.id === 'plan_mismatch'
-            ? summary?.plan_mismatch ?? 0
-            : ((summary as any)?.[definition.id] as number | undefined) ?? 0,
-      })),
-    [visibleSlices, summary]
+  const generatableSelection = useMemo(
+    () => selectedRows.filter((row) => row.can_generate),
+    [selectedRows]
+  );
+  const dismissableSelection = useMemo(
+    () => selectedRows.filter((row) => row.can_dismiss),
+    [selectedRows]
   );
 
   // ---- Actions -----------------------------------------------------------
@@ -343,7 +194,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
         const result = await action();
         setNotice({ tone: result.success ? 'success' : 'error', text: result.message });
         // Generation and dismissal both change which rows belong on the worklist and
-        // what the counts say, so the whole audit is re-read rather than patched.
+        // what the cards say, so the whole audit is re-read rather than patched.
         await load();
         clearSelection();
       } finally {
@@ -361,10 +212,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
 
   const generateSelected = useCallback(() => {
     if (generatableSelection.length === 0) {
-      setNotice({
-        tone: 'info',
-        text: 'None of the selected accounts can be billed from here — fix the flagged reason first.',
-      });
+      setNotice({ tone: 'info', text: 'None of the selected accounts can be billed from here — fix the flagged reason first.' });
       return;
     }
     const max = reasons?.max_batch ?? 200;
@@ -395,43 +243,111 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
   const input = isDarkMode
     ? 'bg-gray-950 border-gray-800 text-gray-100 placeholder-gray-600'
     : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400';
+  const rowHover = isDarkMode ? 'hover:bg-gray-800/60' : 'hover:bg-gray-50';
+  const headRow = isDarkMode ? 'bg-gray-950/60 text-gray-400' : 'bg-gray-50 text-gray-600';
 
-  // ---- Cells -------------------------------------------------------------
+  /**
+   * The summary cards, each one a shortcut into the filter it counts.
+   *
+   * Ordered by what an operator does with them: how much is unbilled, how much of that
+   * is billable right now, then the data problems in the order they are usually caused.
+   */
+  const statCards: Array<{ label: string; value: number; tone: string; reason: string; hint: string }> = summary
+    ? [
+        {
+          label: 'Total Ungenerated',
+          value: summary.ungenerated,
+          tone: 'text-amber-500',
+          reason: '',
+          hint: 'Accounts whose billing day has passed with no invoice raised for this cycle.',
+        },
+        {
+          label: 'Ready to Generate',
+          value: summary.ready,
+          tone: 'text-emerald-500',
+          reason: 'ready',
+          hint: 'Nothing is wrong with these — the generator simply did not reach them.',
+        },
+        {
+          label: 'Missing Billing Day',
+          value: summary.missing_billing_day,
+          tone: 'text-amber-500',
+          reason: 'missing_billing_day',
+          hint: 'No billing day is set, so no scheduled run will ever pick the account up.',
+        },
+        {
+          label: 'Plan Issues',
+          value: summary.missing_plan + summary.zero_price,
+          tone: 'text-orange-500',
+          reason: 'missing_plan',
+          hint: 'No plan linked, or a plan priced at 0.00. Fix the account before billing it.',
+        },
+        {
+          label: 'Not Active',
+          value: summary.inactive_status,
+          tone: 'text-red-500',
+          reason: 'inactive_status',
+          hint: 'Inactive, suspended or terminated. Scheduled billing only bills Active accounts.',
+        },
+        {
+          label: 'Open Job Order',
+          value: summary.open_job_order,
+          tone: 'text-purple-400',
+          reason: 'open_job_order',
+          hint: 'Onboarding is unfinished. Billing an undelivered line is a bill the customer disputes.',
+        },
+        {
+          label: 'Prepaid',
+          value: summary.prepaid,
+          tone: 'text-blue-400',
+          reason: 'prepaid',
+          hint: 'Prepaid accounts bill at renewal, not on a billing day. Listed for completeness.',
+        },
+        {
+          label: 'Dismissed',
+          value: summary.dismissed,
+          tone: 'text-gray-400',
+          reason: 'dismissed',
+          hint: 'Marked do-not-generate for this cycle. Reconsidered next cycle.',
+        },
+      ]
+    : [];
 
-  const renderCell = (row: BillingReconcileRow, column: DataGridColumn<BillingReconcileRow>): React.ReactNode => {
-    switch (column.key) {
+  const renderCell = (columnKey: string, row: BillingReconcileRow): React.ReactNode => {
+    switch (columnKey) {
       case 'select':
         return (
-          <td className="px-3 py-2.5">
+          <td key={columnKey} className="px-3 py-2.5">
             <input
               type="checkbox"
               checked={grid.selected.has(String(row.billing_account_id))}
               disabled={!row.can_generate && !row.can_dismiss}
-              onChange={(event) => grid.toggleRow(String(row.billing_account_id), event.target.checked)}
+              onChange={(e) => grid.toggleRow(String(row.billing_account_id), e.target.checked)}
               className="rounded"
             />
           </td>
         );
 
       case 'account_no':
-        return <td className={`px-3 py-2.5 text-xs font-mono ${text}`}>{row.account_no}</td>;
+        return (
+          <td key={columnKey} className={`px-3 py-2.5 text-xs font-mono ${text}`}>{row.account_no}</td>
+        );
 
       case 'customer_name':
         return (
-          <td className={`px-3 py-2.5 text-xs ${row.customer_name ? text : muted}`}>
+          <td key={columnKey} className={`px-3 py-2.5 text-xs ${row.customer_name ? text : muted}`}>
             {row.customer_name || 'no customer record'}
           </td>
         );
 
       case 'reason':
         return (
-          <td className="px-3 py-2.5">
+          <td key={columnKey} className="px-3 py-2.5">
             <span
               className={`text-[11px] px-2 py-0.5 rounded border font-medium whitespace-nowrap ${
                 REASON_TONES[row.reason] ?? 'bg-gray-500/15 text-gray-400 border-gray-500/30'
               }`}
               title={row.dismissed_reason ?? undefined}
-              style={colorOf(row.reason) ? { borderColor: `${colorOf(row.reason)}66` } : undefined}
             >
               {row.reason_label}
             </span>
@@ -440,48 +356,8 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
 
       case 'plan_name':
         return (
-          <td className={`px-3 py-2.5 text-xs ${row.plan_name ? text : muted}`}>{row.plan_name || 'not linked'}</td>
-        );
-
-      case 'desired_plan':
-        // A disagreement is called out here rather than in its own column: the two
-        // labels side by side are the finding, and a separate verdict column would be
-        // read without them.
-        return (
-          <td className={`px-3 py-2.5 text-xs ${row.desired_plan ? text : muted}`}>
-            <div className="flex items-center gap-1.5">
-              <span className="truncate">{row.desired_plan || '—'}</span>
-              {row.plan_match === 'mismatch' && (
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap bg-pink-500/15 text-pink-400 border-pink-500/30"
-                  title={
-                    row.suggested_plan_name
-                      ? `The sold plan resolves to "${row.suggested_plan_name}", not the linked plan.`
-                      : 'The linked plan and the sold plan name different plans.'
-                  }
-                >
-                  differs
-                </span>
-              )}
-              {row.plan_match === 'suggested' && row.suggested_plan_name && (
-                <span
-                  className="text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap bg-amber-500/15 text-amber-500 border-amber-500/30"
-                  title={`No plan is linked. The sold label resolves to "${row.suggested_plan_name}" — link it on the account to make this billable.`}
-                >
-                  → {row.suggested_plan_name}
-                </span>
-              )}
-            </div>
-          </td>
-        );
-
-      case 'suggested_plan_name':
-        return (
-          <td className={`px-3 py-2.5 text-xs ${row.suggested_plan_name ? text : muted}`}>
-            {row.suggested_plan_name || '—'}
-            {row.suggested_plan_price !== null && row.suggested_plan_name && (
-              <span className={`ml-1 ${muted}`}>({peso(row.suggested_plan_price)})</span>
-            )}
+          <td key={columnKey} className={`px-3 py-2.5 text-xs ${row.plan_name ? text : muted}`}>
+            {row.plan_name || 'not linked'}
           </td>
         );
 
@@ -489,36 +365,36 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
         // A plan priced at 0.00 is the finding, so it renders as the figure it is and
         // is never collapsed into the same dash as "no plan at all".
         return (
-          <td className={`px-3 py-2.5 text-xs text-right font-mono ${row.plan_price === 0 ? 'text-orange-500' : text}`}>
+          <td className={`px-3 py-2.5 text-xs text-right font-mono ${row.plan_price === 0 ? 'text-orange-500' : text}`} key={columnKey}>
             {peso(row.plan_price)}
           </td>
         );
 
       case 'billing_day':
         return (
-          <td className={`px-3 py-2.5 text-xs ${row.billing_day === null ? 'text-amber-500' : muted}`}>
+          <td key={columnKey} className={`px-3 py-2.5 text-xs ${row.billing_day === null ? 'text-amber-500' : muted}`}>
             {billingDayLabel(row.billing_day)}
           </td>
         );
 
       case 'billing_status':
-        return <td className={`px-3 py-2.5 text-xs ${muted}`}>{row.billing_status || '—'}</td>;
+        return <td key={columnKey} className={`px-3 py-2.5 text-xs ${muted}`}>{row.billing_status || '—'}</td>;
 
       case 'generation_type':
-        return <td className={`px-3 py-2.5 text-xs ${muted}`}>{row.generation_type || '—'}</td>;
+        return <td key={columnKey} className={`px-3 py-2.5 text-xs ${muted}`}>{row.generation_type || '—'}</td>;
 
       case 'account_balance':
-        return <td className={`px-3 py-2.5 text-xs text-right font-mono ${muted}`}>{peso(row.account_balance)}</td>;
+        return <td key={columnKey} className={`px-3 py-2.5 text-xs text-right font-mono ${muted}`}>{peso(row.account_balance)}</td>;
 
       case 'date_installed':
-        return <td className={`px-3 py-2.5 text-xs font-mono ${muted}`}>{stamp(row.date_installed)}</td>;
+        return <td key={columnKey} className={`px-3 py-2.5 text-xs font-mono ${muted}`}>{stamp(row.date_installed)}</td>;
 
       case 'last_invoice_date':
-        return <td className={`px-3 py-2.5 text-xs font-mono ${muted}`}>{stamp(row.last_invoice_date)}</td>;
+        return <td key={columnKey} className={`px-3 py-2.5 text-xs font-mono ${muted}`}>{stamp(row.last_invoice_date)}</td>;
 
       case 'actions':
         return (
-          <td className="px-3 py-2.5">
+          <td key={columnKey} className="px-3 py-2.5">
             <div className="flex items-center justify-end gap-1 flex-wrap">
               {row.can_generate && (
                 <button
@@ -527,11 +403,9 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
                   title="Raise this cycle's statement and invoice now, through the same generator the nightly run uses"
                   className="px-2 py-1 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 hover:bg-emerald-500/25 disabled:opacity-40 flex items-center gap-1"
                 >
-                  {busy === `gen:${row.billing_account_id}` ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <Play className="w-3 h-3" />
-                  )}
+                  {busy === `gen:${row.billing_account_id}`
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <Play className="w-3 h-3" />}
                   Generate Billing
                 </button>
               )}
@@ -555,11 +429,9 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
                   title="Put this account back on the worklist"
                   className={`px-2 py-1 rounded border text-[11px] font-medium disabled:opacity-40 flex items-center gap-1 ${card} ${muted}`}
                 >
-                  {busy === `res:${row.billing_account_id}` ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : (
-                    <RotateCcw className="w-3 h-3" />
-                  )}
+                  {busy === `res:${row.billing_account_id}`
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <RotateCcw className="w-3 h-3" />}
                   Restore
                 </button>
               )}
@@ -572,156 +444,286 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
         );
 
       default:
-        return <td className="px-3 py-2.5" />;
+        return <td key={columnKey} className="px-3 py-2.5" />;
     }
   };
 
-  const renderHeaderCell = (column: DataGridColumn<BillingReconcileRow>) =>
-    column.key === 'select' ? (
-      <SelectAllHeaderCell
-        isDarkMode={isDarkMode}
-        isPageSelected={grid.isPageSelected}
-        isAllFilteredSelected={grid.isAllFilteredSelected}
-        selectablePageCount={grid.selectablePageCount}
-        selectableFilteredCount={grid.selectableFilteredCount}
-        selectedCount={grid.selectedCount}
-        onSelectPage={grid.selectPage}
-        onDeselectPage={grid.deselectPage}
-        onSelectAllFiltered={grid.selectAllFiltered}
-        onClearSelection={grid.clearSelection}
-      />
-    ) : null;
-
-  // ---- Render ------------------------------------------------------------
-
-  const cycleNote = data
-    ? `Cycle ${data.period}${
-        data.advance_generation_day > 0
-          ? ` · generated ${data.advance_generation_day} day${data.advance_generation_day === 1 ? '' : 's'} ahead`
-          : ''
-      }`
-    : 'Reading the cycle…';
-
   return (
-    <ToolShell
-      title="Billing Reconcile"
-      isDarkMode={isDarkMode}
-      colorPalette={colorPalette}
-      isMobile={isMobile}
-      allLabel="All Ungenerated"
-      allCount={summary?.ungenerated ?? 0}
-      slices={sidebarSlices}
-      selectedSliceId={slice}
-      onSelectSlice={setSlice}
-      configurableSlices={slices}
-      sliceDefinitions={SLICE_DEFINITIONS}
-      onSaveSlices={saveSlices}
-      onResetSlices={resetSlices}
-      groupableColumns={GROUPABLE_COLUMNS}
-      groupTree={view.tree}
-      viewOptions={view.options}
-      onSaveViewOptions={view.save}
-      onResetViewOptions={view.reset}
-      distinctValues={view.distinctValues}
-      colorFor={view.colorFor}
-      notice={notice}
-      onDismissNotice={() => setNotice(null)}
-      sidebarHeader={
-        <div className={`px-4 py-2 text-[11px] border-b ${muted} ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
-          {cycleNote}
+    <div className={`p-4 md:p-6 min-h-full ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'}`}>
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/25">
+            <FileWarning className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className={`text-xl font-bold ${text}`}>Billing Reconcile</h1>
+            <p className={`text-sm ${muted}`}>
+              Accounts due for billing this cycle that produced no invoice, and why.
+              {data && (
+                <> Cycle <strong className={text}>{data.period}</strong>
+                  {data.advance_generation_day > 0 && (
+                    <> · generated {data.advance_generation_day} day
+                      {data.advance_generation_day === 1 ? '' : 's'} ahead of the billing day</>
+                  )}.
+                </>
+              )}
+            </p>
+          </div>
         </div>
-      }
-      toolbar={
-        <ToolToolbar
-          isDarkMode={isDarkMode}
-          colorPalette={colorPalette}
-          searchQuery={search}
-          onSearch={setSearch}
-          searchPlaceholder="Search by account number, subscriber name or plan..."
-          onOpenFilter={() => setFunnelOpen(true)}
-          activeFilterCount={Object.keys(funnelFilters).length}
-          columns={grid.columns}
-          hiddenKeys={grid.hiddenKeys}
-          onToggleColumn={grid.toggleColumn}
-          onResetColumns={grid.resetColumns}
-          onExport={() => grid.toCsv(`billing_reconcile_${data?.period ?? 'cycle'}`)}
-          exportDisabled={grid.filteredCount === 0}
-          onRefresh={load}
-          refreshing={loading}
-          refreshTitle="Re-run the audit for this cycle"
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={load}
+            disabled={loading}
+            className={`px-3 py-2 rounded-lg border text-sm font-medium flex items-center gap-2 disabled:opacity-50 ${card} ${text}`}
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Notice */}
+      {notice && (
+        <div
+          className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-start justify-between gap-3 ${
+            notice.tone === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500'
+              : notice.tone === 'error'
+              ? 'bg-red-500/10 border-red-500/30 text-red-500'
+              : 'bg-blue-500/10 border-blue-500/30 text-blue-500'
+          }`}
         >
-          <label className={`flex items-center gap-2 text-xs whitespace-nowrap flex-shrink-0 ${muted}`}>
+          <span className="flex-1">{notice.text}</span>
+          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Stat cards — each one filters the table to what it counts */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-5">
+        {statCards.map((stat) => (
+          <button
+            key={stat.label}
+            onClick={() => setReasonFilter(stat.reason)}
+            title={stat.hint}
+            className={`rounded-xl border p-3 text-left transition-colors hover:border-amber-500/50 ${card} ${
+              reasonFilter === stat.reason && stat.reason !== '' ? 'ring-1 ring-amber-500/50' : ''
+            }`}
+          >
+            <div className={`text-[10px] font-semibold uppercase tracking-wide ${muted}`}>{stat.label}</div>
+            <div className={`text-2xl font-bold mt-1 ${stat.tone}`}>{stat.value}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Search + filters */}
+      <div className={`rounded-xl border p-3 mb-4 ${card}`}>
+        <div className="flex flex-col md:flex-row md:items-center gap-3">
+          <div className="relative flex-1">
+            <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${muted}`} />
             <input
-              type="checkbox"
-              checked={includeOk}
-              onChange={(event) => setIncludeOk(event.target.checked)}
-              className="rounded"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by account number, subscriber name or plan…"
+              className={`w-full pl-9 pr-3 py-2 rounded-lg border text-sm ${input}`}
             />
+          </div>
+
+          <select
+            value={reasonFilter}
+            onChange={(e) => setReasonFilter(e.target.value)}
+            aria-label="Filter by reason"
+            className={`px-3 py-2 rounded-lg border text-sm ${input}`}
+          >
+            <option value="">All reasons</option>
+            {Object.entries(reasons?.labels ?? {}).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+
+          <input
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            placeholder="Billing status"
+            aria-label="Filter by billing status"
+            className={`w-40 px-3 py-2 rounded-lg border text-sm ${input}`}
+          />
+
+          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${input}`}>
+            <CalendarClock className="w-4 h-4 shrink-0 opacity-70" />
+            <input
+              value={dayFilter === '' ? '' : String(dayFilter)}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 2);
+                setDayFilter(digits === '' ? '' : Math.min(31, Number(digits)));
+              }}
+              placeholder="Day"
+              inputMode="numeric"
+              aria-label="Filter by billing day"
+              className="w-12 bg-transparent text-center focus:outline-none"
+            />
+          </div>
+
+          <label className={`flex items-center gap-2 text-xs whitespace-nowrap ${muted}`}>
+            <input type="checkbox" checked={includeOk} onChange={(e) => setIncludeOk(e.target.checked)} className="rounded" />
             Show billed
           </label>
-        </ToolToolbar>
-      }
-      banner={
-        selectedRows.length > 0 ? (
-          <div className="mx-4 mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 flex flex-wrap items-center gap-2">
-            <span className={`text-sm font-medium ${text}`}>
-              {selectedRows.length} selected · {generatableSelection.length} billable
-            </span>
-            <div className="flex-1" />
-            <button
-              onClick={generateSelected}
-              disabled={busy !== null || generatableSelection.length === 0}
-              className="px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-500 text-xs font-medium flex items-center gap-1.5 hover:bg-emerald-500/10 disabled:opacity-40"
-            >
-              {busy === 'bulk:generate' ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Play className="w-3.5 h-3.5" />
+
+          <PageSizeSelector
+            isDarkMode={isDarkMode}
+            pageSize={grid.pageSize}
+            onPageSizeChange={grid.setPageSize}
+            filteredCount={grid.filteredCount}
+          />
+
+          <ExportButton
+            isDarkMode={isDarkMode}
+            onExport={() => grid.toCsv(`billing_reconcile_${data?.period ?? 'cycle'}`)}
+            rowCount={grid.selectedCount > 0 ? grid.selectedCount : grid.filteredCount}
+            isSelection={grid.selectedCount > 0}
+            label="Export View"
+          />
+
+          <ColumnMenu
+            isDarkMode={isDarkMode}
+            columns={grid.columns}
+            hiddenKeys={grid.hiddenKeys}
+            onToggle={grid.toggleColumn}
+            onMove={grid.moveColumn}
+            onReset={grid.resetColumns}
+          />
+        </div>
+      </div>
+
+      {/* Bulk bar */}
+      {selectedRows.length > 0 && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 mb-4 flex flex-wrap items-center gap-2">
+          <span className={`text-sm font-medium ${text}`}>
+            {selectedRows.length} selected · {generatableSelection.length} billable
+          </span>
+          <div className="flex-1" />
+          <button
+            onClick={generateSelected}
+            disabled={busy !== null || generatableSelection.length === 0}
+            className="px-3 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-500 text-xs font-medium flex items-center gap-1.5 hover:bg-emerald-500/10 disabled:opacity-40"
+          >
+            {busy === 'bulk:generate' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            Generate Billing ({generatableSelection.length})
+          </button>
+          <button
+            onClick={() => setDismissTarget(dismissableSelection)}
+            disabled={busy !== null || dismissableSelection.length === 0}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 disabled:opacity-40 ${card} ${text}`}
+          >
+            <Ban className="w-3.5 h-3.5" />
+            Dismiss ({dismissableSelection.length})
+          </button>
+          <button onClick={clearSelection} className={`px-3 py-1.5 rounded-lg border text-xs font-medium ${card} ${muted}`}>
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className={`rounded-xl border overflow-hidden ${card}`}>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className={`text-xs uppercase tracking-wide ${headRow}`}>
+              <tr>
+                {grid.visibleColumns.map((column) => {
+                  if (column.key === 'select') {
+                    return (
+                      <SelectAllHeaderCell
+                        key={column.key}
+                        isDarkMode={isDarkMode}
+                        isPageSelected={grid.isPageSelected}
+                        isAllFilteredSelected={grid.isAllFilteredSelected}
+                        selectablePageCount={grid.selectablePageCount}
+                        selectableFilteredCount={grid.selectableFilteredCount}
+                        selectedCount={grid.selectedCount}
+                        onSelectPage={grid.selectPage}
+                        onDeselectPage={grid.deselectPage}
+                        onSelectAllFiltered={grid.selectAllFiltered}
+                        onClearSelection={grid.clearSelection}
+                      />
+                    );
+                  }
+
+                  if (column.key === 'actions') {
+                    return (
+                      <th key={column.key} className="px-3 py-2.5 text-right font-semibold">{column.label}</th>
+                    );
+                  }
+
+                  return (
+                    <SortableHeaderCell
+                      key={column.key}
+                      label={column.label}
+                      sortable={typeof column.value === 'function'}
+                      direction={grid.sortStateFor(column.key).direction}
+                      priority={grid.sortStateFor(column.key).priority}
+                      onSort={(additive: boolean) => grid.toggleSort(column.key, additive)}
+                      align={column.key === 'plan_price' || column.key === 'account_balance' ? 'right' : 'left'}
+                    />
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className={isDarkMode ? 'divide-y divide-gray-800' : 'divide-y divide-gray-100'}>
+              {loading && (
+                <tr>
+                  <td colSpan={grid.visibleColumns.length} className={`px-4 py-12 text-center ${muted}`}>
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+                  </td>
+                </tr>
               )}
-              Generate Billing ({generatableSelection.length})
-            </button>
-            <button
-              onClick={() => setDismissTarget(dismissableSelection)}
-              disabled={busy !== null || dismissableSelection.length === 0}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 disabled:opacity-40 ${card} ${text}`}
-            >
-              <Ban className="w-3.5 h-3.5" />
-              Dismiss ({dismissableSelection.length})
-            </button>
-            <button onClick={clearSelection} className={`px-3 py-1.5 rounded-lg border text-xs font-medium ${card} ${muted}`}>
-              Clear
-            </button>
+
+              {!loading && rows.length === 0 && (
+                <tr>
+                  <td colSpan={grid.visibleColumns.length} className={`px-4 py-12 text-center ${muted}`}>
+                    <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-500" />
+                    Every account due this cycle has been billed.
+                  </td>
+                </tr>
+              )}
+
+              {!loading && grid.pagedRows.map((row) => (
+                <tr key={row.billing_account_id} className={rowHover}>
+                  {grid.visibleColumns.map((column) => renderCell(column.key, row))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {grid.totalPages > 1 && (
+          <div className={`flex items-center justify-between px-3 py-2 border-t text-xs ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
+            <span className={muted}>
+              Page {grid.page} of {grid.totalPages} · {grid.filteredCount.toLocaleString()} row(s)
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => grid.setPage(Math.max(1, grid.page - 1))}
+                disabled={grid.page <= 1}
+                className={`px-2 py-1 rounded border disabled:opacity-40 ${card} ${text}`}
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => grid.setPage(Math.min(grid.totalPages, grid.page + 1))}
+                disabled={grid.page >= grid.totalPages}
+                className={`px-2 py-1 rounded border disabled:opacity-40 ${card} ${text}`}
+              >
+                Next
+              </button>
+            </div>
           </div>
-        ) : null
-      }
-    >
-      <ToolDataTable
-        grid={grid}
-        isDarkMode={isDarkMode}
-        colorPalette={colorPalette}
-        renderCell={renderCell}
-        renderHeaderCell={renderHeaderCell}
-        rowKey={(row) => String(row.billing_account_id)}
-        loading={loading}
-        emptyMessage="Every account due this cycle has been billed."
-        storageKey="billing_reconcile.widths"
-      />
+        )}
+      </div>
 
-      <TableFunnelFilter
-        isOpen={funnelOpen}
-        onClose={() => setFunnelOpen(false)}
-        onApplyFilters={(filters) => {
-          setFunnelFilters(filters);
-          setFunnelOpen(false);
-        }}
-        currentFilters={funnelFilters}
-        columns={FUNNEL_COLUMNS}
-        title="Billing Reconcile Filters"
-        subtitle="Narrow the worklist by column"
-        storageKey="billing_reconcile.funnel"
-        optionsByKey={funnelOptions}
-      />
-
+      {/* Dismiss confirmation */}
       {dismissTarget && dismissTarget.length > 0 && (
         <div className="fixed inset-0 z-[900] bg-black/50 flex items-center justify-center p-4">
           <div className={`w-full max-w-md rounded-xl border p-4 ${card}`}>
@@ -732,15 +734,15 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
                   Mark {dismissTarget.length} account{dismissTarget.length === 1 ? '' : 's'} do-not-generate?
                 </h2>
                 <p className={`text-xs mt-1 ${muted}`}>
-                  They drop off this cycle's worklist. The decision covers {data?.period ?? 'this cycle'} only — next
-                  cycle they are reconsidered. Nothing is billed, cancelled or written to the account.
+                  They drop off this cycle's worklist. The decision covers {data?.period ?? 'this cycle'} only —
+                  next cycle they are reconsidered. Nothing is billed, cancelled or written to the account.
                 </p>
               </div>
             </div>
 
             <input
               value={dismissReason}
-              onChange={(event) => setDismissReason(event.target.value)}
+              onChange={(e) => setDismissReason(e.target.value)}
               placeholder="Reason (optional, recorded against the decision)"
               className={`w-full px-3 py-2 rounded-lg border text-sm mb-3 ${input}`}
             />
@@ -754,10 +756,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
                 Dismiss
               </button>
               <button
-                onClick={() => {
-                  setDismissTarget(null);
-                  setDismissReason('');
-                }}
+                onClick={() => { setDismissTarget(null); setDismissReason(''); }}
                 className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium ${card} ${text}`}
               >
                 Cancel
@@ -766,7 +765,7 @@ const BillingReconcileTool: React.FC<BillingReconcileToolProps> = ({ isDarkMode:
           </div>
         </div>
       )}
-    </ToolShell>
+    </div>
   );
 };
 

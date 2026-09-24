@@ -20,6 +20,15 @@ class ApplicationController extends Controller
     public function store(Request $request)
     {
         try {
+            // Load the form field visibility settings so validation matches what the
+            // applicant actually saw. A hidden field must not be required.
+            $formUi = DB::table('form_ui')->first();
+            $isVisible = function ($field) use ($formUi) {
+                // Default to visible when there is no saved config for the field.
+                return !$formUi || !isset($formUi->$field) || $formUi->$field === 'active';
+            };
+            $presence = fn ($visible) => $visible ? 'required' : 'nullable';
+
             $validator = Validator::make($request->all(), [
                 'email' => 'required|email|max:255',
                 'mobile' => 'required|string|regex:/^09[0-9]{9}$/',
@@ -37,10 +46,10 @@ class ApplicationController extends Controller
                 'referredBy' => 'nullable|string|max:255',
                 'plan' => 'required|string|max:255',
                 'promo' => 'nullable|string|max:255',
-                'proofOfBilling' => 'required|file|mimes:jpg,jpeg,png,pdf|max:10240',
-                'governmentIdPrimary' => 'required|file|mimes:jpg,jpeg,png,pdf|max:10240',
+                'proofOfBilling' => $presence($isVisible('proof_of_billing')) . '|file|mimes:jpg,jpeg,png,pdf|max:10240',
+                'governmentIdPrimary' => $presence($isVisible('id_primary')) . '|file|mimes:jpg,jpeg,png,pdf|max:10240',
                 'governmentIdSecondary' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
-                'houseFrontPicture' => 'required|file|mimes:jpg,jpeg,png|max:10240',
+                'houseFrontPicture' => $presence($isVisible('house_front_')) . '|file|mimes:jpg,jpeg,png|max:10240',
                 'promoProof' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:10240',
                 'created_by_email' => 'nullable|email|max:255',
             ]);
@@ -169,50 +178,67 @@ class ApplicationController extends Controller
                     'queued_images' => ImageQueue::where('application_id', $application->id)->count()
                 ]);
 
-                try {
-                    $emailQueueService = app(EmailQueueService::class);
-                    $variables = [
-                        'recipient_email' => $application->email_address,
-                        'account_no' => $application->id,
-                        'first_name' => $application->first_name,
-                        'last_name' => $application->last_name,
-                        'middle_initial' => $application->middle_initial,
-                        'mobile_number' => $application->mobile_number,
-                        'desired_plan' => $application->desired_plan,
-                        'portal_url' => config('app.url'),
-                        'company_name' => config('app.name', 'Ampere'),
-                        'application_id' => $application->id,
-                        'status' => $application->status,
-                    ];
-                    
-                    $emailQueueService->queueFromTemplate('APPLICATION', $variables);
-                    Log::info('Successfully queued Application email to ' . $application->email_address);
+                /*
+                 * Notify AFTER the response has been flushed to the browser.
+                 *
+                 * ItexmoSmsService::send() is a synchronous cURL call to an external
+                 * gateway: 30s timeout, 3 attempts, 2s between them — up to ~94s. It
+                 * used to run here, inline, AFTER the application row was already
+                 * committed. When the gateway was slow the response was held open
+                 * until nginx's fastcgi_read_timeout (60s by default) cut the
+                 * connection, so the browser's fetch() rejected with
+                 * "TypeError: Failed to fetch" for an application that had in fact
+                 * been saved. The form then showed "Submission Failed" and applicants
+                 * resubmitted — the duplicate rows in `applications` are exactly that.
+                 *
+                 * afterResponse() runs this on terminate, once the 201 is already on
+                 * the wire, so gateway latency can no longer be mistaken for a failed
+                 * submission. The catch stays: a notification failure must never be
+                 * reported to the applicant, whose application is already stored.
+                 */
+                dispatch(function () use ($application) {
+                    try {
+                        $variables = [
+                            'recipient_email' => $application->email_address,
+                            'account_no' => $application->id,
+                            'first_name' => $application->first_name,
+                            'last_name' => $application->last_name,
+                            'middle_initial' => $application->middle_initial,
+                            'mobile_number' => $application->mobile_number,
+                            'desired_plan' => $application->desired_plan,
+                            'portal_url' => config('app.url'),
+                            'company_name' => config('app.name', 'Ampere'),
+                            'application_id' => $application->id,
+                            'status' => $application->status,
+                        ];
 
-                    $smsTemplate = SMSTemplate::where('template_type', 'Application')
-                        ->where('is_active', true)
-                        ->first();
+                        app(EmailQueueService::class)->queueFromTemplate('APPLICATION', $variables);
+                        Log::info('Successfully queued Application email to ' . $application->email_address);
 
-                    if ($smsTemplate && $application->mobile_number) {
-                        $smsService = app(ItexmoSmsService::class);
-                        
-                        $message = $smsTemplate->message_content;
-                        
-                        foreach ($variables as $key => $value) {
-                            $message = str_replace('{{' . $key . '}}', $value ?? '', $message);
+                        $smsTemplate = SMSTemplate::where('template_type', 'Application')
+                            ->where('is_active', true)
+                            ->first();
+
+                        if ($smsTemplate && $application->mobile_number) {
+                            $message = $smsTemplate->message_content;
+
+                            foreach ($variables as $key => $value) {
+                                $message = str_replace('{{' . $key . '}}', $value ?? '', $message);
+                            }
+
+                            app(ItexmoSmsService::class)->send([
+                                'contact_no' => $application->mobile_number,
+                                'message' => $message
+                            ]);
+                            Log::info('Successfully sent Application SMS to ' . $application->mobile_number);
                         }
-                        
-                        $smsService->send([
-                            'contact_no' => $application->mobile_number,
-                            'message' => $message
+                    } catch (\Throwable $notifyException) {
+                        Log::error('Failed to send application notification (Email/SMS)', [
+                            'application_id' => $application->id,
+                            'error' => $notifyException->getMessage()
                         ]);
-                        Log::info('Successfully sent Application SMS to ' . $application->mobile_number);
                     }
-                } catch (\Throwable $notifyException) {
-                    Log::error('Failed to send application notification (Email/SMS)', [
-                        'application_id' => $application->id,
-                        'error' => $notifyException->getMessage()
-                    ]);
-                }
+                })->afterResponse();
 
                 return response()->json([
                     'message' => 'Application submitted successfully. Images will be processed shortly.',

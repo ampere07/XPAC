@@ -36,6 +36,7 @@ class UserPreferenceService
         
         \Log::info('[UserPreferenceService] setUserPreference called', [
             'key' => $key,
+            'value' => $value,
             'user_id' => $userId
         ]);
         
@@ -49,25 +50,46 @@ class UserPreferenceService
                 ? json_encode($value) 
                 : $value;
 
-            // One statement, not exists()-then-insert.
-            //
-            // Two tabs saving the same preference at once - which is exactly what the
-            // reconciliation tools' slice configuration does, since every screen writes
-            // its own copy on close - both read "absent" and both insert, and the
-            // second fails on the `unique_user_preference` index. updateOrInsert
-            // resolves that against the same index in one round trip, so a concurrent
-            // save is an update rather than a duplicate-key error the operator sees.
-            DB::table('user_preferences')->updateOrInsert(
-                [
+            \Log::info('[UserPreferenceService] Value to store', [
+                'original_value' => $value,
+                'stored_value' => $valueToStore,
+                'is_json' => is_array($value) || is_object($value)
+            ]);
+
+            $exists = DB::table('user_preferences')
+                ->where('user_id', $userId)
+                ->where('preference_key', $key)
+                ->exists();
+
+            \Log::info('[UserPreferenceService] Checking if preference exists', [
+                'exists' => $exists
+            ]);
+
+            if ($exists) {
+                \Log::info('[UserPreferenceService] Updating existing preference');
+                
+                DB::table('user_preferences')
+                    ->where('user_id', $userId)
+                    ->where('preference_key', $key)
+                    ->update([
+                        'preference_value' => $valueToStore,
+                        'updated_at' => now()
+                    ]);
+                    
+                \Log::info('[UserPreferenceService] Update completed');
+            } else {
+                \Log::info('[UserPreferenceService] Inserting new preference');
+                
+                DB::table('user_preferences')->insert([
                     'user_id' => $userId,
                     'preference_key' => $key,
-                ],
-                [
                     'preference_value' => $valueToStore,
                     'created_at' => now(),
-                    'updated_at' => now(),
-                ]
-            );
+                    'updated_at' => now()
+                ]);
+                
+                \Log::info('[UserPreferenceService] Insert completed');
+            }
 
             \Log::info('[UserPreferenceService] Successfully saved preference');
             return true;

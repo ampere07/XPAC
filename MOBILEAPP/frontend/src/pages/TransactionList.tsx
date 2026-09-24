@@ -18,13 +18,12 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Menu,
   RefreshCw,
   Download,
   Filter,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { StandardPage } from '../components/common';
+import GlobalSearch from './globalfunctions/GlobalSearch';
 import TransactionListDetails from '../components/TransactionListDetails';
 import { transactionService } from '../services/transactionService';
 import { getCities, City } from '../services/cityService';
@@ -39,7 +38,7 @@ import BillingDetails from '../components/CustomerDetails';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
 import { exportToCSV } from '../utils/exportUtils';
-import TransactionFunnelFilter, { allColumns as filterColumns, FilterValues } from '../filter/TransactionFunnelFilter';
+import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -55,9 +54,9 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     applicationId: customerData.billingAccount?.accountNo || '',
     customerName: customerData.fullName,
     address: customerData.address,
-    status: customerData.billingAccount?.billingStatusId === 2 ? 'Active' : 'Inactive',
+    status: accountStatusFrom(customerData),
     balance: customerData.billingAccount?.accountBalance || 0,
-    onlineStatus: customerData.billingAccount?.billingStatusId === 2 ? 'Online' : 'Offline',
+    onlineStatus: sessionStatusFrom(customerData),
     cityId: null,
     regionId: null,
     timestamp: customerData.updatedAt || '',
@@ -88,7 +87,6 @@ const convertCustomerDataToBillingDetail = (customerData: CustomerDetailData): B
     region: customerData.region || '',
     usageType: customerData.technicalDetails?.usageTypeId ? `Type ${customerData.technicalDetails.usageTypeId}` : '',
     referredBy: customerData.referredBy || '',
-    referredByAgentId: customerData.referredByAgentId ?? null,
     referralContactNo: '',
     groupName: customerData.groupName || '',
     mikrotikId: '',
@@ -272,7 +270,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   const [userRole, setUserRole] = useState('');
   const [roleId, setRoleId] = useState<number | null>(null);
-  const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -293,11 +290,10 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   const [sortColumn, setSortColumn] = useState<string | null>('date_processed');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(50);
+  const [itemsPerPage] = useState(50);
 
   const [refreshing, setRefreshing] = useState(false);
   const [locationFilterVisible, setLocationFilterVisible] = useState(false);
-  const [isFunnelFilterOpen, setIsFunnelFilterOpen] = useState(false);
 
   const [cities, setCities] = useState<City[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
@@ -328,15 +324,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         const userData = JSON.parse(raw);
         setUserRole(userData.role || '');
         setRoleId(userData.role_id || null);
-        let perms: string[] = [];
-        if (userData.permissions) {
-          if (Array.isArray(userData.permissions)) {
-            perms = userData.permissions;
-          } else if (typeof userData.permissions === 'string') {
-            try { perms = JSON.parse(userData.permissions); } catch { perms = userData.permissions.split(',').map((p: string) => p.trim()).filter(Boolean); }
-          }
-        }
-        setUserPermissions(perms);
       } catch {}
     });
   }, []);
@@ -365,9 +352,8 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // ─── Permissions ───────────────────────────────────────────────────────────
 
-  // Resolved centrally (hooks/usePermissions) so a seeded role such as
-  // Technician is answered from the role table rather than from a stored
-  // permissions array it does not have.
+  // Resolved centrally (hooks/usePermissions): a seeded role answers from the
+  // permission table, a custom role from the keys the server resolved for it.
   const { can: hasPermission } = usePermissions();
 
   // ─── User org ──────────────────────────────────────────────────────────────
@@ -384,22 +370,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   }, []);
 
   // ─── Location items ────────────────────────────────────────────────────────
-
-  const resolvePaymentMethodName = (pmId: string | number | null | undefined): string => {
-    if (!pmId) return '';
-    const pm = paymentMethods.find((m) => String(m.id) === String(pmId));
-    return pm ? pm.payment_method : String(pmId);
-  };
-
-  // Restore saved funnel filters
-  useEffect(() => {
-    AsyncStorage.getItem('transactionFunnelFilters')
-      .then((saved) => {
-        if (!saved) return;
-        try { setActiveFilters(JSON.parse(saved)); } catch { /* ignore */ }
-      })
-      .catch(() => { });
-  }, []);
 
   const globalFilteredTransactions = useMemo(() => {
     const normalizedQuery = searchQuery.toLowerCase().replace(/\s+/g, '');
@@ -435,80 +405,8 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
       });
     }
 
-    // Apply funnel filters — same field resolution and comparisons as the web screen.
-    if (activeFilters && Object.keys(activeFilters).length > 0) {
-      filtered = filtered.filter((transaction: any) =>
-        Object.entries(activeFilters).every(([key, filter]: [string, any]) => {
-          const getValForFilter = (item: any, k: string) => {
-            switch (k) {
-              case 'id': return item.id;
-              case 'account_no': return item.account?.account_no || item.account_no;
-              case 'full_name': return item.account?.customer?.full_name;
-              case 'contact_no': return item.account?.customer?.contact_number_primary;
-              case 'date_processed': return item.date_processed;
-              case 'processed_by_user': return item.processor?.email_address || item.processed_by_user;
-              case 'payment_method':
-                return item.payment_method_info?.payment_method || resolvePaymentMethodName(item.payment_method);
-              case 'reference_no': return item.reference_no;
-              case 'or_no': return item.or_no;
-              case 'remarks': return item.remarks;
-              case 'status': return item.status;
-              case 'transaction_type': return item.transaction_type;
-              case 'barangay': return item.account?.customer?.barangay;
-              case 'city': return item.account?.customer?.city;
-              case 'region': return item.account?.customer?.region;
-              case 'account_balance': return item.account?.account_balance;
-              default: return item[k];
-            }
-          };
-
-          const val = getValForFilter(transaction, key);
-
-          if (filter.type === 'checklist') {
-            if (!filter.value || !Array.isArray(filter.value) || filter.value.length === 0) return true;
-            const valStr = String(val || '').toLowerCase().trim();
-
-            // Location values can live in the address string rather than their own column.
-            if (key === 'barangay' || key === 'city' || key === 'region') {
-              const address = String(transaction.account?.customer?.address || '').toLowerCase();
-              return (filter.value as string[]).some((option) => {
-                const opt = String(option).toLowerCase().trim();
-                return valStr === opt || address.includes(opt);
-              });
-            }
-
-            return (filter.value as string[]).some((option) => valStr === String(option).toLowerCase().trim());
-          }
-
-          if (filter.type === 'text') {
-            if (!filter.value) return true;
-            return String(val || '').toLowerCase().includes(String(filter.value).toLowerCase());
-          }
-
-          if (filter.type === 'number') {
-            const numValue = Number(val);
-            if (isNaN(numValue)) return false;
-            if (filter.from !== undefined && filter.from !== '' && numValue < Number(filter.from)) return false;
-            if (filter.to !== undefined && filter.to !== '' && numValue > Number(filter.to)) return false;
-            return true;
-          }
-
-          if (filter.type === 'date') {
-            if (!val) return false;
-            const dateValue = new Date(val).getTime();
-            if (isNaN(dateValue)) return false;
-            if (filter.from && dateValue < new Date(filter.from).getTime()) return false;
-            if (filter.to && dateValue > new Date(filter.to).getTime()) return false;
-            return true;
-          }
-
-          return true;
-        })
-      );
-    }
-
     return filtered;
-  }, [transactions, searchQuery, userOrgId, processedDateFrom, processedDateTo, activeFilters, paymentMethods]);
+  }, [transactions, searchQuery, userOrgId, processedDateFrom, processedDateTo]);
 
   const locationItems = useMemo(() => {
     const regionCounts: Record<string, number> = {};
@@ -603,42 +501,14 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     return filtered;
   }, [globalFilteredTransactions, selectedLocation, sortColumn, sortDirection]);
 
+  const paginatedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredTransactions.slice(start, start + itemsPerPage);
+  }, [filteredTransactions, currentPage, itemsPerPage]);
+
+  const totalPages = Math.ceil(filteredTransactions.length / itemsPerPage);
+
   // ─── Pull to refresh ──────────────────────────────────────────────────────
-
-  const activeFilterKeys = Object.keys(activeFilters);
-
-  const handleApplyFilters = async (filters: FilterValues) => {
-    setActiveFilters(filters);
-    setCurrentPage(1);
-    try { await AsyncStorage.setItem('transactionFunnelFilters', JSON.stringify(filters)); } catch { /* ignore */ }
-  };
-
-  const removeFilter = async (key: string) => {
-    const next = { ...activeFilters };
-    delete next[key];
-    setActiveFilters(next);
-    setCurrentPage(1);
-    try { await AsyncStorage.setItem('transactionFunnelFilters', JSON.stringify(next)); } catch { /* ignore */ }
-  };
-
-  const handleClearAllFilters = async () => {
-    setActiveFilters({});
-    setCurrentPage(1);
-    try { await AsyncStorage.removeItem('transactionFunnelFilters'); } catch { /* ignore */ }
-  };
-
-  const getFilterDisplayValue = (filter: any): string => {
-    if (filter.type === 'checklist') {
-      return Array.isArray(filter.value) ? filter.value.join(', ') : String(filter.value ?? '');
-    }
-    if (filter.type === 'text') return String(filter.value ?? '');
-    if (filter.type === 'number' || filter.type === 'date') {
-      if (filter.from && filter.to) return `${filter.from} - ${filter.to}`;
-      if (filter.from) return `> ${filter.from}`;
-      if (filter.to) return `< ${filter.to}`;
-    }
-    return '';
-  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -957,181 +827,287 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  // Batch approve and the sort chips sit under the toolbar, above the list —
-  // they act on the list rather than narrowing it, so they are not filters.
-  const listHeader = (
-    <View style={{ backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', paddingHorizontal: 16, paddingVertical: 8, gap: 8 }}>
-      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-        {hasPermission('transaction-list.batch-approve') && (
+  return (
+    <View style={{ flex: 1, backgroundColor: '#f9fafb' }}>
+      {/* Header */}
+      <View
+        style={{
+          paddingTop: isTablet ? 16 : 60,
+          paddingHorizontal: 16,
+          paddingBottom: 10,
+          backgroundColor: '#ffffff',
+          borderBottomWidth: 1,
+          borderBottomColor: '#e5e7eb',
+          gap: 10,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <GlobalSearch
+              searchQuery={searchQuery}
+              setSearchQuery={(q) => { setSearchQuery(q); setCurrentPage(1); }}
+              isDarkMode={false}
+              colorPalette={colorPalette}
+              placeholder="Search transactions..."
+            />
+          </View>
+          {/* Location filter button */}
           <TouchableOpacity
-            onPress={() => isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true)}
+            onPress={() => setLocationFilterVisible(true)}
             style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: isBatchApproveMode ? '#dc2626' : primary,
-              paddingHorizontal: 14,
-              paddingVertical: 8,
+              padding: 9,
               borderRadius: 8,
-              gap: 6,
+              borderWidth: 1,
+              borderColor: selectedLocation !== 'all' ? primary : '#e5e7eb',
+              backgroundColor: '#ffffff',
             }}
           >
-            {isBatchApproveMode ? <X size={15} color="#ffffff" /> : <CheckCheck size={15} color="#ffffff" />}
-            <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '500' }}>
-              {isBatchApproveMode ? 'Cancel' : 'Batch Approve'}
-            </Text>
+            <Filter size={18} color={selectedLocation !== 'all' ? primary : '#6b7280'} />
           </TouchableOpacity>
-        )}
+          {/* Export */}
+          <TouchableOpacity
+            onPress={handleExport}
+            disabled={filteredTransactions.length === 0}
+            style={{
+              padding: 9,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: primary,
+              backgroundColor: '#ffffff',
+              opacity: filteredTransactions.length === 0 ? 0.4 : 1,
+            }}
+          >
+            <Download size={18} color={primary} />
+          </TouchableOpacity>
+          {/* Refresh */}
+          <TouchableOpacity
+            onPress={handleRefresh}
+            style={{
+              padding: 9,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: primary,
+              backgroundColor: '#ffffff',
+            }}
+          >
+            <RefreshCw size={18} color={primary} />
+          </TouchableOpacity>
+        </View>
 
-        {isBatchApproveMode && (
-          <>
+        {/* Batch approve row */}
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          {hasPermission('transaction-list.batch-approve') && (
             <TouchableOpacity
-              onPress={toggleSelectAll}
+              onPress={() => isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true)}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                borderWidth: 1,
-                borderColor: primary,
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 8,
-                gap: 4,
-              }}
-            >
-              <Text style={{ color: primary, fontSize: 13 }}>All</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleBatchApprove}
-              disabled={selectedTransactionIds.length === 0 || isApproving}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: selectedTransactionIds.length === 0 ? '#d1d5db' : '#22c55e',
+                backgroundColor: isBatchApproveMode ? '#dc2626' : primary,
                 paddingHorizontal: 14,
                 paddingVertical: 8,
                 borderRadius: 8,
                 gap: 6,
-                opacity: isApproving ? 0.6 : 1,
               }}
             >
-              <Check size={15} color="#ffffff" />
+              {isBatchApproveMode
+                ? <X size={15} color="#ffffff" />
+                : <CheckCheck size={15} color="#ffffff" />}
               <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '500' }}>
-                {isApproving ? 'Approving...' : `Approve (${selectedTransactionIds.length})`}
+                {isBatchApproveMode ? 'Cancel' : 'Batch Approve'}
               </Text>
             </TouchableOpacity>
-          </>
-        )}
+          )}
+
+          {isBatchApproveMode && (
+            <>
+              <TouchableOpacity
+                onPress={toggleSelectAll}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderWidth: 1,
+                  borderColor: primary,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 8,
+                  gap: 4,
+                }}
+              >
+                <Text style={{ color: primary, fontSize: 13 }}>All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleBatchApprove}
+                disabled={selectedTransactionIds.length === 0 || isApproving}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: selectedTransactionIds.length === 0 ? '#d1d5db' : '#22c55e',
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  borderRadius: 8,
+                  gap: 6,
+                  opacity: isApproving ? 0.6 : 1,
+                }}
+              >
+                <Check size={15} color="#ffffff" />
+                <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '500' }}>
+                  {isApproving ? 'Approving...' : `Approve (${selectedTransactionIds.length})`}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* Active filter chips */}
+          {selectedLocation !== 'all' && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 4,
+              backgroundColor: `${primary}15`, paddingHorizontal: 8,
+              paddingVertical: 4, borderRadius: 12,
+            }}>
+              <Text style={{ fontSize: 11, color: primary }}>
+                {selectedLocation.startsWith('reg:') ? selectedLocation.substring(4) :
+                 selectedLocation.startsWith('city:') ? selectedLocation.substring(5) :
+                 selectedLocation.startsWith('brgy:') ? selectedLocation.substring(5) : selectedLocation}
+              </Text>
+              <TouchableOpacity onPress={() => setSelectedLocation('all')}>
+                <X size={12} color={primary} />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Sort row */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 2 }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {sortOptions.map(opt => (
+              <TouchableOpacity
+                key={opt.key}
+                onPress={() => {
+                  if (sortColumn === opt.key) {
+                    setSortDirection(d => d === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setSortColumn(opt.key);
+                    setSortDirection('desc');
+                  }
+                }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 12,
+                  backgroundColor: sortColumn === opt.key ? `${primary}15` : '#f3f4f6',
+                  gap: 4,
+                }}
+              >
+                <Text style={{ fontSize: 12, color: sortColumn === opt.key ? primary : '#6b7280', fontWeight: sortColumn === opt.key ? '600' : '400' }}>
+                  {opt.label}
+                </Text>
+                {sortColumn === opt.key && (
+                  <Text style={{ fontSize: 10, color: primary }}>{sortDirection === 'asc' ? '↑' : '↓'}</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          {sortOptions.map(opt => (
-            <TouchableOpacity
-              key={opt.key}
-              onPress={() => {
-                if (sortColumn === opt.key) {
-                  setSortDirection(d => d === 'asc' ? 'desc' : 'asc');
-                } else {
-                  setSortColumn(opt.key);
-                  setSortDirection('desc');
-                }
-              }}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingHorizontal: 10,
-                paddingVertical: 5,
-                borderRadius: 12,
-                backgroundColor: sortColumn === opt.key ? `${primary}15` : '#f3f4f6',
-                gap: 4,
-              }}
-            >
-              <Text style={{ fontSize: 12, color: sortColumn === opt.key ? primary : '#6b7280', fontWeight: sortColumn === opt.key ? '600' : '400' }}>
-                {opt.label}
-              </Text>
-              {sortColumn === opt.key && (
-                <Text style={{ fontSize: 10, color: primary }}>{sortDirection === 'asc' ? '↑' : '↓'}</Text>
-              )}
-            </TouchableOpacity>
-          ))}
+      {/* List */}
+      {loading && transactions.length === 0 ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <ActivityIndicator size="large" color={primary} />
+          <Text style={{ color: '#6b7280', fontSize: 14 }}>Loading transactions...</Text>
         </View>
-      </ScrollView>
-    </View>
-  );
+      ) : error && transactions.length === 0 ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+          <Text style={{ color: '#ef4444', fontSize: 14 }}>{error}</Text>
+          <TouchableOpacity
+            onPress={() => fetchTransactions(true)}
+            style={{ backgroundColor: primary, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={paginatedTransactions}
+          keyExtractor={item => String(item.id)}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={[primary]}
+              tintColor={primary}
+            />
+          }
+          contentContainerStyle={{ paddingVertical: 8, paddingBottom: 80 }}
+          ListEmptyComponent={
+            <View style={{ padding: 40, alignItems: 'center' }}>
+              <Text style={{ color: '#6b7280', fontSize: 14 }}>
+                {transactions.length > 0 ? 'No transactions found matching your filters' : 'No transactions found.'}
+              </Text>
+            </View>
+          }
+          ListFooterComponent={
+            totalPages > 1 ? (
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  borderTopWidth: 1,
+                  borderTopColor: '#e5e7eb',
+                  backgroundColor: '#ffffff',
+                  marginTop: 4,
+                }}
+              >
+                <Text style={{ fontSize: 12, color: '#6b7280' }}>
+                  {(currentPage - 1) * itemsPerPage + 1}–{Math.min(currentPage * itemsPerPage, filteredTransactions.length)} of {filteredTransactions.length}
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      borderWidth: 1,
+                      borderColor: currentPage === 1 ? '#e5e7eb' : primary,
+                      opacity: currentPage === 1 ? 0.4 : 1,
+                    }}
+                  >
+                    <Text style={{ color: currentPage === 1 ? '#9ca3af' : primary, fontSize: 13 }}>Prev</Text>
+                  </TouchableOpacity>
+                  <Text style={{ alignSelf: 'center', fontSize: 12, color: '#374151' }}>
+                    {currentPage} / {totalPages}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                      borderWidth: 1,
+                      borderColor: currentPage === totalPages ? '#e5e7eb' : primary,
+                      opacity: currentPage === totalPages ? 0.4 : 1,
+                    }}
+                  >
+                    <Text style={{ color: currentPage === totalPages ? '#9ca3af' : primary, fontSize: 13 }}>Next</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null
+          }
+        />
+      )}
 
-  const locationLabel = selectedLocation.startsWith('reg:')
-    ? selectedLocation.substring(4)
-    : selectedLocation.startsWith('city:') || selectedLocation.startsWith('brgy:')
-      ? selectedLocation.substring(5)
-      : selectedLocation;
-
-  return (
-    <StandardPage<Transaction>
-      data={filteredTransactions}
-      keyExtractor={(item) => String(item.id)}
-      renderItem={(item) => renderItem({ item })}
-      searchQuery={searchQuery}
-      onSearchChange={(q) => { setSearchQuery(q); setCurrentPage(1); }}
-      searchPlaceholder="Search transactions..."
-      onOpenFunnel={() => setIsFunnelFilterOpen(true)}
-      activeFilterCount={activeFilterKeys.length}
-      chips={[
-        ...activeFilterKeys.map((key) => ({
-          key,
-          label: filterColumns.find((c) => c.key === key)?.label || key,
-          value: getFilterDisplayValue(activeFilters[key] as any),
-        })),
-        ...(selectedLocation !== 'all' ? [{ key: '__location', label: 'Location', value: locationLabel }] : []),
-      ]}
-      onRemoveChip={(key) => (key === '__location' ? setSelectedLocation('all') : removeFilter(key))}
-      onClearChips={() => { handleClearAllFilters(); setSelectedLocation('all'); }}
-      onExport={handleExport}
-      exportDisabled={filteredTransactions.length === 0}
-      onRefresh={handleRefresh}
-      isRefreshing={loading}
-      onPullRefresh={handleRefresh}
-      pullRefreshing={refreshing}
-      isLoading={loading && transactions.length === 0}
-      loadingText="Loading transactions..."
-      error={error}
-      onRetry={() => fetchTransactions(true)}
-      emptyText="No transactions found"
-      currentPage={currentPage}
-      onPageChange={setCurrentPage}
-      itemsPerPage={itemsPerPage}
-      onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
-      colorPalette={colorPalette}
-      header={listHeader}
-      toolbarActions={
-        <TouchableOpacity
-          onPress={() => setLocationFilterVisible(true)}
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: 8,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: selectedLocation !== 'all' ? primary : '#e5e7eb',
-            backgroundColor: selectedLocation !== 'all' ? `${primary}12` : '#ffffff',
-          }}
-        >
-          <Menu size={18} color={selectedLocation !== 'all' ? primary : '#374151'} />
-        </TouchableOpacity>
-      }
-    >
       {/* Location filter modal */}
       {renderLocationFilterModal()}
-
-      {/* Funnel filter */}
-      <TransactionFunnelFilter
-        isOpen={isFunnelFilterOpen}
-        onClose={() => setIsFunnelFilterOpen(false)}
-        onApplyFilters={(filters) => {
-          handleApplyFilters(filters);
-          setIsFunnelFilterOpen(false);
-        }}
-        currentFilters={activeFilters}
-      />
 
       {/* Transaction detail modal */}
       {selectedTransaction && (
@@ -1180,7 +1156,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         isDarkMode={false}
         colorPalette={colorPalette}
       />
-    </StandardPage>
+    </View>
   );
 };
 

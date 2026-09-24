@@ -28,6 +28,7 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 import { createInventoryLog } from '../services/inventoryLogService';
 import { InventoryItem } from '../contexts/InventoryContext';
 import { userService } from '../services/userService';
+import { getUserDisplayName } from '../utils/userDisplay';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -128,9 +129,9 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
         }
     }, [isOpen, selectedItem]);
 
-    const getUserDisplayName = (user: any) => {
-        return `${user.first_name} ${user.last_name}`.trim();
-    };
+    // This log stores the actor as a display string, so the same value backs the option
+    // label and the submitted payload. Falls back to the email when no name is on file.
+    const getUserLabel = (user: any) => getUserDisplayName(user, user?.email_address || user?.email || '');
 
     const getAvailableUsers = (currentValue: string) => {
         const otherSelectedValues = [
@@ -139,7 +140,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
             formData.requested_with_10,
         ].filter((val) => val !== 'None' && val !== currentValue);
 
-        return users.filter((u) => !otherSelectedValues.includes(getUserDisplayName(u)));
+        return users.filter((u) => !otherSelectedValues.includes(getUserLabel(u)));
     };
 
     const handleQuantityChange = (type: 'inc' | 'dec') => {
@@ -254,14 +255,14 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 onPress={() => {
                                     setFormData((prev) => ({
                                         ...prev,
-                                        [fieldKey]: getUserDisplayName(u),
+                                        [fieldKey]: getUserLabel(u),
                                     }));
                                     onToggle();
                                 }}
                                 className={`px-4 py-[10px] active:bg-gray-100 ${index !== getAvailableUsers(value).length - 1 ? 'border-b border-gray-100' : ''}`}
                             >
                                 <Text className="text-gray-900 text-sm">
-                                    {getUserDisplayName(u)}
+                                    {getUserLabel(u)}
                                 </Text>
                             </Pressable>
                         ))}

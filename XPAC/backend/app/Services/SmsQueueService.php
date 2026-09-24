@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\SmsQueue;
 use App\Services\ItexmoSmsService;
+use Carbon\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -19,14 +20,8 @@ class SmsQueueService
      */
     protected const MAX_ATTEMPTS = 3;
 
-    /**
-     * Rows per INSERT when a blast is queued.
-     *
-     * A blast to every subscriber is tens of thousands of rows. One statement for the lot builds a
-     * packet large enough to trip max_allowed_packet and writes a single enormous binlog event;
-     * chunking keeps each statement short and bounded.
-     */
-    protected const INSERT_CHUNK = 500;
+    /** Tag every line of the run log carries, mirroring AutoDisconnectService. */
+    private string $logName = 'SMS_Queue';
 
     protected ItexmoSmsService $smsService;
 
@@ -82,8 +77,6 @@ class SmsQueueService
                 'status' => 'pending',
                 'time_sent' => $timeSent,
                 'dedupe_key' => $dedupeKey,
-                'source' => $data['source'] ?? null,
-                'reference_id' => $data['reference_id'] ?? null,
             ]);
         } catch (QueryException $e) {
             // Lost the race against a concurrent run holding the same dedupe_key. That run has
@@ -112,88 +105,10 @@ class SmsQueueService
     }
 
     /**
-     * Queue one SMS blast for background delivery, at most once per recipient.
-     *
-     * This is what replaced the provider loop that used to run inside the request. A blast to a
-     * populated LCPNAP is hundreds of subscribers, each one an HTTP round trip to iTexMo taking a
-     * second or more; the browser gave up long before the loop did, and the failure surfaced as a
-     * CORS error because a timed-out response carries no CORS headers at all. Nothing here talks to
-     * the provider — the rows are written, the request ends, and the cron worker sends them.
-     *
-     * Every row carries a dedupe_key over (blast, account, contact), so the batch is safe to write
-     * twice: a retried request, or a second call for the same blast, inserts nothing the first one
-     * already wrote. INSERT IGNORE settles that at the database rather than by reading first, which
-     * two concurrent requests could both pass.
-     *
-     * @param  iterable  $recipients  rows carrying contact_no and account_no
-     * @return int  rows newly queued — below the recipient count when some were already queued
-     */
-    public function queueBlast(int $blastId, iterable $recipients, string $message): int
-    {
-        $now = now();
-        $queued = 0;
-        $chunk = [];
-        $seen = [];
-
-        foreach ($recipients as $recipient) {
-            $contactNo = trim((string) ($recipient->contact_no ?? ''));
-
-            if ($contactNo === '') {
-                continue;
-            }
-
-            $accountNo = $recipient->account_no ?? null;
-            $dedupeKey = $this->blastDedupeKeyFor($blastId, $accountNo, $contactNo);
-
-            // An account can carry more than one row in the recipient query — a second technical
-            // details row, say. INSERT IGNORE would drop the repeat anyway; dropping it here keeps
-            // the returned count honest about how many subscribers are actually being texted.
-            if (isset($seen[$dedupeKey])) {
-                continue;
-            }
-            $seen[$dedupeKey] = true;
-
-            $chunk[] = [
-                'account_no' => $accountNo,
-                'contact_no' => $contactNo,
-                // Substituted per recipient, exactly as the synchronous loop did.
-                'message' => str_replace('{{account_no}}', (string) ($accountNo ?? ''), $message),
-                'dedupe_key' => $dedupeKey,
-                'source' => 'sms_blast',
-                'reference_id' => (string) $blastId,
-                'status' => 'pending',
-                // Left NULL so the worker picks the row up on its next tick; scopePending() treats
-                // a NULL time_sent as due now.
-                'time_sent' => null,
-                'attempts' => 0,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ];
-
-            if (count($chunk) >= self::INSERT_CHUNK) {
-                $queued += DB::table('sms_queue')->insertOrIgnore($chunk);
-                $chunk = [];
-            }
-        }
-
-        if ($chunk !== []) {
-            $queued += DB::table('sms_queue')->insertOrIgnore($chunk);
-        }
-
-        Log::info('SMS blast queued', [
-            'blast_id' => $blastId,
-            'queued' => $queued,
-            'recipients' => count($seen),
-        ]);
-
-        return $queued;
-    }
-
-    /**
      * The idempotency key for a scheduled notification, or null when the message is not one.
      *
      * MUST stay in step with the UNIQUE index added in
-     * 2026_09_08_000001_add_dedupe_key_to_sms_queue.
+     * 2026_08_06_000002_add_dedupe_key_to_sms_queue.
      */
     public function dedupeKeyFor(?string $accountNo, string $contactNo, string $message, ?string $timeSent): ?string
     {
@@ -206,24 +121,6 @@ class SmsQueueService
             $contactNo,
             $message,
             $timeSent,
-        ]));
-    }
-
-    /**
-     * The idempotency key for one recipient of one blast.
-     *
-     * Always non-null, unlike dedupeKeyFor(): a blast row IS replayable by construction, because
-     * the controller may write the batch again for a request that was retried. The message is
-     * deliberately not part of the key — a blast is identified by its id, and hashing the text too
-     * would let a corrected message re-text everyone under the same blast.
-     */
-    public function blastDedupeKeyFor(int $blastId, ?string $accountNo, string $contactNo): string
-    {
-        return hash('sha256', implode("\0", [
-            'sms_blast',
-            (string) $blastId,
-            (string) $accountNo,
-            $contactNo,
         ]));
     }
 
@@ -246,6 +143,8 @@ class SmsQueueService
             ->get();
 
         if ($jobs->isEmpty()) {
+            // Deliberately silent. This runs inside cron:process-email-queue, every minute —
+            // banner-logging an empty queue would bury the real runs under ~1,400 lines a day.
             return [
                 'processed' => 0,
                 'sent' => 0,
@@ -253,6 +152,19 @@ class SmsQueueService
                 'skipped' => 0,
             ];
         }
+
+        $logFile = 'sms_queue_' . Carbon::now()->format('Y-m-d') . '.log';
+        $log = fn (string $message) => $this->writeLog($message, $logFile);
+        $startTime = Carbon::now();
+
+        $log("");
+        $log("╔════════════════════════════════════════════════════════════════╗");
+        $log("║              STARTING SMS QUEUE PROCESSING                     ║");
+        $log("╚════════════════════════════════════════════════════════════════╝");
+        $log("Start Time: " . $startTime->format('Y-m-d H:i:s'));
+        $log("Gateway   : " . $this->smsService->describeActiveConfig());
+        $log("Pending   : {$jobs->count()} message(s), batch size {$batchSize}, max attempts " . self::MAX_ATTEMPTS);
+        $log("");
 
         Log::info('Processing SMS queue', ['count' => $jobs->count()]);
 
@@ -277,6 +189,7 @@ class SmsQueueService
             if ($claimed === 0) {
                 // Another worker took this row between the read and the claim.
                 $stats['skipped']++;
+                $log("[SKIP] Queue #{$job->id} - claimed by another worker");
                 continue;
             }
 
@@ -289,32 +202,51 @@ class SmsQueueService
                 // Carried through so sms_logs records which account the message belonged to —
                 // without it every queued message logs against a NULL account and cannot be traced.
                 'account_no' => $job->account_no,
-                'source' => $job->source ?: 'sms_queue',
-                'reference_id' => $job->reference_id ?: (string) $job->id,
+                'source' => 'sms_queue',
+                'reference_id' => (string) $job->id,
             ]);
+
+            // The gateway itself cannot send — an empty balance, a disabled account. Marking this
+            // row failed and moving on would walk the whole batch into 'failed' at one attempt
+            // each, for a reason that has nothing to do with any of the messages. Give the claim
+            // back instead and stop: the rows stay pending, with their attempts intact, and go out
+            // on the next run once the account can send again.
+            if (!empty($result['account_blocked'])) {
+                SmsQueue::where('id', $job->id)
+                    ->where('attempts', $attemptsAtRead + 1)
+                    ->update(['attempts' => $attemptsAtRead, 'updated_at' => now()]);
+
+                $stats['processed']--;
+                $stats['aborted'] = true;
+                $stats['abort_reason'] = $result['error'] ?? 'gateway unavailable';
+
+                $log("");
+                $log("[ABORT] Gateway cannot send - run stopped, remaining messages left pending");
+                $log("        Reason: " . $stats['abort_reason']);
+                Log::error('SMS queue run aborted: gateway cannot send', [
+                    'id' => $job->id,
+                    'error' => $stats['abort_reason'],
+                ]);
+
+                break;
+            }
 
             if ($result['success']) {
                 $job->markAsSent();
                 $stats['sent']++;
-                Log::info('SMS sent from queue', [
-                    'id' => $job->id,
-                    'account_no' => $job->account_no,
-                    'source' => $job->source,
-                    'reference_id' => $job->reference_id,
-                ]);
+                $log("[SENT] Queue #{$job->id} - Account: {$job->account_no} - To: {$job->contact_no}");
+                Log::info('SMS sent from queue', ['id' => $job->id, 'account_no' => $job->account_no]);
             } else {
-                $job->markAsFailed($result['error'] ?? 'Unknown error');
+                $error = $result['error'] ?? 'Unknown error';
+                $job->markAsFailed($error);
                 $stats['failed']++;
+                $log("[FAIL] Queue #{$job->id} - Account: {$job->account_no} - To: {$job->contact_no} - Attempt {$job->attempts}/" . self::MAX_ATTEMPTS);
+                $log("       Reason: {$error}");
                 Log::error('SMS failed from queue', [
                     'id' => $job->id,
                     'account_no' => $job->account_no,
-                    'source' => $job->source,
-                    'reference_id' => $job->reference_id,
                     'attempts' => $job->attempts,
-                    // The provider's own words — "No SMS Balance", "Invalid ApiCode/Credentials" —
-                    // rather than a generic retry count. ItexmoSmsService translates the gateway's
-                    // numeric codes so this line is the one an operator can actually act on.
-                    'error' => $result['error'] ?? 'Unknown error',
+                    'error' => $error,
                 ]);
             }
 
@@ -322,7 +254,42 @@ class SmsQueueService
             usleep(200000);
         }
 
+        $endTime = Carbon::now();
+        $log("");
+        $log("Processed : {$stats['processed']}  Sent: {$stats['sent']}  Failed: {$stats['failed']}  Skipped: {$stats['skipped']}");
+        if (!empty($stats['aborted'])) {
+            $log("Status    : ABORTED - messages left pending for the next run");
+        }
+        $log("End Time  : " . $endTime->format('Y-m-d H:i:s') . " (" . $startTime->diffInSeconds($endTime) . "s)");
+        $log("╚════════════════════════════════════════════════════════════════╝");
+
         return $stats;
+    }
+
+    /**
+     * Append one line to the SMS queue run log.
+     *
+     * Mirrors AutoDisconnectService::writeLog: its own dated file under storage/logs/smsqueue, plus
+     * a copy on the default channel. The queue previously reported only aggregate counts into the
+     * shared emailqueue log, so a failing send left no record of which number or which reason.
+     *
+     * @param string $fileName Log file to append to, relative to storage/logs/smsqueue.
+     */
+    private function writeLog(string $message, string $fileName = 'sms_queue.log'): void
+    {
+        $timestamp = Carbon::now()->format('Y-m-d H:i:s');
+        $logMessage = "[{$timestamp}] [{$this->logName}] {$message}";
+
+        $logDir = storage_path('logs/smsqueue');
+        $logFile = $logDir . '/' . $fileName;
+
+        if (!file_exists($logDir)) {
+            mkdir($logDir, 0755, true);
+        }
+
+        file_put_contents($logFile, $logMessage . PHP_EOL, FILE_APPEND);
+
+        Log::channel('single')->info("[{$this->logName}] {$message}");
     }
 
     /**

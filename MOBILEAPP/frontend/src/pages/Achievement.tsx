@@ -4,7 +4,7 @@ import { CheckCircle } from 'lucide-react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus } from '../utils/agentReferral';
+import { createAgentReferralMatcher, getOnsiteStatus, isDoneOnsiteStatus, storedReferralOf } from '../utils/agentReferral';
 import { useJobOrderContext } from '../contexts/JobOrderContext';
 import { 
     fetchAgentAchievements, 
@@ -92,7 +92,7 @@ const Achievement: React.FC = () => {
 
         let onboarded = 0;
         for (const jo of jobOrders) {
-            if (!ownsReferral(jo.Referred_By || jo.referred_by || '')) continue;
+            if (!ownsReferral(storedReferralOf(jo))) continue;
             if (isDoneOnsiteStatus(getOnsiteStatus(jo))) onboarded++;
         }
         return onboarded;

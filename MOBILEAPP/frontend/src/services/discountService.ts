@@ -1,3 +1,9 @@
+// The shared apiClient, so discount requests carry the session cookie, Origin
+// and XSRF token like every other service (the web client made the same
+// change). This used to be a standalone axios instance whose only credential
+// was a Bearer token read from an `auth_token` key nothing ever writes, so the
+// API saw these requests signed out: the /discounts routes require a session
+// (auth:sanctum), and the backend records the acting user from it.
 import apiClient from '../config/api';
 
 export interface DiscountData {
