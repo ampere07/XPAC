@@ -3,17 +3,17 @@
   "name": "XPAC - Customer Billing Management",
   "icons": [
     {
-      "src": "gowiserlogo.png",
+      "src": "xpacslogo-64.png",
       "type": "image/png",
-      "sizes": "64x64 32x32 24x24 16x16"
+      "sizes": "64x64"
     },
     {
-      "src": "gowiserlogo.png",
+      "src": "xpacslogo-192.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "gowiserlogo.png",
+      "src": "xpacslogo-512.png",
       "type": "image/png",
       "sizes": "512x512"
     }

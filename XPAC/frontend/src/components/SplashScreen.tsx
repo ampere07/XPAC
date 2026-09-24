@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import gowiserlogo from '../assets/gowiserlogo.png';
+import gowiserlogo from '../assets/xpacslogo.jpg';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 const SplashScreen: React.FC = () => {

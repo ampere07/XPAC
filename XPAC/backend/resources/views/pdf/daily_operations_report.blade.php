@@ -29,7 +29,7 @@
     $num  = fn ($v) => is_numeric($v) ? (float) $v : (float) preg_replace('/[^0-9.\-]/', '', (string) $v);
     $peso = fn ($v) => '₱' . number_format($num($v), 2);
 
-    $company     = $company     ?? 'GO WISER';
+    $company     = $company     ?? 'XPAC';
     $reportTitle = $reportTitle ?? 'Daily Operations Report';
     $preparedBy  = $preparedBy  ?? '';
 

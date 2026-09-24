@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Image, Text, ActivityIndicator, DeviceEventEmitter } from 'react-native';
-import logo2 from '../assets/applogo.png';
+import logo2 from '../assets/xpacslogo-splash.png';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 /**
@@ -11,9 +11,9 @@ import { settingsColorPaletteService, ColorPalette } from '../services/settingsC
 const FALLBACK_PRIMARY = '#77c254';
 
 /**
- * applogo.png is a 2048x2048 opaque white square whose artwork only fills the middle
- * ~65% x 44% of the canvas. With resizeMode 'contain' the box is sized off the square, not the
- * artwork, so the mark renders at roughly 65% x 44% of these numbers. The white padding is
+ * xpacslogo-splash.png is a 2048x2048 opaque white square whose artwork only fills the middle
+ * ~65% x 24% of the canvas. With resizeMode 'contain' the box is sized off the square, not the
+ * artwork, so the mark renders at roughly 65% x 24% of these numbers. The white padding is
  * invisible against the white background, so a generous box is safe.
  */
 const LOGO_BOX = 240;

@@ -410,7 +410,7 @@ class AgentInvoicePdfService
             // as "P" rather than rendering as a blank box on every line.
             'peso'        => 'P',
             // Printed in place of the header artwork when none is installed.
-            'brandName'   => (string) config('agent_invoices.brand_name', 'GOWISER'),
+            'brandName'   => (string) config('agent_invoices.brand_name', 'XPAC'),
             'headerImage' => $this->imageData(self::HEADER_IMAGE),
             'footerImage' => $this->imageData(self::FOOTER_IMAGE),
             // slot => font URL, or null where nothing is installed for it.

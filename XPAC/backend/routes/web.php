@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', function () {
     return response()->json([
         'status' => 'online',
-        'service' => 'GOWISER API Backend',
+        'service' => 'XPAC API Backend',
         'timestamp' => now()->toIso8601String()
     ]);
 });

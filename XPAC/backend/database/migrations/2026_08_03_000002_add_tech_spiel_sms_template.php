@@ -24,7 +24,7 @@ return new class extends Migration
 
     private const TEMPLATE_TYPE = 'Technician';
 
-    private const MESSAGE = 'Hi, This is from Go Wiser. I am your assigned technician for '
+    private const MESSAGE = 'Hi, This is from XPAC. I am your assigned technician for '
         . 'your installation today. May I Confirm if you are available right now for the '
         . 'installation? Thank you';
 

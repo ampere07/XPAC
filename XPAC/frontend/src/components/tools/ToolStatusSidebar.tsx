@@ -184,14 +184,7 @@ const ToolStatusSidebar: React.FC<ToolStatusSidebarProps> = ({
             selectedId={selectedId}
             onSelect={select}
             expanded={expanded}
-            onToggleExpand={(id) =>
-              setExpanded((prev) => {
-                const next = new Set(prev);
-                if (next.has(id)) next.delete(id);
-                else next.add(id);
-                return next;
-              })
-            }
+            onToggleExpand={toggleExpansion}
             isDarkMode={isDarkMode}
             accent={accent}
           />

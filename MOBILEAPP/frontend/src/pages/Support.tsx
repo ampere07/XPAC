@@ -468,7 +468,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const handleResumePendingPayment = handleOpenPaymentLink;
 
   const handleOpenChat = async () => {
-    const webUrl = 'https://m.me/gowiserzc';
+    const webUrl = 'https://m.me/61564025879019';
     const messengerAppUrl = 'fb-messenger://user-thread/';
     try {
       const canOpenMessenger = await Linking.canOpenURL(messengerAppUrl);

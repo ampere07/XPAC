@@ -8,8 +8,8 @@ self.addEventListener('push', (event) => {
     const title = data.title || 'New Notification';
     const options = {
         body: data.message || 'You have a new update.',
-        icon: '/gowiserlogo.png',
-        badge: '/gowiserlogo.png',
+        icon: '/xpacslogo-192.png',
+        badge: '/xpacslogo-192.png',
         tag: data.tag || 'gowiser-notification',
         requireInteraction: true,
         data: data.url || '/'

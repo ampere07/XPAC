@@ -20,7 +20,7 @@
 
     @unless ($headerImage)
         {{-- Artwork missing: the invoice still has to be a usable document. --}}
-        <div class="brand-fallback"><span class="name">{{ $brandName ?? 'GOWISER' }}</span></div>
+        <div class="brand-fallback"><span class="name">{{ $brandName ?? 'XPAC' }}</span></div>
     @endunless
 
     <div class="banner">BOOTH - REFERRAL</div>

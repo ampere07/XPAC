@@ -11,7 +11,7 @@ return [
     | name and is not safe to print on documents that go out to recipients.
     |
     */
-    'brand' => env('REPORTS_BRAND', 'GOWISER'),
+    'brand' => env('REPORTS_BRAND', 'XPAC'),
 
     /*
     |--------------------------------------------------------------------------
@@ -66,9 +66,9 @@ return [
     |--------------------------------------------------------------------------
     */
     'mail' => [
-        'from'      => env('REPORTS_MAIL_FROM', 'billing@gowiser.ph'),
-        'reply_to'  => env('REPORTS_MAIL_REPLY_TO', 'billing@gowiser.ph'),
-        'from_name' => env('REPORTS_MAIL_FROM_NAME', 'GOWISER Reports'),
+        'from'      => env('REPORTS_MAIL_FROM', 'billing@xpacsconnect.ph'),
+        'reply_to'  => env('REPORTS_MAIL_REPLY_TO', 'billing@xpacsconnect.ph'),
+        'from_name' => env('REPORTS_MAIL_FROM_NAME', 'XPAC Reports'),
     ],
 
     /*

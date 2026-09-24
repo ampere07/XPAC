@@ -2088,8 +2088,8 @@ class JobOrderController extends Controller
                         $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
                         $emailBody = str_replace('{{customer_name}}', $customerName, $emailBody);
                         $emailBody = str_replace('{{customer_tag}}', $customerName, $emailBody);
-                        $emailBody = str_replace('{{company_name}}', 'GOWISER', $emailBody);
-                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/gowiserzc', $emailBody);
+                        $emailBody = str_replace('{{company_name}}', 'XPAC', $emailBody);
+                        $emailBody = str_replace('{{fb_username}}', 'https://www.facebook.com/profile.php?id=61564025879019', $emailBody);
                         $emailBody = str_replace('{{account_no}}', $accountNumber, $emailBody);
                         $emailBody = str_replace('{{username}}', $generatedUsername, $emailBody);
                         $emailBody = str_replace('{{password}}', $generatedPassword, $emailBody);

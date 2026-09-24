@@ -5,7 +5,7 @@ import {
   ExternalLink, Mail, Edit, Trash2, Receipt, CheckCircle,
   ChevronDown, ChevronRight, AlertCircle, CircleArrowRight, ChevronLeft, Printer
 } from 'lucide-react';
-import gowiserLogo from '../assets/gowiserlogo.png';
+import gowiserLogo from '../assets/xpacslogo.jpg';
 import { transactionService, TransactionReceipt } from '../services/transactionService';
 import { relatedDataService } from '../services/relatedDataService';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
@@ -28,13 +28,13 @@ import { usePermissions } from '../hooks/usePermissions';
 // Company details printed in the Official Receipt header. These are static registration
 // details (not stored in settings), so edit them here if the company info ever changes.
 const RECEIPT_COMPANY = {
-  name: 'XPAC CORPORATION',
+  name: 'XPAC IT SOLUTIONS',
   address: 'Sta. Maria, Zamboanga City, Zamboanga del Sur, Zamboanga Peninsula (Region IX)',
   tin: '654-854-244-00000',
   sec: '2023100122771-00',
   bpNo: 'BP-2024-13126-0',
   tel: '09531354666',
-  email: 'admin@gowiser.ph',
+  email: 'admin@xpacsconnect.ph',
 };
 
 interface Transaction {

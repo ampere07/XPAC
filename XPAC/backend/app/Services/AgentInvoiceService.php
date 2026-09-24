@@ -1047,7 +1047,7 @@ class AgentInvoiceService
      */
     public function nextInvoiceNumber(): string
     {
-        $prefix  = (string) config('agent_invoices.number_prefix', 'GOWISER-AGT');
+        $prefix  = (string) config('agent_invoices.number_prefix', 'XPAC-AGT');
         $padding = (int) config('agent_invoices.number_padding', 6);
 
         $last = AgentInvoice::where('invoice_number', 'like', $prefix . '-%')

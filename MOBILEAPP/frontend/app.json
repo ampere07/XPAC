@@ -6,12 +6,12 @@
     "scheme": "gowiser-app",
     "version": "2.5.61",
     "orientation": "portrait",
-    "icon": "./assets/applogo.png",
+    "icon": "./assets/xpacslogo-icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "jsEngine": "hermes",
     "splash": {
-      "image": "./assets/applogo.png",
+      "image": "./assets/xpacslogo-splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -27,10 +27,10 @@
     },
     "android": {
       "name": "XPAC",
-      "icon": "./assets/applogo.png",
+      "icon": "./assets/xpacslogo-icon.png",
       "allowBackup": false,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/applogo.png",
+        "foregroundImage": "./assets/xpacslogo-adaptive.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
