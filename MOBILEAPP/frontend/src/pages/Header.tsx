@@ -255,7 +255,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
                   <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>A</Text>
                 </View>
                 <Text style={{ color: '#0f172a', fontWeight: 'bold', fontSize: 18, letterSpacing: 0.5 }}>
-                  GOWISER <Text style={{ fontWeight: '800', color: '#0f172a' }}>PORTAL</Text>
+                  XPAC <Text style={{ fontWeight: '800', color: '#0f172a' }}>PORTAL</Text>
                 </Text>
               </View>
             )}

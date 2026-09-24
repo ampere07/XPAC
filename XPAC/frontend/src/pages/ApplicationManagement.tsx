@@ -1339,7 +1339,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                     console.error('Failed to parse authData');
                   }
                 }
-                const url = email ? `https://apply.gowiser.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.gowiser.ph';
+                const url = email ? `https://apply.xpacsconnect.ph?created_by_email=${encodeURIComponent(email)}` : 'https://apply.xpacsconnect.ph';
                 window.open(url, '_blank', 'noopener,noreferrer');
               }}
               className="px-2.5 py-1 text-xs font-medium rounded flex items-center transition-colors shadow-sm text-white hover:opacity-90"

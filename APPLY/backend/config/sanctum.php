@@ -17,7 +17,7 @@ return [
 
     'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
         '%s%s',
-        'backend1.gowiser.ph,apply.gowiser.ph',
+        'backend1.xpacsconnect.ph,apply.xpacsconnect.ph',
         Sanctum::currentApplicationUrlWithPort()
     ))),
 

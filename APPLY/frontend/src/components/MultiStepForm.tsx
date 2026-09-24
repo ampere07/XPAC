@@ -85,7 +85,7 @@ interface MultiStepFormProps {
 }
 
 const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEditButton = false, onLayoutChange, currentLayout = 'multistep', isEditMode: externalIsEditMode, onEditModeChange, requireFields = true }, ref) => {
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.xpacsconnect.ph";
   const googleMapsApiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY || "";
   const COVERAGE_CENTER = { lat: 7.13564167995864, lng: 122.09175109863283 }; // Zamboanga City
   const COVERAGE_RADIUS = 27000; // 25km in meters - covers Zamboanga area
@@ -2030,7 +2030,7 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
                 onClick={() => {
                   setShowSuccessModal(false);
                   handleReset();
-                  window.location.href = 'https://sync.gowiser.ph';
+                  window.location.href = 'https://sync.xpacsconnect.ph';
                 }}
                 className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "GOWISER",
+    "name": "XPAC",
     "slug": "gowiser",
     "owner": "gowiserphs-team",
     "scheme": "gowiser-app",
@@ -26,7 +26,7 @@
       }
     },
     "android": {
-      "name": "GOWISER",
+      "name": "XPAC",
       "icon": "./assets/applogo.png",
       "allowBackup": false,
       "adaptiveIcon": {
@@ -81,23 +81,23 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
-          "savePhotosPermission": "Allow GOWISER to save taken photos to your phone gallery."
+          "photosPermission": "Allow XPAC to access your photos to select job order images.",
+          "savePhotosPermission": "Allow XPAC to save taken photos to your phone gallery."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow GOWISER to access your photos to select job order images.",
-          "cameraPermission": "Allow GOWISER to access your camera to take job order pictures."
+          "photosPermission": "Allow XPAC to access your photos to select job order images.",
+          "cameraPermission": "Allow XPAC to access your camera to take job order pictures."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "GOWISER shares your location with dispatch so they can see which technician is nearest a job while you are on duty.",
-          "locationAlwaysAndWhenInUsePermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
-          "locationAlwaysPermission": "GOWISER keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "locationWhenInUsePermission": "XPAC shares your location with dispatch so they can see which technician is nearest a job while you are on duty.",
+          "locationAlwaysAndWhenInUsePermission": "XPAC keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
+          "locationAlwaysPermission": "XPAC keeps sharing your location with dispatch while the app is in the background, so your position stays live on the monitoring map during your shift.",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true

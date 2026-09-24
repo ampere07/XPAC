@@ -19,8 +19,8 @@ class HandleCorsManually
         
         // Define allowed origins
         $allowedOrigins = [
-            'https://sync.gowiser.ph',
-            'https://backend.gowiser.ph',
+            'https://sync.xpacsconnect.ph',
+            'https://backend.xpacsconnect.ph',
         ];
 
         // Handle preflight OPTIONS request
@@ -32,7 +32,7 @@ class HandleCorsManually
                 $response->header('Access-Control-Allow-Origin', $origin);
             } else {
                 // Default to the frontend portal origin
-                $response->header('Access-Control-Allow-Origin', 'https://sync.gowiser.ph');
+                $response->header('Access-Control-Allow-Origin', 'https://sync.xpacsconnect.ph');
             }
             
             $response->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
@@ -51,7 +51,7 @@ class HandleCorsManually
             $response->headers->set('Access-Control-Allow-Origin', $origin);
         } else {
             // Default to the frontend portal origin
-            $response->headers->set('Access-Control-Allow-Origin', 'https://sync.gowiser.ph');
+            $response->headers->set('Access-Control-Allow-Origin', 'https://sync.xpacsconnect.ph');
         }
         
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');

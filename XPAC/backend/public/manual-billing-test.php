@@ -3,7 +3,7 @@
  * Manual Billing Generation Test
  * 
  * Upload this file to: backend/public/manual-billing-test.php
- * Access: https://backend.gowiser.ph/manual-billing-test.php?key=YOUR_SECRET_KEY&action=preview
+ * Access: https://backend.xpacsconnect.ph/manual-billing-test.php?key=YOUR_SECRET_KEY&action=preview
  * 
  * Actions:
  * - ?action=preview - Preview what will be generated (safe, no changes)

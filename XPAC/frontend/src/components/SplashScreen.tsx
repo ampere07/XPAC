@@ -36,7 +36,7 @@ const SplashScreen: React.FC = () => {
       }}>
         <img
           src={gowiserlogo}
-          alt="GOWISER Logo"
+          alt="XPAC Logo"
           style={{
             height: '80px',
             marginBottom: '10px'

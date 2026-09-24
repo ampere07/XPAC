@@ -16,8 +16,8 @@ return [
     'allowed_methods' => ['*'],
 
     'allowed_origins' => [
-        'https://sync.gowiser.ph',
-        'https://backend.gowiser.ph',
+        'https://sync.xpacsconnect.ph',
+        'https://backend.xpacsconnect.ph',
     ],
 
     'allowed_origins_patterns' => [],

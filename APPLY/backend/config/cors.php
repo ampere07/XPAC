@@ -20,8 +20,8 @@ return [
     'allowed_methods' => ['*'],
 
     'allowed_origins' => [
-        'https://apply.gowiser.ph',
-        'https://backend1.gowiser.ph',
+        'https://apply.xpacsconnect.ph',
+        'https://backend1.xpacsconnect.ph',
     ],
 
     'allowed_origins_patterns' => [],

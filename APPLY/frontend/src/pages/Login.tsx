@@ -6,7 +6,7 @@ interface LoginFormState {
 }
 
 const Login: React.FC = () => {
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.xpacsconnect.ph";
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 

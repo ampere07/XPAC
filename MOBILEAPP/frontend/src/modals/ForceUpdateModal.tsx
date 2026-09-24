@@ -77,7 +77,7 @@ const ForceUpdateModal: React.FC<ForceUpdateModalProps> = ({
                         <Text style={styles.description}>
                             {isForce
                                 ? "A critical update is required to continue using the app. Please update to the latest version to enjoy new features and security improvements."
-                                : "A new version of GOWISER is available. We recommend updating now to get the best experience."}
+                                : "A new version of XPAC is available. We recommend updating now to get the best experience."}
                         </Text>
 
                         <TouchableOpacity

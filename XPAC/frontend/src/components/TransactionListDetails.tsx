@@ -28,7 +28,7 @@ import { usePermissions } from '../hooks/usePermissions';
 // Company details printed in the Official Receipt header. These are static registration
 // details (not stored in settings), so edit them here if the company info ever changes.
 const RECEIPT_COMPANY = {
-  name: 'GO WISER CORPORATION',
+  name: 'XPAC CORPORATION',
   address: 'Sta. Maria, Zamboanga City, Zamboanga del Sur, Zamboanga Peninsula (Region IX)',
   tin: '654-854-244-00000',
   sec: '2023100122771-00',

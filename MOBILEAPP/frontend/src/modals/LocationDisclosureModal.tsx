@@ -73,7 +73,7 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
             body: 'Only so your dispatch team can see where you are on the live monitoring map, '
                 + 'assign you to nearby job orders, and confirm site visits — and so you can drop '
                 + 'an accurate pin when recording an LCP/NAP or a customer address. It is sent to '
-                + 'the GOWISER server and is not sold or shared for advertising.',
+                + 'the XPAC server and is not sold or shared for advertising.',
         },
         {
             icon: Clock,
@@ -104,7 +104,7 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
                     <Text style={styles.title}>
                         {isBackgroundStage
                             ? 'One more step'
-                            : 'GOWISER collects your location'}
+                            : 'XPAC collects your location'}
                     </Text>
 
                     {isBackgroundStage ? (
@@ -116,7 +116,7 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
                             </Text>
                             <Text style={styles.lead}>
                                 If you choose “Only while using the app”, your location is shared
-                                only while GOWISER is open on screen. Everything else in the app
+                                only while XPAC is open on screen. Everything else in the app
                                 keeps working either way.
                             </Text>
                         </>
@@ -126,7 +126,7 @@ const LocationDisclosureModal: React.FC<LocationDisclosureModalProps> = ({
                                 below, so it can never be scrolled out of view on a small screen.
                                 Everything under it is elaboration. */}
                             <Text style={styles.lead}>
-                                GOWISER collects your <Text style={styles.strong}>precise location</Text>
+                                XPAC collects your <Text style={styles.strong}>precise location</Text>
                                 {' '}and sends it to your dispatch team while you are on duty —
                                 {' '}<Text style={styles.strong}>including in the background, when the
                                 app is closed or not in use</Text>. Details below.

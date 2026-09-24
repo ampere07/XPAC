@@ -320,7 +320,7 @@ const Menu: React.FC<MenuProps> = ({ onLogout, onSectionChange }) => {
                                 <Text style={[s.logoLetter, { color: colorPalette?.primary || '#ef4444' }]}>A</Text>
                             </View>
                             <Text style={s.logoText}>
-                                GOWISER <Text style={s.logoTextBold}>PORTAL</Text>
+                                XPAC <Text style={s.logoTextBold}>PORTAL</Text>
                             </Text>
                         </View>
                     )}

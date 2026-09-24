@@ -54,7 +54,7 @@ return [
     |
     */
 
-    'url' => env('APP_URL', 'https://backend.gowiser.ph'),
+    'url' => env('APP_URL', 'https://backend.xpacsconnect.ph'),
 
     'asset_url' => env('ASSET_URL'),
 

@@ -37,7 +37,7 @@ interface FormUISettings {
 }
 
 const Dashboard: React.FC = () => {
-  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.gowiser.ph";
+  const apiBaseUrl = process.env.REACT_APP_API_URL || "https://backend1.xpacsconnect.ph";
   const formRef = useRef<FormRef>(null);
   const multiStepFormRef = useRef<MultiStepFormRef>(null);
   const [user, setUser] = useState<User | null>(null);

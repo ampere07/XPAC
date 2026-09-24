@@ -93,7 +93,7 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
     const getImageUrl = (url: string) => {
         if (!url) return '';
         if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
-        const baseUrl = process.env.REACT_APP_API_URL || 'https://backend.gowiser.ph';
+        const baseUrl = process.env.REACT_APP_API_URL || 'https://backend.xpacsconnect.ph';
         return `${baseUrl.replace(/\/$/, '')}/${url.replace(/^\//, '')}`;
     };
 

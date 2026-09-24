@@ -298,7 +298,7 @@ class BillingNotificationService
                 return null;
             }
 
-            $paymentLink = config('app.payment_link', 'https://sync.gowiser.ph');
+            $paymentLink = config('app.payment_link', 'https://sync.xpacsconnect.ph');
             $planNameRaw = $account->plan ? $account->plan->plan_name : ($customer->desired_plan ?? 'N/A');
             $planNameFormatted = str_replace('₱', 'P', $planNameRaw);
             $customerName = preg_replace('/\s+/', ' ', trim($customer->full_name));
@@ -440,7 +440,7 @@ class BillingNotificationService
      * plan is about to lapse.
      */
     protected const PREPAID_PRE_EXPIRY_SMS_TEMPLATE =
-        'Dear {{customer_name}}, your prepaid plan ({{plan_name}}) for account {{account_no}} will expire on {{due_date}}. Renew early at sync.gowiser.ph to avoid service interruption.';
+        'Dear {{customer_name}}, your prepaid plan ({{plan_name}}) for account {{account_no}} will expire on {{due_date}}. Renew early at sync.xpacsconnect.ph to avoid service interruption.';
 
     /**
      * SMS body for the prepaid pre-expiry warning.
@@ -750,7 +750,7 @@ class BillingNotificationService
                 $totalDue = $soa ? $soa->total_amount_due : $invoice->total_amount;
                 $amountDue = $soa ? $soa->amount_due : $invoice->total_amount;
                 $dueDate = $soa ? $soa->due_date : $invoice->due_date;
-                $paymentLink = config('app.payment_link', 'https://sync.gowiser.ph');
+                $paymentLink = config('app.payment_link', 'https://sync.xpacsconnect.ph');
                 
                 $message = $template->message_content;
                 
@@ -1080,7 +1080,7 @@ class BillingNotificationService
     }
     private function replaceGlobalVariables(string $message): string
     {
-        $portalUrl = 'sync.gowiser.ph';
+        $portalUrl = 'sync.xpacsconnect.ph';
         $brandName = \DB::table('form_ui')->value('brand_name') ?? 'Your ISP';
 
         $message = str_replace('{{portal_url}}', $portalUrl, $message);

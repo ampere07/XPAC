@@ -37,7 +37,7 @@ export const TECH_SPIEL_SMS: SmsTemplate = {
   name: 'Tech Spiel SMS',
   type: 'Technician',
   body:
-    'Hi, This is from Go Wiser. I am your assigned technician for your installation today. ' +
+    'Hi, This is from XPAC. I am your assigned technician for your installation today. ' +
     'May I Confirm if you are available right now for the installation? Thank you',
 };
 
