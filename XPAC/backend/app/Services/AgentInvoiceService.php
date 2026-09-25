@@ -1044,23 +1044,20 @@ class AgentInvoiceService
      * Taken from the highest number ever issued rather than a count of rows, so
      * deleting an invoice cannot hand its number to a later one. The unique key
      * on the column is the backstop if two runs reach here together.
+     *
+     * The sequence runs across prefixes: after a rebrand (ATSS-AGT → XPAC-AGT)
+     * the next number continues from the last one issued under any prefix
+     * instead of starting again at 000001.
      */
     public function nextInvoiceNumber(): string
     {
         $prefix  = (string) config('agent_invoices.number_prefix', 'XPAC-AGT');
         $padding = (int) config('agent_invoices.number_padding', 6);
 
-        $last = AgentInvoice::where('invoice_number', 'like', $prefix . '-%')
-            ->orderByRaw('LENGTH(invoice_number) DESC, invoice_number DESC')
-            ->value('invoice_number');
+        $last = AgentInvoice::selectRaw("MAX(CAST(SUBSTRING_INDEX(invoice_number, '-', -1) AS UNSIGNED)) AS n")
+            ->value('n');
 
-        $next = 1;
-        if ($last !== null) {
-            $tail = substr((string) $last, strlen($prefix) + 1);
-            if (is_numeric($tail)) {
-                $next = ((int) $tail) + 1;
-            }
-        }
+        $next = ((int) $last) + 1;
 
         return $prefix . '-' . str_pad((string) $next, $padding, '0', STR_PAD_LEFT);
     }

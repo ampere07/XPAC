@@ -12,6 +12,8 @@ interface JOAttachmentModalProps {
     onClose: () => void;
     onSave: (formData: any) => void;
     jobOrderData?: any;
+    /** The application's house front photo, used when the job order has none of its own. */
+    houseFrontFallbackUrl?: string | null;
     loading?: boolean;
 }
 
@@ -46,12 +48,13 @@ const ImageUploadField = ({
                         alt={label} 
                         className="w-full h-full object-cover" 
                         onError={(e) => {
-                            // Fallback to direct drive link if thumbnail fails
+                            // Fall back to Drive's thumbnail endpoint if the lh3 URL fails.
+                            // (uc?export=view no longer renders inside <img> tags.)
                             const currentSrc = e.currentTarget.src;
                             if (currentSrc.includes('lh3.googleusercontent.com')) {
                                 const fileId = currentSrc.split('/d/')[1]?.split('=')[0];
                                 if (fileId) {
-                                    e.currentTarget.src = `https://drive.google.com/uc?export=view&id=${fileId}`;
+                                    e.currentTarget.src = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
                                 }
                             }
                         }}
@@ -104,6 +107,7 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
     onClose,
     onSave,
     jobOrderData,
+    houseFrontFallbackUrl,
     loading = false
 }) => {
     const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
@@ -185,15 +189,17 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
 
     useEffect(() => {
         if (isOpen && jobOrderData) {
-            // Load existing images if available
+            // Load existing images if available. The field-name variants match the
+            // ones JobOrderDetails reads, so anything shown there previews here too.
+            const jo = jobOrderData;
             setPreviews({
-                setupImage: convertGoogleDriveUrl(jobOrderData.setup_image_url || jobOrderData.Setup_Image_URL),
-                speedTestImage: convertGoogleDriveUrl(jobOrderData.speedtest_image_url || jobOrderData.Speedtest_Image_URL),
-                signedContract: convertGoogleDriveUrl(jobOrderData.signed_contract_image_url || jobOrderData.Signed_Contract_Image_URL),
-                boxReadingImage: convertGoogleDriveUrl(jobOrderData.box_reading_image_url || jobOrderData.Box_Reading_Image_URL),
-                routerReading: convertGoogleDriveUrl(jobOrderData.router_reading_image_url || jobOrderData.Router_Reading_Image_URL),
-                portLabel: convertGoogleDriveUrl(jobOrderData.port_label_image_url || jobOrderData.Port_Label_Image_URL),
-                houseFrontImage: convertGoogleDriveUrl(jobOrderData.house_front_image_url || jobOrderData.house_front_picture_url || jobOrderData.houseFrontPicture || jobOrderData.House_Front_Image_URL),
+                setupImage: convertGoogleDriveUrl(jo.setup_image_url || jo.Setup_Image_URL || jo.Setup_Image_Url),
+                speedTestImage: convertGoogleDriveUrl(jo.speedtest_image_url || jo.Speedtest_Image_URL || jo.speedtest_image || jo.Speedtest_Image),
+                signedContract: convertGoogleDriveUrl(jo.signed_contract_image_url || jo.Signed_Contract_Image_URL || jo.signed_contract_url || jo.Signed_Contract_URL),
+                boxReadingImage: convertGoogleDriveUrl(jo.box_reading_image_url || jo.Box_Reading_Image_URL || jo.box_reading_url || jo.Box_Reading_URL),
+                routerReading: convertGoogleDriveUrl(jo.router_reading_image_url || jo.Router_Reading_Image_URL || jo.router_reading_url || jo.Router_Reading_URL),
+                portLabel: convertGoogleDriveUrl(jo.port_label_image_url || jo.Port_Label_Image_URL || jo.port_label_url || jo.Port_Label_URL),
+                houseFrontImage: convertGoogleDriveUrl(jo.house_front_image_url || jo.house_front_picture_url || jo.House_Front_Picture_URL || jo.house_front_picture || jo.House_Front_Picture || jo.houseFrontPicture || jo.House_Front_Image_URL || houseFrontFallbackUrl),
             });
         } else if (!isOpen) {
             // Reset
@@ -216,7 +222,7 @@ const JOAttachmentModal: React.FC<JOAttachmentModalProps> = ({
                 houseFrontImage: null,
             });
         }
-    }, [isOpen, jobOrderData]);
+    }, [isOpen, jobOrderData, houseFrontFallbackUrl]);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>, field: string) => {
         if (e.target.files && e.target.files[0]) {

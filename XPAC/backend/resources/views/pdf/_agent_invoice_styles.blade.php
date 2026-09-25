@@ -114,7 +114,7 @@
            full width of the page, not merely against the date. */
         .meta { width: 100%; border-collapse: collapse; margin-bottom: 8px; position: relative; }
         .meta td {
-            color: #d0202f;
+            color: #ea580c;
             font-family: {{ $fonts['meta'] ? 'InvoiceMeta, ' : '' }}Helvetica, Arial, sans-serif;
             font-size: 14px;
             font-weight: {{ $fonts['meta'] ? 'normal' : 'bold' }};
@@ -196,12 +196,12 @@
             padding: 3px 14px;
         }
         table.totals td.value { text-align: right; }
-        /* On the subtotal row only the figure is picked out in red; the label
+        /* On the subtotal row only the figure is picked out in orange; the label
            stays white with the rest of the block. */
-        table.totals tr.grand td.value { color: #ff5a5a; }
+        table.totals tr.grand td.value { color: #fb923c; }
 
         .signature {
-            color: #d0202f;
+            color: #ea580c;
             font-size: 14px;
             font-weight: bold;
             font-style: italic;
@@ -215,8 +215,8 @@
 
         .thanks {
             text-align: right;
-            /* The same red as SIGNATURE:, which it now sits level with. */
-            color: #d0202f;
+            /* The same orange as SIGNATURE:, which it now sits level with. */
+            color: #ea580c;
             font-family: {{ $fonts['script'] ? 'InvoiceScript, ' : '' }}Helvetica, Arial, sans-serif;
             font-size: {{ $fonts['script'] ? '40px' : '30px' }};
             /* Italic only stands in for a script face; a real one is already
@@ -242,7 +242,7 @@
         }
         .footer-art { width: 100%; display: block; }
 
-        .footer-fallback { border-top: 4px solid #d0202f; padding-top: 6px; }
+        .footer-fallback { border-top: 4px solid #ea580c; padding-top: 6px; }
         .footer-fallback .bar { height: 10px; background: #1a2e46; }
 
         /* Pre-installation reference, at the foot of the invoice.

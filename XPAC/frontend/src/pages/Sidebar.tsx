@@ -259,22 +259,22 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     // An agent's own weekly referral invoices, scoped server side to their team, or to
     // themselves when they belong to none.
     { id: 'agent-invoices', label: 'Invoices', icon: FileText, onlyRoles: [ROLE.AGENT] },
-    {
-      id: 'agent-group',
-      label: 'Agent',
-      icon: UserCheck,
-      // Not offered to agents: they have the two entries above instead.
-      exceptRoles: [ROLE.AGENT],
-      children: [
-        { id: 'commission', label: 'Pay Out/In', icon: DollarSign },
-        { id: 'bonus-history', label: 'Bonus History', icon: Gift },
-        { id: 'team-agent', label: 'Team Agents', icon: Users },
-        { id: 'agent-management', label: 'Agent Management', icon: User },
-        { id: 'agent-payout', label: 'Agent Payout', icon: DollarSign },
-        // Weekly referral invoices, one per team and one per solo agent.
-        { id: 'agent-invoices', label: 'Invoices', icon: FileText }
-      ]
-    },
+    // {
+    //   id: 'agent-group',
+    //   label: 'Agent',
+    //   icon: UserCheck,
+    //   // Not offered to agents: they have the two entries above instead.
+    //   exceptRoles: [ROLE.AGENT],
+    //   children: [
+    //     { id: 'commission', label: 'Pay Out/In', icon: DollarSign },
+    //     { id: 'bonus-history', label: 'Bonus History', icon: Gift },
+    //     { id: 'team-agent', label: 'Team Agents', icon: Users },
+    //     { id: 'agent-management', label: 'Agent Management', icon: User },
+    //     { id: 'agent-payout', label: 'Agent Payout', icon: DollarSign },
+    //     // Weekly referral invoices, one per team and one per solo agent.
+    //     { id: 'agent-invoices', label: 'Invoices', icon: FileText }
+    //   ]
+    // },
     {
       id: 'inventory-group',
       label: 'Inventory',
@@ -332,7 +332,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         // Role Management. Listed for whoever holds `roles`: SuperAdmin among
         // the seeded roles (the web withholds it from Administrator), and any
         // custom role granted it.
-        { id: 'roles', label: 'Roles', icon: Shield }
+        // { id: 'roles', label: 'Roles', icon: Shield }
       ]
     },
     {

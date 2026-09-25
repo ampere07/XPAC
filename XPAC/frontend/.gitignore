@@ -10,6 +10,8 @@
 /build/
 /build
 build-deploy.zip
+# copied from node_modules by scripts/copy-tinymce.js
+/public/tinymce
 # misc
 .DS_Store
 .env

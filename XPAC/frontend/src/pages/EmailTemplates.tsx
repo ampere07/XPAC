@@ -1057,7 +1057,8 @@ const EmailTemplates: React.FC = () => {
                     <div className="flex-1 min-h-[600px] border rounded overflow-hidden">
                       <Editor
                         key="main-editor"
-                        apiKey="f539el807y6kwefdib0nm8ml3wq8efjee4nzc9i79rplyld5"
+                        tinymceScriptSrc={`${process.env.PUBLIC_URL}/tinymce/tinymce.min.js`}
+                        licenseKey="gpl"
                         onInit={(evt, editor) => tinymceRef.current = editor}
                         initialValue={formData.Body_HTML}
                         disabled={false}
@@ -1407,7 +1408,8 @@ const EmailTemplates: React.FC = () => {
                       }`}>
                       <Editor
                         key={`preview-${selectedTemplate?.Template_Code}-${paperPadding}`}
-                        apiKey="f539el807y6kwefdib0nm8ml3wq8efjee4nzc9i79rplyld5"
+                        tinymceScriptSrc={`${process.env.PUBLIC_URL}/tinymce/tinymce.min.js`}
+                        licenseKey="gpl"
                         value={selectedTemplate?.Body_HTML || ''}
                         disabled={true}
                         init={{

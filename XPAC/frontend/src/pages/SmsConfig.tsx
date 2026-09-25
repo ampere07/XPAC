@@ -209,7 +209,11 @@ const SmsConfig: React.FC = () => {
       setShowPassword({});
     } catch (error: any) {
       console.error('Error saving SMS config:', error);
-      const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error occurred';
+      // A 422 carries per-field messages in `errors`; show those rather than the bare "Validation failed".
+      const fieldErrors = error.response?.data?.errors;
+      const errorMessage = fieldErrors && typeof fieldErrors === 'object'
+        ? Object.values(fieldErrors).flat().join(' ')
+        : error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error occurred';
       setModal({
         isOpen: true,
         type: 'error',
@@ -353,6 +357,7 @@ const SmsConfig: React.FC = () => {
                           type="text"
                           value={formData.code}
                           onChange={(e) => handleInputChange('code', e.target.value)}
+                          autoComplete="off"
                           placeholder={formData.provider === 'semaphore' ? 'Enter API Key' : 'Enter API code'}
                           className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                             ? 'bg-gray-700 border-gray-600 text-white'
@@ -382,6 +387,7 @@ const SmsConfig: React.FC = () => {
                               type="email"
                               value={formData.email}
                               onChange={(e) => handleInputChange('email', e.target.value)}
+                              autoComplete="off"
                               placeholder="Enter email"
                               className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                                 ? 'bg-gray-700 border-gray-600 text-white'
@@ -410,6 +416,7 @@ const SmsConfig: React.FC = () => {
                                 type={showPassword[config.id] ? 'text' : 'password'}
                                 value={formData.password}
                                 onChange={(e) => handleInputChange('password', e.target.value)}
+                                autoComplete="new-password"
                                 placeholder="Enter password"
                                 className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                                   ? 'bg-gray-700 border-gray-600 text-white'
@@ -450,6 +457,7 @@ const SmsConfig: React.FC = () => {
                           type="text"
                           value={formData.sender}
                           onChange={(e) => handleInputChange('sender', e.target.value)}
+                          autoComplete="off"
                           placeholder="Enter sender name"
                           className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                             ? 'bg-gray-700 border-gray-600 text-white'
@@ -670,6 +678,7 @@ const SmsConfig: React.FC = () => {
                         type="text"
                         value={formData.code}
                         onChange={(e) => handleInputChange('code', e.target.value)}
+                        autoComplete="off"
                         placeholder={formData.provider === 'semaphore' ? 'Enter API Key' : 'Enter API code'}
                         className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                           ? 'bg-gray-700 border-gray-600 text-white'
@@ -700,6 +709,7 @@ const SmsConfig: React.FC = () => {
                             type="email"
                             value={formData.email}
                             onChange={(e) => handleInputChange('email', e.target.value)}
+                            autoComplete="off"
                             placeholder="Enter email"
                             className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                               ? 'bg-gray-700 border-gray-600 text-white'
@@ -729,6 +739,7 @@ const SmsConfig: React.FC = () => {
                               type={showPassword[0] ? 'text' : 'password'}
                               value={formData.password}
                               onChange={(e) => handleInputChange('password', e.target.value)}
+                              autoComplete="new-password"
                               placeholder="Enter password"
                               className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                                 ? 'bg-gray-700 border-gray-600 text-white'
@@ -770,6 +781,7 @@ const SmsConfig: React.FC = () => {
                         type="text"
                         value={formData.sender}
                         onChange={(e) => handleInputChange('sender', e.target.value)}
+                        autoComplete="off"
                         placeholder="Enter sender name"
                         className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
                           ? 'bg-gray-700 border-gray-600 text-white'
