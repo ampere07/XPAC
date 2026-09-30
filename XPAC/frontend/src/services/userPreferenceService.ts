@@ -14,7 +14,6 @@ const getLocalStorageKey = (key: string): string => {
 const saveToLocalStorage = (key: string, value: any): void => {
   try {
     localStorage.setItem(getLocalStorageKey(key), JSON.stringify(value));
-    console.log('[UserPreferenceService] Saved to localStorage', { key, value });
   } catch (error) {
     console.error('[UserPreferenceService] Failed to save to localStorage', error);
   }
@@ -25,7 +24,6 @@ const getFromLocalStorage = (key: string): any | null => {
     const stored = localStorage.getItem(getLocalStorageKey(key));
     if (stored) {
       const parsed = JSON.parse(stored);
-      console.log('[UserPreferenceService] Retrieved from localStorage', { key, value: parsed });
       return parsed;
     }
   } catch (error) {
@@ -36,11 +34,6 @@ const getFromLocalStorage = (key: string): any | null => {
 
 export const getUserPreference = async (key: string, defaultValue: any = null): Promise<any> => {
   try {
-    console.log('[UserPreferenceService] Fetching preference', {
-      key,
-      defaultValue,
-      url: `${API_BASE_URL}/user-preferences/${key}`
-    });
 
     const response = await fetch(`${API_BASE_URL}/user-preferences/${key}`, {
       method: 'GET',
@@ -51,22 +44,18 @@ export const getUserPreference = async (key: string, defaultValue: any = null): 
       credentials: 'include',
     });
 
-    console.log('[UserPreferenceService] Fetch response status:', response.status);
 
     if (!response.ok) {
-      console.log('[UserPreferenceService] Server fetch failed, checking localStorage');
       const localValue = getFromLocalStorage(key);
       return localValue !== null ? localValue : defaultValue;
     }
 
     const result = await response.json();
-    console.log('[UserPreferenceService] Fetch result:', result);
     
     if (result.success && result.data.value) {
       return result.data.value;
     }
     
-    console.log('[UserPreferenceService] No server value, checking localStorage');
     const localValue = getFromLocalStorage(key);
     return localValue !== null ? localValue : defaultValue;
   } catch (error) {
@@ -78,15 +67,8 @@ export const getUserPreference = async (key: string, defaultValue: any = null): 
 
 export const setUserPreference = async (key: string, value: any): Promise<boolean> => {
   try {
-    console.log('[UserPreferenceService] Starting save operation', {
-      key,
-      value,
-      url: `${API_BASE_URL}/user-preferences/${key}`,
-      timestamp: new Date().toISOString()
-    });
 
     const requestBody = { value };
-    console.log('[UserPreferenceService] Request body:', requestBody);
 
     const response = await fetch(`${API_BASE_URL}/user-preferences/${key}`, {
       method: 'POST',
@@ -98,19 +80,15 @@ export const setUserPreference = async (key: string, value: any): Promise<boolea
       body: JSON.stringify(requestBody),
     });
 
-    console.log('[UserPreferenceService] Response status:', response.status);
-    console.log('[UserPreferenceService] Response ok:', response.ok);
 
     let result;
     try {
       result = await response.json();
-      console.log('[UserPreferenceService] Response data:', result);
     } catch (e) {
       console.error('[UserPreferenceService] Failed to parse JSON response');
       const text = await response.text();
       console.error('[UserPreferenceService] Response text:', text);
       
-      console.log('[UserPreferenceService] Server error, saving to localStorage as fallback');
       saveToLocalStorage(key, value);
       return true;
     }
@@ -126,7 +104,6 @@ export const setUserPreference = async (key: string, value: any): Promise<boolea
       return true;
     }
     
-    console.log('[UserPreferenceService] Successfully saved to server');
     saveToLocalStorage(key, value);
     return true;
   } catch (error) {

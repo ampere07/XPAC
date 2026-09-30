@@ -1397,13 +1397,10 @@ class ServiceOrderApiController extends Controller
             ) {
                 $purgeAccount = BillingAccount::where('account_no', $savedOrder->account_no)->first();
                 if ($purgeAccount) {
-                    // Disconnect in RADIUS first, unless this save already ran the pullout or the
-                    // account is already in Pullout status: deleting a customer who is still
-                    // online would leave them with free service and no record.
-                    if ($pulloutStatus === null && (int) $purgeAccount->billing_status_id !== 5) {
-                        $pulloutStatus = $this->attemptPullout($purgeAccount, $updatedByUser, $organizationId);
-                    }
-
+                    // No separate RADIUS disconnect first: the purge deletes the username from
+                    // RADIUS outright, and refuses to touch the records if it cannot. Running a
+                    // disconnect as well only added slow RADIUS round-trips to this one request,
+                    // enough to outlast the web server's time limit.
                     $customerPurge = app(\App\Services\CustomerPurgeService::class)
                         ->purge($savedOrder->account_no, (string) $updatedByUser, (int) $id);
                 }
@@ -1412,7 +1409,7 @@ class ServiceOrderApiController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => match ($customerPurge['status'] ?? null) {
-                    'success' => 'Pullout completed. Customer ' . $customerPurge['account_no'] . ' was deleted from RADIUS and all related records were permanently deleted (disconnection logs kept).',
+                    'success' => 'Pullout completed. Customer ' . $customerPurge['account_no'] . ' was deleted from customers, billing accounts, technical details, service orders and their portal login (RADIUS checked).',
                     'failed' => 'Service order updated, but customer ' . $customerPurge['account_no'] . ' was NOT deleted: ' . $customerPurge['error'] . ' Save the service order again to retry.',
                     default => 'Service order updated successfully',
                 },

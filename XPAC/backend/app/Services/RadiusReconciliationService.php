@@ -1227,19 +1227,39 @@ class RadiusReconciliationService
     }
 
     /**
-     * Remove an account from EVERY configured RADIUS server, strictly.
+     * Remove an account from EVERY configured RADIUS server.
      *
-     * Unlike deleteFromRadius(), a server that cannot be reached is a failure, not
-     * "not present": callers use this before permanently deleting the customer's
-     * records, and treating an outage as "already gone" would leave a live username
-     * on the device with nothing left in billing to trace it back to.
+     * A server that answers "no such user" counts as done (absent) — there is nothing
+     * to delete there. The configured servers back each other up (a later one is the
+     * fallback for an earlier one), so a server that cannot be reached is only a
+     * warning as long as at least one other server answered. It is a failure when:
+     *   • no server could be reached at all, or
+     *   • a server that answered still refused to delete the user (the account is
+     *     known to be there and was not removed).
      *
-     * @return array{success: bool, deleted: string[], absent: string[], errors: string[]}
+     * Uses short timeouts: it runs inside a web request (a service order save), and
+     * the default 5s + 30s per attempt, twice per server, could outlast the web
+     * server's own limit and cut the request off with no response at all.
+     *
+     * @return array{success: bool, deleted: string[], absent: string[], unreachable: string[], errors: string[]}
      */
     public function deleteUserFromAllServers(string $username, ?int $organizationId = null): array
     {
+        $connect = 3;
+        $request = 10;
+        // The device answered, and its answer means the user is not there.
+        // 404, or a 400 whose message says so (RouterOS answers "no such item").
+        $isNotFound = function (array $r): bool {
+            $status = (int) ($r['status'] ?? 0);
+            if ($status === 404) {
+                return true;
+            }
+            $text = (string) ($r['error'] ?? '') . ' ' . json_encode($r['data'] ?? null);
+            return $status === 400 && preg_match('/no such|not found|does not exist/i', $text) === 1;
+        };
+
         $username = trim($username);
-        $outcome = ['success' => false, 'deleted' => [], 'absent' => [], 'errors' => []];
+        $outcome = ['success' => false, 'deleted' => [], 'absent' => [], 'unreachable' => [], 'errors' => []];
 
         if ($username === '') {
             $outcome['errors'][] = 'Username is required.';
@@ -1248,21 +1268,42 @@ class RadiusReconciliationService
 
         $configs = $this->resolver->orderedConfigs($organizationId);
         if ($configs->isEmpty()) {
-            $outcome['errors'][] = 'No RADIUS server is configured.';
+            // The customer's organization and the servers' do not line up (e.g. servers saved
+            // under an organization, customer with none). Check every server rather than none,
+            // so a username that does exist still gets removed.
+            $configs = RadiusConfig::orderBy('id')->get()->values();
+        }
+        if ($configs->isEmpty()) {
+            // No RADIUS configured at all: nothing can hold this username, so there is nothing
+            // to delete — not a reason to stop the purge.
+            $outcome['absent'][] = 'no RADIUS server configured';
+            $outcome['success'] = true;
             return $outcome;
         }
 
         foreach ($configs as $config) {
             $label = $this->labelFor($config, $organizationId);
-            $lookup = $this->callDevice($config, 'GET', '/rest/user-manage/user?name=' . urlencode($username));
+            $noTrace = null;
+            // Looked up by path — /user/<name> answers the record or a 404 — the same call
+            // RadiusServerResolver and the disconnect/reconnect code use against these devices.
+            // The query form (/user?name=<name>) was reset by the device in production.
+            $lookup = $this->callDevice($config, 'GET', '/rest/user-manage/user/' . rawurlencode($username), null, $noTrace, '', $connect, $request);
 
-            if (!$lookup['success'] || !is_array($lookup['data'])) {
-                $outcome['errors'][] = "Could not reach {$label} to check '{$username}': " . ($lookup['error'] ?? 'no response');
+            if (!$lookup['success'] && $isNotFound($lookup)) {
+                $outcome['absent'][] = $label;
                 continue;
             }
 
-            $matches = array_filter($lookup['data'], fn ($u) => is_array($u)
-                && strcasecmp(trim((string) ($u['name'] ?? '')), $username) === 0);
+            if (!$lookup['success']) {
+                $outcome['unreachable'][] = "{$label}: " . ($lookup['error'] ?? 'no response');
+                continue;
+            }
+
+            // A single record, or (on some RouterOS builds) a one-item list.
+            $data = is_array($lookup['data']) ? $lookup['data'] : [];
+            $records = isset($data['.id']) ? [$data] : array_values(array_filter($data, 'is_array'));
+            $matches = array_filter($records, fn ($u) => isset($u['.id'])
+                && strcasecmp(trim((string) ($u['name'] ?? $username)), $username) === 0);
 
             if ($matches === []) {
                 $outcome['absent'][] = $label;
@@ -1270,9 +1311,20 @@ class RadiusReconciliationService
             }
 
             foreach ($matches as $user) {
-                $result = $this->callDevice($config, 'POST', '/rest/user-manage/user/remove', [
-                    'numbers' => (string) ($user['.id'] ?? ''),
-                ]);
+                $id = (string) $user['.id'];
+                // The id ("*2F") goes in as-is, exactly as ManualRadiusOperationsService sends it.
+                $result = $this->callDevice($config, 'DELETE', '/rest/user-manage/user/' . $id, null, $noTrace, '', $connect, $request);
+
+                // Older REST builds without DELETE: fall back to the remove command.
+                if (!$result['success'] && !$isNotFound($result) && (int) ($result['status'] ?? 0) !== 0) {
+                    $result = $this->callDevice($config, 'POST', '/rest/user-manage/user/remove', ['numbers' => $id], $noTrace, '', $connect, $request);
+                }
+
+                // Gone between the lookup and the delete: the end state is what we wanted.
+                if (!$result['success'] && $isNotFound($result)) {
+                    $outcome['absent'][] = $label;
+                    continue;
+                }
 
                 if (!$result['success']) {
                     $outcome['errors'][] = "Could not delete '{$username}' from {$label}: " . $result['error'];
@@ -1295,6 +1347,10 @@ class RadiusReconciliationService
             }
         }
 
+        $answered = count($outcome['deleted']) + count($outcome['absent']);
+        if ($answered === 0 && $outcome['errors'] === []) {
+            $outcome['errors'][] = "No RADIUS server could be reached to check '{$username}': " . implode(' | ', $outcome['unreachable']);
+        }
         $outcome['success'] = $outcome['errors'] === [];
 
         return $outcome;
@@ -2091,7 +2147,9 @@ class RadiusReconciliationService
         string $path,
         ?array $payload = null,
         ?array &$trace = null,
-        string $label = ''
+        string $label = '',
+        ?int $connectTimeout = null,
+        ?int $requestTimeout = null
     ): array {
         $lastError = 'No RADIUS endpoint responded.';
 
@@ -2099,8 +2157,8 @@ class RadiusReconciliationService
             try {
                 $request = Http::withOptions(['verify' => false])
                     ->withBasicAuth($config->username, $config->password)
-                    ->connectTimeout(self::CONNECT_TIMEOUT)
-                    ->timeout(self::REQUEST_TIMEOUT)
+                    ->connectTimeout($connectTimeout ?? self::CONNECT_TIMEOUT)
+                    ->timeout($requestTimeout ?? self::REQUEST_TIMEOUT)
                     ->acceptJson();
 
                 $url = $baseUrl . $path;

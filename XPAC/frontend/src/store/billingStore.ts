@@ -13,6 +13,8 @@ interface BillingStore {
     refreshBillingRecords: () => Promise<void>;
     silentRefresh: () => Promise<void>;
     refreshLatestData: () => Promise<void>;
+    /** Drop an account that was deleted on the server (e.g. a completed pullout). */
+    removeByAccountNo: (accountNo: string) => void;
 }
 
 export const useBillingStore = create<BillingStore>((set, get) => ({
@@ -126,6 +128,19 @@ export const useBillingStore = create<BillingStore>((set, get) => ({
             console.error('Error refreshing latest data:', err);
             set({
                 error: err.message || 'Failed to refresh records'
+            });
+        }
+    },
+
+    // refreshLatestData() only merges rows that changed, so a row deleted on the server
+    // would otherwise stay in the list until a full page reload.
+    removeByAccountNo: (accountNo: string) => {
+        const { billingRecords, totalCount } = get();
+        const kept = billingRecords.filter(r => r.accountNo !== accountNo);
+        if (kept.length !== billingRecords.length) {
+            set({
+                billingRecords: kept,
+                totalCount: Math.max(0, totalCount - (billingRecords.length - kept.length)),
             });
         }
     }

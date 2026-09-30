@@ -12,6 +12,7 @@ import { getUsedPorts } from '../services/portService';
 import { getAllLCPNAPs, LCPNAP } from '../services/lcpnapService';
 import { routerModelService, RouterModel } from '../services/routerModelService';
 import { getBillingRecordDetails } from '../services/billingService';
+import { useBillingStore } from '../store/billingStore';
 import { technicianService } from '../services/technicianService';
 import { logBlockedTechnicianTransfer } from '../services/serviceOrderService';
 import SearchableField from '../components/common/SearchableField';
@@ -281,7 +282,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         try {
           const imageSizeSettings = await getActiveImageSize();
           setActiveImageSize(imageSizeSettings);
-          console.log('Active image size settings:', imageSizeSettings);
         } catch (error) {
           console.error('Error fetching active image size:', error);
         }
@@ -540,7 +540,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
   useEffect(() => {
     if (serviceOrderData && isOpen) {
-      console.log('ServiceOrderEditModal - Received data:', serviceOrderData);
 
       const normalizePort = (rawPort: any) => {
         if (!rawPort) return '';
@@ -650,13 +649,9 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   const handleImageChange = async (field: keyof ImageFiles, file: File | null) => {
     if (file && activeImageSize && activeImageSize.image_size_value < 100) {
       try {
-        console.log(`Resizing ${field} image...`);
-        console.log('Original file size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
 
         const resizedFile = await resizeImage(file, activeImageSize.image_size_value);
 
-        console.log('Resized file size:', (resizedFile.size / 1024 / 1024).toFixed(2), 'MB');
-        console.log('Size reduction:', ((1 - resizedFile.size / file.size) * 100).toFixed(2), '%');
 
         const fileToUse = resizedFile.size < file.size ? resizedFile : file;
         setImageFiles(prev => ({ ...prev, [field]: fileToUse }));
@@ -999,7 +994,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       // Validate New Router Modem SN if provided and visible
       if (isNewRouterModemSNVisible && formData.newRouterModemSN?.trim()) {
         try {
-          console.log('[SMARTOLT VALIDATION] Validating New Modem SN:', formData.newRouterModemSN);
 
           setModal({
             isOpen: true,
@@ -1013,7 +1007,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
           });
 
           if (!(smartOltResponse.data as any).success) {
-            console.log('[SMARTOLT VALIDATION] Failed:', smartOltResponse.data);
 
             const errorMessage = (smartOltResponse.data as any).message || 'Invalid New Modem SN';
             setErrors(prev => ({
@@ -1030,7 +1023,6 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
             });
             return;
           }
-          console.log('[SMARTOLT VALIDATION] New Router Modem SN Success');
           setModal(prev => ({ ...prev, isOpen: false }));
         } catch (error: any) {
           console.error('[SMARTOLT VALIDATION] API Error:', error);
@@ -1382,7 +1374,9 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
       // Customer purge (resolved pullout)
       if (response.data.customer_purge?.status === 'success') {
-        successMessage += `\n\nCustomer ${response.data.customer_purge.account_no} and all related records were permanently deleted (${response.data.customer_purge.total} records).`;
+        successMessage += `\n\nCustomer ${response.data.customer_purge.account_no} was deleted from customers, billing accounts, technical details, service orders and their portal login.`;
+        // Take it off the Customer list now; that list's refresh only picks up changed rows.
+        useBillingStore.getState().removeByAccountNo(response.data.customer_purge.account_no);
       } else if (response.data.customer_purge?.status === 'failed') {
         successMessage += `\n\nWarning: deleting the customer failed and nothing was deleted: ${response.data.customer_purge.error || 'unknown error'}`;
       }

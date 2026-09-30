@@ -8,39 +8,24 @@ use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
- * Permanently deletes a customer and every record tied to them.
+ * Permanently deletes a pulled-out customer.
  *
  * Triggered when a pullout service order (concern "Pullout" / "For Pullout") is
  * saved with support status Resolved OR visit status Done — see
  * ServiceOrderApiController::update().
  *
- * The customer's PPPoE username is deleted from every RADIUS server FIRST. If any
- * server cannot be reached or refuses the delete, nothing in the database is
- * touched: the records are the only way to find that username again, so they are
- * kept until RADIUS is clean. The next save of the service order retries.
+ * 1. The customer's PPPoE username is deleted from RADIUS. The configured servers
+ *    back each other up, so one server answering is enough; an unreachable one is
+ *    skipped and named in the log. If no server answers, or one refuses the delete,
+ *    nothing in the database is touched and the next save retries.
+ * 2. Rows are then HARD deleted from exactly these tables: customers,
+ *    billing_accounts, technical_details, service_orders and the customer's
+ *    portal login in users (see plan()).
+ *    Everything else about the customer is left in place.
+ * 3. One row is added to disconnected_logs recording the purge.
  *
- * This is a HARD delete: rows are removed, not flagged. It covers the customer,
- * billing account, technical details, application, job orders, service orders,
- * invoices, transactions, payment portal logs, notices, SMS/email logs and the
- * portal login — every table that carries the account's number, billing account
- * id, job order id or application id.
- *
- * All deletes run in one transaction: either the whole customer goes or nothing
- * does, so a failure part-way can never leave half a customer behind.
- *
- * Only disconnected_logs is kept. Its account_id is nulled by the foreign key when
- * the billing account goes, but each row keeps its username, and one final row is
- * added recording the purge (account no, name, service order).
- *
- * The *_backup_* snapshot tables are purged too: they hold older copies of this
- * customer's rows, and keeping them would keep the data.
- *
- * RADIUS queue rows are all deleted: once the username is gone from RADIUS there
- * is nothing left for a queued disconnect or restrict to act on.
- *
- * No copy of the deleted rows is kept anywhere — no backup file, no snapshot in
- * activity_logs. Once a pullout is finished the customer's data is gone for good;
- * only disconnected_logs remains.
+ * The deletes run in one transaction: either all of them go or none do. No copy of
+ * the deleted rows is kept anywhere.
  */
 final class CustomerPurgeService
 {
@@ -65,7 +50,7 @@ final class CustomerPurgeService
     }
 
     /**
-     * Delete the customer behind this account number, and everything linked to it.
+     * Delete the customer behind this account number from RADIUS and the purge tables.
      *
      * @return array{status:string, account_no:string, deleted:array<string,int>, total:int, radius_usernames:string[], error:?string}
      */
@@ -93,14 +78,8 @@ final class CustomerPurgeService
             $billingId = (int) $account->id;
             $customerId = $account->customer_id !== null ? (int) $account->customer_id : null;
 
+            // Read only, to collect every username the customer went by for the RADIUS step.
             $jobOrderIds = $this->ids('job_orders', 'id', 'account_id', [$billingId]);
-            $applicationIds = DB::table('job_orders')
-                ->whereIn('id', $jobOrderIds ?: [0])
-                ->whereNotNull('application_id')
-                ->pluck('application_id')->map(fn ($v) => (int) $v)->unique()->values()->all();
-            $serviceOrderIds = $this->ids('service_orders', 'id', 'account_no', [$accountNo]);
-            $invoiceIds = $this->ids('invoices', 'id', 'account_no', [$accountNo]);
-            $transactionIds = $this->ids('transactions', 'id', 'account_no', [$accountNo]);
 
             // ── RADIUS first ─────────────────────────────────────────────────────
             // Every username this customer has gone by: the live one on technical
@@ -120,9 +99,19 @@ final class CustomerPurgeService
             $organizationId = isset($account->organization_id) ? (int) $account->organization_id ?: null : null;
             $radius = app(RadiusReconciliationService::class);
 
+            // What happened to each username, for the disconnected_logs entry.
+            $radiusSummary = [];
             foreach ($usernames as $username) {
                 $outcome = $radius->deleteUserFromAllServers($username, $organizationId);
+                // A server that could not be reached is named, so staff can remove the
+                // username there by hand once it is back.
+                $unreachableNames = array_map(fn ($u) => explode(':', $u, 2)[0], $outcome['unreachable'] ?? []);
+                $radiusSummary[] = ($outcome['deleted'] !== []
+                        ? "{$username} (deleted from RADIUS)"
+                        : "{$username} (not found on RADIUS, skipped)")
+                    . ($unreachableNames ? ' — not checked on unreachable ' . implode(', ', $unreachableNames) : '');
                 $this->log("[RADIUS] '{$username}': deleted on [" . implode(', ', $outcome['deleted']) . '], absent on [' . implode(', ', $outcome['absent']) . ']'
+                    . (!empty($outcome['unreachable']) ? ', unreachable (skipped): ' . implode(' | ', $outcome['unreachable']) : '')
                     . ($outcome['errors'] ? ', errors: ' . implode(' | ', $outcome['errors']) : ''));
 
                 if (!$outcome['success']) {
@@ -134,12 +123,12 @@ final class CustomerPurgeService
                 }
             }
 
-            $plan = $this->plan($accountNo, $billingId, $customerId, $jobOrderIds, $applicationIds, $serviceOrderIds, $invoiceIds, $transactionIds);
+            $plan = $this->plan($accountNo, $billingId, $customerId);
 
             $customer = $customerId !== null ? DB::table('customers')->where('id', $customerId)->first() : null;
             $fullName = $customer ? trim(($customer->first_name ?? '') . ' ' . ($customer->last_name ?? '')) : '';
 
-            DB::transaction(function () use ($plan, &$result, $accountNo, $fullName, $usernames, $serviceOrderId, $triggeredBy, $organizationId) {
+            DB::transaction(function () use ($plan, &$result, $accountNo, $fullName, $usernames, $radiusSummary, $serviceOrderId, $triggeredBy, $organizationId) {
                 foreach ($plan as $step) {
                     $query = $this->query($step);
                     if ($query === null) {
@@ -161,7 +150,7 @@ final class CustomerPurgeService
                         'remarks' => "Customer purged after pullout: account {$accountNo}"
                             . ($fullName !== '' ? " ({$fullName})" : '')
                             . ($serviceOrderId ? ", service order #{$serviceOrderId}" : '')
-                            . ($usernames ? '. RADIUS username(s) deleted: ' . implode(', ', $usernames) : '. No RADIUS username on record')
+                            . ($radiusSummary ? '. RADIUS: ' . implode(', ', $radiusSummary) : '. No RADIUS username on record')
                             . '.',
                         'created_by_user' => $triggeredBy,
                         'updated_by_user' => $triggeredBy,
@@ -186,117 +175,25 @@ final class CustomerPurgeService
     }
 
     /**
-     * Every delete, children before parents. Each step is a table, a key column and
-     * the values to match; optional `extra` narrows it further.
+     * The only tables a pullout deletes from: the customer, their billing account,
+     * their technical details, their service orders and their portal login. Everything else about the
+     * customer (invoices, transactions, job orders, logs...) is left as it is; rows that
+     * pointed at the deleted billing account or customer have that link set to NULL by
+     * their foreign keys. Children before parents.
      */
-    private function plan(
-        string $accountNo,
-        int $billingId,
-        ?int $customerId,
-        array $jobOrderIds,
-        array $applicationIds,
-        array $serviceOrderIds,
-        array $invoiceIds,
-        array $transactionIds
-    ): array {
-        $byNo = fn (string $table, string $column = 'account_no') => ['table' => $table, 'column' => $column, 'values' => [$accountNo]];
-        $byBilling = fn (string $table) => ['table' => $table, 'column' => 'account_id', 'values' => [$billingId]];
-
+    private function plan(string $accountNo, int $billingId, ?int $customerId): array
+    {
         return [
-            // Rows hanging off other rows of this customer.
-            ['table' => 'service_order_items', 'column' => 'service_order_id', 'values' => $serviceOrderIds],
-            ['table' => 'installment_schedules', 'column' => 'invoice_id', 'values' => $invoiceIds],
-            ['table' => 'transaction_revert', 'column' => 'transaction_id', 'values' => $transactionIds],
-            ['table' => 'job_order_items', 'column' => 'job_order_id', 'values' => $jobOrderIds],
-            ['table' => 'job_order_images_queue', 'column' => 'job_order_id', 'values' => $jobOrderIds],
-            ['table' => 'agent_incentive_history', 'column' => 'job_order_id', 'values' => $jobOrderIds],
-            ['table' => 'agent_invoice_customers', 'column' => 'job_order_id', 'values' => $jobOrderIds],
-            ['table' => 'agent_invoice_customers', 'column' => 'application_id', 'values' => $applicationIds],
-            ['table' => 'application_visits', 'column' => 'application_id', 'values' => $applicationIds],
-            ['table' => 'images_queue', 'column' => 'application_id', 'values' => $applicationIds],
-
-            // Keyed by account number.
-            $byNo('service_charge_logs'),
-            $byNo('service_orders'),
-            $byNo('overdue'),
-            $byNo('disconnection_notice'),
-            $byNo('discounts'),
-            $byNo('rebates_usage'),
-            $byNo('staggered_installation'),
-            $byNo('statement_of_accounts'),
-            $byNo('pending_payments'),
-            $byNo('transactions'),
-            $byNo('invoices'),
-            $byNo('borrowed_logs'),
-            $byNo('change_due_logs'),
-            $byNo('email_queue'),
-            $byNo('sms_logs'),
-            $byNo('sms_queue'),
-            $byNo('inventory_logs'),
-            $byNo('prepaid_override_requests'),
-            $byNo('billing_reconciliation_dismissals'),
-            // The username is already off RADIUS (purge() stops before this otherwise), so
-            // any queued disconnect/restrict has nothing left to act on.
-            $byNo('radius_operation_queue'),
-
-            // Keyed by billing account id.
-            $byBilling('advanced_payments'),
-            $byBilling('attachments'),
-            $byBilling('dc_notice'),
-            $byBilling('details_update_logs'),
-            // disconnected_logs is kept on purpose — see the class comment.
-            $byBilling('installments'),
-            $byBilling('inventory_movements'),
-            $byBilling('payment_portal_logs'),
-            $byBilling('plan_change_logs'),
-            $byBilling('reconnection_logs'),
-            $byBilling('security_deposits'),
-            $byBilling('sms_blast'),
-            $byBilling('online_status'),
-            $byNo('online_status'),
-            $byNo('technical_details'),
-            $byBilling('technical_details'),
-
-            // The customer's own records, last.
-            ['table' => 'job_orders', 'column' => 'id', 'values' => $jobOrderIds],
-            ['table' => 'applications', 'column' => 'id', 'values' => $applicationIds],
-            // The portal login: username is the account number. Customer role only, so a
-            // staff user whose username happens to match is never touched.
-            $byNo('users', 'username') + ['extra' => fn ($q) => $q->whereIn('role_id', DB::table('roles')->where('role_name', 'Customer')->pluck('id'))],
+            ['table' => 'service_orders', 'column' => 'account_no', 'values' => [$accountNo]],
+            ['table' => 'technical_details', 'column' => 'account_id', 'values' => [$billingId]],
+            ['table' => 'technical_details', 'column' => 'account_no', 'values' => [$accountNo]],
             ['table' => 'billing_accounts', 'column' => 'id', 'values' => [$billingId]],
             ['table' => 'customers', 'column' => 'id', 'values' => $customerId !== null ? [$customerId] : []],
-
-            // Snapshot tables holding older copies of the same rows.
-            ...$this->backupTableSteps($accountNo, $billingId, $customerId),
+            // The customer's portal login: its username is the account number. Customer role
+            // only, so a staff account whose username happens to match is never touched.
+            ['table' => 'users', 'column' => 'username', 'values' => [$accountNo],
+                'extra' => fn ($q) => $q->whereIn('role_id', DB::table('roles')->where('role_name', 'Customer')->pluck('id')->push(3))],
         ];
-    }
-
-    /**
-     * Delete steps for every *backup* table that holds this customer: matched by
-     * account number, or by billing account / customer id when the snapshot is of
-     * billing_accounts or customers. disconnected_logs backups are left alone, like
-     * the table itself.
-     */
-    private function backupTableSteps(string $accountNo, int $billingId, ?int $customerId): array
-    {
-        $tables = collect(DB::select(
-            "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE '%backup%'"
-        ))->pluck('name')->reject(fn ($t) => str_starts_with(strtolower($t), 'disconnected_logs'));
-
-        $steps = [];
-        foreach ($tables as $table) {
-            if (Schema::hasColumn($table, 'account_no')) {
-                $steps[] = ['table' => $table, 'column' => 'account_no', 'values' => [$accountNo]];
-            } elseif (Schema::hasColumn($table, 'account_id')) {
-                $steps[] = ['table' => $table, 'column' => 'account_id', 'values' => [$billingId]];
-            } elseif (str_starts_with(strtolower($table), 'billing_accounts') && Schema::hasColumn($table, 'id')) {
-                $steps[] = ['table' => $table, 'column' => 'id', 'values' => [$billingId]];
-            } elseif (str_starts_with(strtolower($table), 'customers') && Schema::hasColumn($table, 'id') && $customerId !== null) {
-                $steps[] = ['table' => $table, 'column' => 'id', 'values' => [$customerId]];
-            }
-        }
-
-        return $steps;
     }
 
     /** The query for one step, or null when the table/column does not exist or nothing matches. */

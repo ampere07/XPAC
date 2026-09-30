@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ChevronDown, Calendar, Camera, Search, Loader2 } from 'lucide-react';
+import { X, ChevronDown, Calendar, Camera, Search } from 'lucide-react';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
 import { locationDetailService, LocationDetail } from '../services/locationDetailService';
@@ -14,7 +14,6 @@ import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/i
 import { billingStatusService, BillingStatus } from '../services/billingStatusService';
 import { getUsedPorts } from '../services/portService';
 import { getAllInventoryItems, InventoryItem } from '../services/inventoryItemService';
-import apiClient from '../config/api';
 import SearchableField, { GroupedOption } from '../components/common/SearchableField';
 import { agentService } from '../services/agentService';
 import {
@@ -108,23 +107,6 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [activeImageSize, setActiveImageSize] = useState<ImageSizeSetting | null>(null);
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
   const [inventoryRouterModels, setInventoryRouterModels] = useState<InventoryItem[]>([]);
-  const [originalRouterModemSn, setOriginalRouterModemSn] = useState('');
-
-  // Modem SN validation against SmartOLT, mirroring JobOrderDoneFormModal: the VALIDATE button
-  // verifies the serial and auto-populates Router Model from the ONU type it returns.
-  const [isValidatingSN, setIsValidatingSN] = useState(false);
-  const [isSNValidated, setIsSNValidated] = useState(false);
-  const [validateCooldown, setValidateCooldown] = useState(0);
-
-  // Cooldown timer for the SN validate button
-  useEffect(() => {
-    if (validateCooldown > 0) {
-      const timer = setTimeout(() => {
-        setValidateCooldown(prev => prev - 1);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [validateCooldown]);
   const [agents, setAgents] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
 
@@ -330,14 +312,6 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           usage_type: recordData.usageType || recordData.usage_type || recordData.Usage_Type || recordData.UsageType || '',
           session_group: recordData.sessionGroup || recordData.session_group || ''
         });
-
-        const initialSn = recordData.router_modem_sn || recordData.routerModemSn || recordData.routerModemSN || '';
-        setOriginalRouterModemSn(initialSn);
-
-        // An already-saved SN counts as validated, so simply reopening the modal to change an
-        // unrelated field does not force a pointless re-validation. Editing the SN clears this.
-        setIsSNValidated(!!initialSn);
-        setValidateCooldown(0);
       }
     }
     // Using granular IDs instead of the whole recordData object prevents 
@@ -521,99 +495,6 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
 
   /**
-   * Verify the Modem SN against SmartOLT and auto-fill Router Model from the ONU type.
-   * Same behaviour as the VALIDATE button in JobOrderDoneFormModal.
-   */
-  const handleValidateSN = async () => {
-    const sn = String(formData.router_modem_sn || '').trim();
-
-    if (!sn) {
-      setErrors(prev => ({ ...prev, router_modem_sn: 'Please enter a Modem SN first' }));
-      return;
-    }
-
-    // Guard against double-submits and against hammering the SmartOLT API.
-    if (isValidatingSN || validateCooldown > 0) return;
-
-    const accountNoForValidation =
-      recordData?.accountNo || recordData?.account_no || recordData?.AccountNo ||
-      recordData?.applicationId || recordData?.id || '';
-
-    if (!accountNoForValidation) {
-      // Without it the backend cannot tell "this account's own modem" from "someone else's",
-      // and would reject the account's own serial. Better to say so than to show a duplicate
-      // error that looks like the serial is taken.
-      console.warn('[SmartOLT] No account number on the record; cannot scope the duplicate check.');
-    }
-
-    setIsValidatingSN(true);
-    setValidateCooldown(30);
-
-    try {
-      const response = await apiClient.get('/smart-olt/validate-sn', {
-        params: {
-          sn,
-          // Scopes the backend's duplicate check to OTHER accounts. Without this the account's
-          // own stored serial reads as "already exists in our system", which stopped staff from
-          // re-validating an unchanged modem just to pull its router model. A serial held by a
-          // different account is still rejected.
-          //
-          // applicationId is part of the fallback chain on purpose: billingService's detail
-          // mapper populates ONLY applicationId, so relying on accountNo alone would send an
-          // empty value on that path and silently reinstate the duplicate error. Mirrors how
-          // CustomerDetails resolves the account number.
-          account_no: accountNoForValidation
-        },
-        timeout: 15000
-      });
-
-      const result: any = response?.data;
-
-      if (!result || !result.success) {
-        const msg = result?.message || 'Serial Number not found in SmartOLT system.';
-        setModal({ isOpen: true, type: 'error', title: 'Validation Error', message: msg });
-        setErrors(prev => ({ ...prev, router_modem_sn: msg }));
-        setIsSNValidated(false);
-        return;
-      }
-
-      // Success — mark validated and auto-populate the Router Model.
-      setIsSNValidated(true);
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors.router_modem_sn;
-        return newErrors;
-      });
-
-      const onuType = result.data?.onu_type_name || result.onus?.[0]?.onu_type_name;
-      if (onuType) {
-        // Router Model is a free-text SearchableField, so a model that is not in the inventory
-        // list still displays and saves correctly.
-        setFormData((prev: any) => ({ ...prev, router_model: onuType }));
-        setErrors(prev => {
-          const newErrors = { ...prev };
-          delete newErrors.router_model;
-          return newErrors;
-        });
-      }
-
-      setModal({
-        isOpen: true,
-        type: 'success',
-        title: 'Success',
-        message: 'Modem Serial Number is valid and verified in SmartOLT.'
-      });
-    } catch (error: any) {
-      const errorMsg = error.response?.data?.message || error.message || 'System communication error. Please check your internet.';
-      setModal({ isOpen: true, type: 'error', title: 'Validation Error', message: errorMsg });
-      setErrors(prev => ({ ...prev, router_modem_sn: errorMsg }));
-      setIsSNValidated(false);
-    } finally {
-      setIsValidatingSN(false);
-    }
-  };
-
-  /**
    * Keep the agent's name on screen and their id in the form.
    *
    * SearchableField hands over the option it rendered, so the id comes from the
@@ -662,12 +543,6 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   }, [isOpen, agents, editType, referredByRaw, referredByAgentIdProp]);
 
   const handleInputChange = (field: string, value: any) => {
-    // Any change to the Modem SN invalidates a prior validation, so a swapped serial can never
-    // be saved on the strength of the previous one's check.
-    if (field === 'router_modem_sn') {
-      setIsSNValidated(String(value || '').trim() === String(originalRouterModemSn || '').trim());
-    }
-
     setFormData((prev: any) => {
       const newData = { ...prev, [field]: value };
 
@@ -965,62 +840,6 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         message: 'Please fill in all required fields before saving.'
       });
       return;
-    }
-
-    // SmartOLT Validation Logic for Technical Details (skip if SN hasn't changed).
-    //
-    // Retained as a backstop for anyone who types a new SN and saves without pressing VALIDATE.
-    // Skipped when isSNValidated is set, so pressing the button does not cost a second identical
-    // SmartOLT call on save.
-    const snChanged = formData.router_modem_sn?.trim() !== originalRouterModemSn?.trim();
-    if (editType === 'technical_details' && formData.connection_type === 'Fiber' && formData.router_modem_sn?.trim() && snChanged && !isSNValidated) {
-      try {
-        setLoading(true);
-
-        const smartOltResponse = await apiClient.get('/smart-olt/validate-sn', {
-          params: { sn: formData.router_modem_sn }
-        });
-
-        if (!(smartOltResponse.data as any).success) {
-          setLoading(false);
-
-          const errorMessage = (smartOltResponse.data as any).message || 'Invalid Modem SN';
-          setErrors(prev => ({
-            ...prev,
-            router_modem_sn: errorMessage
-          }));
-
-          setModal({
-            isOpen: true,
-            type: 'error',
-            title: 'SmartOLT Verification Failed',
-            message: errorMessage,
-            onConfirm: () => setModal(prev => ({ ...prev, isOpen: false }))
-          });
-          return;
-        }
-
-
-        setLoading(false);
-      } catch (error: any) {
-        console.error('[SMARTOLT VALIDATION] API Error:', error);
-        setLoading(false);
-        const errorMessage = error.response?.data?.message || 'Failed to validate Modem SN with SmartOLT system.';
-
-        setErrors(prev => ({
-          ...prev,
-          router_modem_sn: errorMessage
-        }));
-
-        setModal({
-          isOpen: true,
-          type: 'error',
-          title: 'Validation Error',
-          message: errorMessage,
-          onConfirm: () => setModal(prev => ({ ...prev, isOpen: false }))
-        });
-        return;
-      }
     }
 
     setLoading(true);
@@ -1929,41 +1748,33 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   {errors.connection_type && <p className="text-red-500 text-xs mt-1">{errors.connection_type}</p>}
                 </div>
 
-                <SearchableField
-                  label="Router Model"
-                  placeholder="Search Router Model..."
-                  value={formData.router_model}
-                  onSelect={(value) => handleInputChange('router_model', value)}
-                  options={inventoryRouterModels}
-                  optionLabelKey="item_name"
-                  isDarkMode={isDarkMode}
-                  error={errors.router_model}
-                  required
-                />
+                {/* Plain text input with suggestions, as in JobOrderDoneFormTechModal: any model
+                    can be typed, the list only helps. */}
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Router Model<span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    list="customer-edit-router-model-options"
+                    value={formData.router_model || ''}
+                    onChange={(e) => handleInputChange('router_model', e.target.value)}
+                    placeholder="Enter Router Model"
+                    className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${errors.router_model ? 'border-red-500' : ''} ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'}`}
+                  />
+                  <datalist id="customer-edit-router-model-options">
+                    {inventoryRouterModels.map((item, index) => (
+                      <option key={index} value={item.item_name} />
+                    ))}
+                  </datalist>
+                  {errors.router_model && <p className="text-red-500 text-xs mt-1">{errors.router_model}</p>}
+                </div>
 
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                     Router Modem SN
                   </label>
-                  <div className="flex items-center gap-2">
-                    {/* Verifies the serial with SmartOLT and fills Router Model from the ONU
-                        type it returns. Only Fiber connections exist in SmartOLT. */}
-                    {formData.connection_type === 'Fiber' && (
-                      <button
-                        type="button"
-                        onClick={handleValidateSN}
-                        disabled={isValidatingSN || validateCooldown > 0}
-                        className={`px-4 py-2 rounded text-white text-sm font-bold whitespace-nowrap flex items-center justify-center min-w-[90px] ${(isValidatingSN || validateCooldown > 0) ? 'bg-gray-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600'}`}
-                      >
-                        {isValidatingSN ? (
-                          <Loader2 className="animate-spin" size={16} />
-                        ) : validateCooldown > 0 ? (
-                          `${validateCooldown}s`
-                        ) : (
-                          'VALIDATE'
-                        )}
-                      </button>
-                    )}
+                  <div>
                     <input
                       type="text"
                       value={formData.router_modem_sn || ''}
