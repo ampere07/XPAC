@@ -1227,6 +1227,80 @@ class RadiusReconciliationService
     }
 
     /**
+     * Remove an account from EVERY configured RADIUS server, strictly.
+     *
+     * Unlike deleteFromRadius(), a server that cannot be reached is a failure, not
+     * "not present": callers use this before permanently deleting the customer's
+     * records, and treating an outage as "already gone" would leave a live username
+     * on the device with nothing left in billing to trace it back to.
+     *
+     * @return array{success: bool, deleted: string[], absent: string[], errors: string[]}
+     */
+    public function deleteUserFromAllServers(string $username, ?int $organizationId = null): array
+    {
+        $username = trim($username);
+        $outcome = ['success' => false, 'deleted' => [], 'absent' => [], 'errors' => []];
+
+        if ($username === '') {
+            $outcome['errors'][] = 'Username is required.';
+            return $outcome;
+        }
+
+        $configs = $this->resolver->orderedConfigs($organizationId);
+        if ($configs->isEmpty()) {
+            $outcome['errors'][] = 'No RADIUS server is configured.';
+            return $outcome;
+        }
+
+        foreach ($configs as $config) {
+            $label = $this->labelFor($config, $organizationId);
+            $lookup = $this->callDevice($config, 'GET', '/rest/user-manage/user?name=' . urlencode($username));
+
+            if (!$lookup['success'] || !is_array($lookup['data'])) {
+                $outcome['errors'][] = "Could not reach {$label} to check '{$username}': " . ($lookup['error'] ?? 'no response');
+                continue;
+            }
+
+            $matches = array_filter($lookup['data'], fn ($u) => is_array($u)
+                && strcasecmp(trim((string) ($u['name'] ?? '')), $username) === 0);
+
+            if ($matches === []) {
+                $outcome['absent'][] = $label;
+                continue;
+            }
+
+            foreach ($matches as $user) {
+                $result = $this->callDevice($config, 'POST', '/rest/user-manage/user/remove', [
+                    'numbers' => (string) ($user['.id'] ?? ''),
+                ]);
+
+                if (!$result['success']) {
+                    $outcome['errors'][] = "Could not delete '{$username}' from {$label}: " . $result['error'];
+                    continue;
+                }
+
+                // Recorded WITHOUT the account's settings and not undoable: a customer purge
+                // must leave no copy of the credentials behind (deleteFromRadius() keeps one
+                // on purpose, for its undo — this path deliberately does not).
+                $this->recordLog(
+                    'delete_user',
+                    "Deleted '{$username}' from {$label} (customer purge).",
+                    $username,
+                    ['exists' => true],
+                    ['exists' => false],
+                    (int) $config->id,
+                    false
+                );
+                $outcome['deleted'][] = $label;
+            }
+        }
+
+        $outcome['success'] = $outcome['errors'] === [];
+
+        return $outcome;
+    }
+
+    /**
      * Remove an account from a named device.
      *
      * The full pre-delete record is snapshotted so undo can recreate it, password

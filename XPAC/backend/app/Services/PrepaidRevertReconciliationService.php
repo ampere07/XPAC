@@ -45,7 +45,7 @@ class PrepaidRevertReconciliationService
      * now-reverted payment no longer pays for.
      *
      * Applies exactly the rule {@see AutoDisconnectService::processPrepaidRestrictions()} applies:
-     * the same grace day (both read {@see AutoDisconnectService::PREPAID_GRACE_DAYS}), the same
+     * the same grace period (both read {@see AutoDisconnectService::PREPAID_GRACE_DAYS}), the same
      * restrictedUser() workflow, the same flip to Inactive, the same queue-on-failure. A customer
      * therefore reaches the same end state whichever path reaches them first. The flip to Inactive
      * doubles as the dedupe signal — the cron only selects Active accounts, so it will not
@@ -106,14 +106,12 @@ class PrepaidRevertReconciliationService
             }
 
             /*
-             * Identical cutoff to processPrepaidRestrictions(): the expiry DATE is served in full
-             * and restriction falls due at the start of the following day, so an account expiring
-             * 07/30 is restricted on 07/31. Normalising to the calendar date is what stops the
-             * expiry's inherited time-of-day from cutting some customers off mid-afternoon.
+             * Identical cutoff to processPrepaidRestrictions(), from the same helper: no grace, the
+             * restriction falls due once the days left reach 0, so an account expiring 07/30 is
+             * restricted from 00:00 on 07/31. Anchoring on the calendar date is what stops the
+             * expiry's inherited time-of-day from moving the cut-off hour.
              */
-            $restrictFrom = Carbon::now()
-                ->startOfDay()
-                ->subDays(AutoDisconnectService::PREPAID_GRACE_DAYS - 1);
+            $restrictFrom = AutoDisconnectService::prepaidRestrictFrom(Carbon::now());
             $expiry = Carbon::parse($account->prepaid_expires_at);
 
             if ($expiry->greaterThanOrEqualTo($restrictFrom)) {

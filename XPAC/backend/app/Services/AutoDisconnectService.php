@@ -64,23 +64,59 @@ class AutoDisconnectService
     private const PREPAID_RESTRICTION_REMARKS = 'Prepaid Period Expired';
 
     /**
-     * Grace days a prepaid customer keeps AFTER their expiry date before being restricted.
+     * Grace days a prepaid customer keeps AFTER their days left reach 0. Zero: there is no
+     * separate grace — the 4 grace days are built into the 34-day period
+     * (PrepaidRenewalService::PREPAID_PERIOD_DAYS = 30 days of service + 4).
      *
-     * 1 means the expiry date is treated as the last full day of service: an account expiring
-     * 07/30 stays connected all through 07/30 and is restricted on 07/31.
+     * "Days left" is counted the way the Customer page shows it: the expiry date itself is the
+     * last day ("1 day left"), and the day after it reads 0 ("Expired"). So with 0 grace an
+     * account expiring 07/30 keeps service all through 07/30 and is restricted from 00:00 on
+     * 07/31 — the first run that day (the 02:00 sweep) cuts it off.
      *
-     * This is a whole-DAY offset applied to the expiry's calendar date, deliberately ignoring its
-     * time-of-day. prepaid_expires_at is written as payment date + 30 days, so it inherits the
-     * payment's clock time — 3,505 of the live rows sit at 00:00:00 but a handful carry times like
-     * 17:24. Comparing the raw timestamp would have cut those customers off mid-afternoon on their
-     * expiry day while the 00:00 ones lost the entire day, so the whole cohort is normalised to the
-     * same "restricted from the start of the day after expiry" rule.
+     * The rule works on the expiry's CALENDAR DATE, deliberately ignoring its time-of-day.
+     * prepaid_expires_at is written as payment date + 34 days, so it inherits the payment's clock
+     * time — most live rows sit at 00:00:00 but a handful carry times like 17:24. Anchoring on the
+     * raw timestamp would cut customers off at a different hour depending on when they paid.
      *
-     * PUBLIC because TransactionRevertController applies the identical rule when a revert restores
-     * an already-lapsed expiry. Two copies of this number would let a customer be cut a day early
-     * (or served a day free) depending on which path reached them first, so both read this one.
+     * PUBLIC because PrepaidOverrideService and PrepaidRevertReconciliationService apply the
+     * identical rule through {@see prepaidRestrictFrom()}. Two copies of the rule would let a
+     * customer be cut early (or served free) depending on which path reached them first.
      */
-    public const PREPAID_GRACE_DAYS = 1;
+    public const PREPAID_GRACE_DAYS = 0;
+
+    /** Hour of the due day at which the restriction falls due (24h clock). 0 = midnight. */
+    public const PREPAID_RESTRICT_HOUR = 0;
+
+    /**
+     * When a prepaid account with this expiry becomes due for restriction: the start of the day
+     * after the expiry date (days left = 0), plus any grace days and hour.
+     */
+    public static function prepaidRestrictionDue(Carbon $expiry): Carbon
+    {
+        return $expiry->copy()->startOfDay()
+            ->addDay()
+            ->addDays(self::PREPAID_GRACE_DAYS)
+            ->addHours(self::PREPAID_RESTRICT_HOUR);
+    }
+
+    /**
+     * The cutoff for "restriction is due": an account is due when its prepaid_expires_at is
+     * strictly before the returned moment.
+     *
+     * due ⇔ startOfDay(expiry) + 1 day + grace + hour ≤ now
+     *     ⇔ startOfDay(expiry) < startOfDay(now − grace − hour)
+     *     ⇔ expiry < startOfDay(now − grace − hour)
+     *
+     * With grace 0 and hour 0 that is simply "the expiry date is before today".
+     * Returned as a bare timestamp so callers can compare the raw column and stay index-friendly.
+     */
+    public static function prepaidRestrictFrom(Carbon $now): Carbon
+    {
+        return $now->copy()
+            ->subDays(self::PREPAID_GRACE_DAYS)
+            ->subHours(self::PREPAID_RESTRICT_HOUR)
+            ->startOfDay();
+    }
 
     /** Remark stamped on the service order raised by {@see processPrepaidAutoPullout()}. */
     private const PREPAID_PULLOUT_REMARKS = 'Prepaid Auto Pullout';
@@ -548,10 +584,12 @@ class AutoDisconnectService
     /**
      * Restrict prepaid customers whose rolling service period has EXPIRED.
      *
-     * A prepaid customer keeps service through the WHOLE of their expiry date and is restricted at
-     * the start of the following day — an account whose prepaid_expires_at is 07/30 is restricted on
-     * 07/31 (see {@see PREPAID_GRACE_DAYS}). The expiry itself is set/extended by
-     * {@see PrepaidRenewalService} when they pay. Once the grace day is over, this restricts them
+     * No separate grace: a prepaid customer keeps service through their expiry date and is
+     * restricted once the days left reach 0 — an account whose prepaid_expires_at is 07/30 is
+     * restricted from 00:00 on 07/31 (see {@see PREPAID_GRACE_DAYS}, {@see prepaidRestrictFrom()}).
+     * The 4 grace days are built into the 34-day period. It runs in the 02:00 sweep and again at
+     * 12:00 (prepaid:restrict-expired) as a retry. The expiry itself is set/extended by
+     * {@see PrepaidRenewalService} when they pay. Once the days left reach 0, this restricts them
      * via the EXISTING RADIUS restriction workflow
      * ({@see ManualRadiusOperationsService::restrictedUser()}) and flips the billing status to
      * Inactive, mirroring the postpaid auto-disconnect. The restriction is removed automatically
@@ -559,7 +597,7 @@ class AutoDisconnectService
      * restrict → pay → renew → restrict cycle can repeat indefinitely.
      *
      * Idempotent & fault-isolated:
-     *   - Only currently-Active accounts past their expiry date AND its grace day are selected. Once
+     *   - Only currently-Active accounts past their expiry date AND its grace period are selected. Once
      *     restricted they become Inactive and drop out of the query; after a renewal payment they
      *     are Active again with a future expiry — so an account is never restricted twice for the
      *     same period, yet is correctly re-restricted each time a new period lapses.
@@ -596,20 +634,19 @@ class AutoDisconnectService
             $inactiveStatusId = DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4;
 
             /*
-             * Cutoff for "the grace day is over".
+             * Cutoff for "days left have reached 0".
              *
-             * An account is restricted only once its expiry date is strictly in the past, so the
-             * expiry date itself is served in full:
+             * Restriction falls due at 00:00 on the day after the expiry date (no grace):
              *
-             *   expiry 2026-07-30 (any time)  →  cutoff on 07/30 is 07/30 00:00  →  not yet due
-             *                                 →  cutoff on 07/31 is 07/31 00:00  →  RESTRICTED
+             *   expiry 2026-07-30 (any time)  →  run 07/30 12:00  →  cutoff 07/30 00:00  →  not yet due (1 day left)
+             *                                 →  run 07/31 02:00  →  cutoff 07/31 00:00  →  RESTRICTED (0 days left)
              *
              * Compared against the bare column rather than DATE(prepaid_expires_at) so the
              * comparison stays index-friendly on a table with thousands of prepaid accounts.
              */
-            $restrictFrom = $now->copy()->startOfDay()->subDays(self::PREPAID_GRACE_DAYS - 1);
+            $restrictFrom = self::prepaidRestrictFrom($now);
 
-            $this->writeLog("[RULE] Prepaid grace: " . self::PREPAID_GRACE_DAYS . " day(s) after expiry.");
+            $this->writeLog("[RULE] Prepaid grace: " . self::PREPAID_GRACE_DAYS . " day(s) after days left reach 0, restricted from " . sprintf('%02d:00', self::PREPAID_RESTRICT_HOUR) . " on the due day.");
             $this->writeLog("[RULE] Restricting accounts that expired before {$restrictFrom->format('Y-m-d H:i:s')}.");
 
             // Active prepaid accounts whose service period lapsed on an earlier calendar day.
@@ -623,7 +660,7 @@ class AutoDisconnectService
                 ->get();
 
             $totalCount = $accounts->count();
-            $this->writeLog("[QUERY] Found {$totalCount} active prepaid account(s) past their expiry date and grace day.");
+            $this->writeLog("[QUERY] Found {$totalCount} active prepaid account(s) past their expiry date and grace period.");
             $this->writeLog("");
 
             if ($totalCount === 0) {
@@ -645,11 +682,11 @@ class AutoDisconnectService
                 try {
                     $expiry = Carbon::parse($account->prepaid_expires_at);
                     // The expiry date is served in full, so restriction is due the next day.
-                    $dueDate = $expiry->copy()->startOfDay()->addDays(self::PREPAID_GRACE_DAYS);
+                    $dueDate = self::prepaidRestrictionDue($expiry);
                     $this->writeLog(
                         "  [INFO] Prepaid expiry: {$expiry->format('Y-m-d H:i')}"
-                        . " | restriction due: {$dueDate->format('Y-m-d')}"
-                        . " | days past due: {$dueDate->diffInDays($now->copy()->startOfDay())}"
+                        . " | restriction due: {$dueDate->format('Y-m-d H:i')}"
+                        . " | days past due: {$dueDate->diffInDays($now)}"
                     );
 
                     // Need a PPPoE username to act on.
@@ -2139,6 +2176,11 @@ class AutoDisconnectService
             $desiredPlan = trim($parts[0]);
         }
 
+        // A plan whose name itself contains a space ("FIBER 50") is matched whole first;
+        // only when no plan has that exact name is it cut to the first word ("SWIFT 1000" -> "SWIFT").
+        if (\App\Models\AppPlan::where('plan_name', trim($desiredPlan))->exists()) {
+            return trim($desiredPlan);
+        }
         // Then handle space separator (e.g., "SWIFT 1000" -> "SWIFT")
         if (strpos($desiredPlan, ' ') !== false) {
             $parts = explode(' ', $desiredPlan);

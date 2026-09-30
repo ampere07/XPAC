@@ -153,7 +153,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             // Show success modal when a webhook confirms payment for this account
             if (data?.action === 'webhook_update' && data?.status === 'QUEUED' && data?.reference_no) {
                 const currentAccountNo = customerDetail?.billingAccount?.accountNo;
-                if (currentAccountNo && data.reference_no.startsWith(currentAccountNo)) {
+                // Reference numbers are "{account_no}-{hex}". Matching the dash too keeps account
+                // 0001 from reacting to 00012's payment, which shares the same leading digits.
+                if (currentAccountNo && data.reference_no.startsWith(`${currentAccountNo}-`)) {
                     setShowPaymentSuccessModal(true);
                     setPendingPayment(null);
                 }
@@ -330,8 +332,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T'));
         if (!isNaN(expiry.getTime())) {
             prepaidExpiryString = expiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            // Rounded UP, so any remaining part of a day still reads as "1 day left", not 0.
-            prepaidDaysLeft = Math.ceil((expiry.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+        }
+        // Whole calendar days, inclusive of the expiry date — same rule as the Customer page and
+        // AutoDisconnectService, which only restricts the day AFTER expiry. The stored time-of-day
+        // is ignored so the count doesn't change depending on the hour it's viewed.
+        const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(prepaidExpiresAt).trim());
+        if (parts) {
+            const expiryDate = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+            prepaidDaysLeft = Math.round((expiryDate.getTime() - today.getTime()) / 86400000) + 1;
         }
     }
 
@@ -966,7 +977,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                                 {activateNow ? (
                                                     <div className="mt-2 rounded border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                                                         <strong>Heads up:</strong> {selectedPlan?.name} starts as soon as
-                                                        your payment is confirmed and your service period resets to 30 days
+                                                        your payment is confirmed and your service period resets to 34 days
                                                         from today. You will lose the{' '}
                                                         {prepaidDaysLeft !== null && prepaidDaysLeft > 0
                                                             ? `${prepaidDaysLeft} day${prepaidDaysLeft === 1 ? '' : 's'}`

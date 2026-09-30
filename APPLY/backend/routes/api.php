@@ -5,6 +5,7 @@ use App\Http\Controllers\GeographicController;
 use App\Http\Controllers\PlanController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EmailVerificationController;
 use App\Http\Controllers\FormUIController;
 use App\Http\Controllers\PromoController;
 use App\Services\ImageProcessingService;
@@ -25,11 +26,20 @@ Route::get('/dashboard/recent-applications', [DashboardController::class, 'recen
 Route::get('/form-ui/settings', [FormUIController::class, 'getSettings']);
 Route::post('/form-ui/settings', [FormUIController::class, 'updateSettings']);
 
+// Email verification for the application form — see EmailVerificationService.
+Route::post('/email-verification/send', [EmailVerificationController::class, 'send'])
+    ->middleware('throttle:email-verification-send');
+Route::post('/email-verification/verify', [EmailVerificationController::class, 'verify'])
+    ->middleware('throttle:email-verification-verify');
+
 Route::post('/application/store', [ApplicationController::class, 'store']);
 
-Route::get('/applications', [ApplicationController::class, 'index']);
-Route::get('/applications/{id}', [ApplicationController::class, 'show']);
-Route::patch('/applications/{id}/status', [ApplicationController::class, 'updateStatus']);
+// Admin only: these return applicants' personal details and ID document links.
+Route::middleware('apply.token')->group(function () {
+    Route::get('/applications', [ApplicationController::class, 'index']);
+    Route::get('/applications/{id}', [ApplicationController::class, 'show']);
+    Route::patch('/applications/{id}/status', [ApplicationController::class, 'updateStatus']);
+});
 
 Route::get('/regions', [GeographicController::class, 'getRegions']);
 Route::get('/cities', [GeographicController::class, 'getCities']);

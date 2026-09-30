@@ -48,5 +48,22 @@ class RouteServiceProvider extends ServiceProvider
         RateLimiter::for('api', function (Request $request) {
             return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
         });
+
+        // Per-IP ceilings for the email verification endpoints, on top of the
+        // per-address cooldown and attempt limit in EmailVerificationService:
+        // those stop hammering one address, these stop one client spraying many.
+        RateLimiter::for('email-verification-send', function (Request $request) {
+            return Limit::perHour(10)->by('evs:' . $request->ip())->response(fn () => response()->json([
+                'success' => false,
+                'message' => 'Too many verification emails requested. Please try again later.',
+            ], 429));
+        });
+
+        RateLimiter::for('email-verification-verify', function (Request $request) {
+            return Limit::perMinutes(10, 30)->by('evv:' . $request->ip())->response(fn () => response()->json([
+                'success' => false,
+                'message' => 'Too many verification attempts. Please try again in a few minutes.',
+            ], 429));
+        });
     }
 }

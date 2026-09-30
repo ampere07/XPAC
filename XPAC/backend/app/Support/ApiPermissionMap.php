@@ -163,6 +163,10 @@ final class ApiPermissionMap
         // 401 while trying to clean up (see the route in routes/api.php).
         ['logout',                       self::PUBLIC_ACCESS, self::PUBLIC_ACCESS],
         ['me/permissions',               null, null],
+        // The browser reporting its own JavaScript errors. Any signed-in client
+        // may file one about itself; the route is rate limited rather than
+        // gated, since the caller is whoever hit the bug.
+        ['client-log',                   null, null],
         ['user-preferences/*',           null, null],
         ['user-settings/*',              null, null],
         ['broadcasting/auth',            null, null],
@@ -265,6 +269,11 @@ final class ApiPermissionMap
         // list — the same reason a job order has to offer technicians.
         // Written from User Management, Tech Users and Agent Management, which
         // all post to the same collection; each page's own verb is enough.
+        //
+        // Every role's app registers its own device for push, so this is
+        // "signed in is enough" and has to sit above the users* rule that would
+        // otherwise demand a staff page key from a technician or a customer.
+        ['users/push-token',             null, null],
         ['users*', [
             'user-management', 'tech-users', 'agent-management', 'team-agent',
             'job-order', 'service-order', 'work-order', 'application-management',
@@ -599,6 +608,9 @@ final class ApiPermissionMap
         ['disconnection-logs',           'disconnected-logs', 'disconnected-logs'],
         ['reconnection-logs/by-account/*', ['reconnection-logs', ...self::OVERLAY_READERS], 'reconnection-logs'],
         ['reconnection-logs*',           'reconnection-logs', 'reconnection-logs'],
+        ['modem-router-logs*',           'modem-router-logs', 'modem-router-logs'],
+        // Read-only: the queue is written by the workers, never from the UI.
+        ['radius-queue',                 'radius-queue', 'radius-queue'],
         // ── Expenses ─────────────────────────────────────────────────────────
         // One API behind the web Expenses page and the Expenses log (web and
         // mobile). POST /{id} is the multipart update (_method=PUT arrives as

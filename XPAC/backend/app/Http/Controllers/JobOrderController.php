@@ -1135,6 +1135,12 @@ class JobOrderController extends Controller
                 'message' => 'Job order updated successfully',
                 'data' => $jobOrder,
             ]);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Job order not found. It may have been deleted.',
+            ], 404);
         } catch (\Exception $e) {
             DB::rollBack();
             $errorMessage = $e->getMessage();
@@ -2156,9 +2162,15 @@ class JobOrderController extends Controller
                 ]
             ]);
 
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Job order not found. It may have been deleted.',
+            ], 404);
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             \Log::error('Error approving job order: ' . $e->getMessage());
             \Log::error('Stack trace: ' . $e->getTraceAsString());
             

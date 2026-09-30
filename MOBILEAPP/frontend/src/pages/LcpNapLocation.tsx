@@ -3,7 +3,7 @@ import { View, Text, Pressable, useWindowDimensions, ActivityIndicator, TextInpu
 import { MapPin, Search, Plus, Navigation, Check, X } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCurrentPosition, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
-import MapView, { Marker, Circle, UrlTile } from 'react-native-maps';
+import EsriMapView, { EsriCircle, EsriMapHandle, EsriMarker } from '../components/EsriMapView';
 import { FlashList } from '@shopify/flash-list';
 import AddLcpNapLocationModal from '../modals/AddLcpNapLocationModal';
 import LcpNapLocationDetails from '../components/LcpNapLocationDetails';
@@ -96,45 +96,9 @@ const photonSearch = async (query: string): Promise<any[]> => {
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
-const CustomMarker = React.memo<{
-  location: LocationMarker;
-  pinSize: number;
-  onPress: (location: LocationMarker) => void;
-}>(({ location, pinSize, onPress }) => {
-  const isFull = (location.total_technical_details || 0) >= (location.port_total || 0) && (location.port_total || 0) > 0;
-
-  // tracksViewChanges=false after the very first render.
-  const [tracksViewChanges, setTracksViewChanges] = React.useState(true);
-  const hasSettled = React.useRef(false);
-
-  React.useEffect(() => {
-    if (hasSettled.current) return;
-    const timer = setTimeout(() => {
-      setTracksViewChanges(false);
-      hasSettled.current = true;
-    }, 300);
-    return () => clearTimeout(timer);
-  }, []);
-
-  return (
-    <Marker
-      coordinate={{ latitude: location.latitude, longitude: location.longitude }}
-      title={location.lcpnap_name}
-      description={`LCP: ${location.lcp_name} | NAP: ${location.nap_name} | Used: ${location.total_technical_details || 0}/${location.port_total || 0}`}
-      onPress={() => onPress(location)}
-      anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracksViewChanges}
-    >
-      <View style={[styles.markerPin, {
-        width: pinSize,
-        height: pinSize,
-        borderRadius: pinSize / 2,
-        borderWidth: pinSize > 10 ? 1.5 : 0.5,
-        backgroundColor: isFull ? '#ef4444' : '#22c55e',
-      }]} />
-    </Marker>
-  );
-});
+/** Red once every port is taken, green while any are free. */
+const isLocationFull = (location: LocationMarker) =>
+  (location.total_technical_details || 0) >= (location.port_total || 0) && (location.port_total || 0) > 0;
 
 const LcpNapSidebarItem = React.memo<{
   item: LcpNapItem;
@@ -215,7 +179,7 @@ const LcpNapLocation: React.FC = () => {
   // Pin dropped at the searched place so the user can see exactly where they navigated to
   const [searchedPlacePin, setSearchedPlacePin] = useState<{ latitude: number; longitude: number; title: string } | null>(null);
 
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<EsriMapHandle>(null);
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
   const primaryColor = colorPalette?.primary || '#7c3aed';
@@ -251,8 +215,17 @@ const LcpNapLocation: React.FC = () => {
     // false because the user did not ask for this — it fires on mount — and re-showing the
     // disclosure to someone who already declined would be nagging. The explicit "locate me"
     // button below still re-asks.
-    requestForegroundPermission('LcpNapLocation', { reAskIfDeclined: false }).catch(() => { });
-  }, []);
+    // The ESRI map has no built-in "you are here" dot, so a granted permission is turned into
+    // one fix here; the centre-on-me button refreshes it.
+    if (locationAvailable) {
+      requestForegroundPermission('LcpNapLocation', { reAskIfDeclined: false })
+        .then(status => (status === 'granted' ? getCurrentPosition('LcpNapLocation') : null))
+        .then(position => {
+          if (position) setUserLocation({ latitude: position.latitude, longitude: position.longitude });
+        })
+        .catch(() => { });
+    }
+  }, [locationAvailable]);
 
   // Combined search using local markers + Nominatim (free OSM geocoding)
   useEffect(() => {
@@ -346,7 +319,7 @@ const LcpNapLocation: React.FC = () => {
         : locationData;
       mapRef.current.fitToCoordinates(
         sample.map(loc => ({ latitude: loc.latitude, longitude: loc.longitude })),
-        { edgePadding: { top: 50, right: 50, bottom: 50, left: 50 }, animated: true }
+        50
       );
     }
   }, []);
@@ -475,10 +448,7 @@ const LcpNapLocation: React.FC = () => {
     setSelectedLcpNapId(id);
     const target = id === 'all' ? markers : lcpNapGroups.find(g => g.lcpnap_id === id)?.locations || [];
     if (target.length > 0 && mapRef.current) {
-      mapRef.current.fitToCoordinates(target.map(l => ({ latitude: l.latitude, longitude: l.longitude })), {
-        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-        animated: true
-      });
+      mapRef.current.fitToCoordinates(target.map(l => ({ latitude: l.latitude, longitude: l.longitude })), 50);
     }
   }, [markers, lcpNapGroups]);
 
@@ -504,6 +474,7 @@ const LcpNapLocation: React.FC = () => {
       if (status !== 'granted') return Alert.alert('Permission denied', 'Location permission is required.');
       const position = await getCurrentPosition('LcpNapLocation');
       if (!position) return Alert.alert('Error', 'Unable to get location.');
+      setUserLocation({ latitude: position.latitude, longitude: position.longitude });
       mapRef.current?.animateToRegion({
         latitude: position.latitude,
         longitude: position.longitude,
@@ -543,6 +514,34 @@ const LcpNapLocation: React.FC = () => {
   }, [handleLocationSelect]);
 
   const pinSize = getPinSize(currentDelta);
+
+  // Draw order is list order, so the provisional and searched pins come last to sit on top.
+  const mapMarkers = useMemo<EsriMarker[]>(() => {
+    const list: EsriMarker[] = markersToDisplay.map(loc => ({
+      id: String(loc.id),
+      kind: 'dot',
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      color: isLocationFull(loc) ? '#ef4444' : '#22c55e',
+      size: pinSize,
+    }));
+    if (searchedPlacePin && searchedPlacePin.latitude !== 0) {
+      list.push({ id: 'searched', kind: 'pin', color: '#ef4444', latitude: searchedPlacePin.latitude, longitude: searchedPlacePin.longitude });
+    }
+    if (isPlacingPin && pinCoords) {
+      list.push({ id: 'provisional', kind: 'pin', color: primaryColor, ...pinCoords });
+    }
+    return list;
+  }, [markersToDisplay, pinSize, searchedPlacePin, isPlacingPin, pinCoords, primaryColor]);
+
+  const mapCircles = useMemo<EsriCircle[]>(() => userLocation
+    ? [{ id: 'me', ...userLocation, radius: 100, fillColor: 'rgba(59, 130, 246, 0.1)', strokeColor: 'rgba(59, 130, 246, 0.4)' }]
+    : [], [userLocation]);
+
+  const handleMarkerPress = useCallback((id: string) => {
+    const loc = markersToDisplay.find(m => String(m.id) === id);
+    if (loc) handleLocationSelect(loc);
+  }, [markersToDisplay, handleLocationSelect]);
 
   return (
     <View style={[styles.container, { backgroundColor: '#f9fafb', flexDirection: isTablet ? 'row' : 'column' }]}>
@@ -613,18 +612,16 @@ const LcpNapLocation: React.FC = () => {
 
           <View style={styles.mapContainer}>
             {!showAddModal ? (
-              <MapView
+              <EsriMapView
                 ref={mapRef}
                 style={styles.map}
                 initialRegion={{ latitude: 12.8797, longitude: 121.7740, latitudeDelta: 12, longitudeDelta: 12 }}
-                minZoomLevel={5.8}
-                maxZoomLevel={19}
-                /* showsUserLocation makes react-native-maps ask the OS for a fix, so it is tied to
-                   the same switch as every other GPS read. Off means no blue dot and no accuracy
-                   circle; every other map feature is unaffected. */
-                showsUserLocation={locationAvailable}
-                showsMyLocationButton={false}
-                onUserLocationChange={e => e.nativeEvent.coordinate && setUserLocation(e.nativeEvent.coordinate)}
+                minZoom={5}
+                markers={mapMarkers}
+                circles={mapCircles}
+                onMarkerPress={handleMarkerPress}
+                // Attribution is drawn by this page, clear of its own overlays.
+                showAttribution={false}
                 onRegionChangeComplete={r => {
                   pendingRegionRef.current = r;
                   setCurrentRegion(r);
@@ -634,10 +631,9 @@ const LcpNapLocation: React.FC = () => {
                   // panning moves the pin under the fixed crosshair.
                   if (isPlacingPin) setPinCoords({ latitude: r.latitude, longitude: r.longitude });
                 }}
-                onPress={e => {
+                onPress={({ latitude, longitude }) => {
                   // A tap re-centres on the tapped point so crosshair and pin agree.
-                  if (!isPlacingPin || !e.nativeEvent?.coordinate) return;
-                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  if (!isPlacingPin) return;
                   setPinCoords({ latitude, longitude });
                   mapRef.current?.animateToRegion({
                     latitude,
@@ -646,60 +642,7 @@ const LcpNapLocation: React.FC = () => {
                     longitudeDelta: pendingRegionRef.current.longitudeDelta,
                   }, 250);
                 }}
-                mapType="none"
-                showsPointsOfInterest={false}
-                // Disable Google-specific props
-                showsBuildings={false}
-                showsTraffic={false}
-                showsIndoors={false}
-              >
-                {/* ESRI ArcGIS World Light Gray Base — free tiles, no API key, designed for app use, hides POIs */}
-                <UrlTile
-                  urlTemplate="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-                  maximumZ={19}
-                  flipY={false}
-                  tileSize={256}
-                  // @ts-ignore
-                  zIndex={-2}
-                />
-                {/* ESRI ArcGIS World Light Gray Reference — provides clean labels without POIs */}
-                <UrlTile
-                  urlTemplate="https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
-                  maximumZ={19}
-                  flipY={false}
-                  tileSize={256}
-                  // @ts-ignore
-                  zIndex={-1}
-                />
-
-                {/* Provisional pin, drawn under the crosshair while placing. */}
-                {isPlacingPin && pinCoords && (
-                  <Marker
-                    coordinate={pinCoords}
-                    title="New LCP/NAP location"
-                    pinColor={primaryColor}
-                    tracksViewChanges={false}
-                    zIndex={2000}
-                  />
-                )}
-
-                {userLocation && <Circle center={userLocation} radius={100} fillColor="rgba(59, 130, 246, 0.1)" strokeColor="rgba(59, 130, 246, 0.4)" strokeWidth={2} />}
-
-                {markersToDisplay.map(loc => (
-                  <CustomMarker key={loc.id} location={loc} pinSize={pinSize} onPress={handleLocationSelect} />
-                ))}
-
-                {/* Place search result pin — visually distinct */}
-                {searchedPlacePin && searchedPlacePin.latitude !== 0 && (
-                  <Marker
-                    coordinate={{ latitude: searchedPlacePin.latitude, longitude: searchedPlacePin.longitude }}
-                    title={searchedPlacePin.title}
-                    description="Searched location"
-                    pinColor="#ef4444"
-                    tracksViewChanges={false}
-                  />
-                )}
-              </MapView>
+              />
             ) : (
               <View style={[styles.map, styles.pausedMap, { backgroundColor: '#f3f4f6' }]}>
                 <ActivityIndicator size="large" color={primaryColor} />
@@ -937,7 +880,6 @@ const styles = StyleSheet.create({
   loaderContent: { alignItems: 'center', gap: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'flex-end' },
   mobileDetailsContainer: { height: '85%', backgroundColor: '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden' },
-  markerPin: { backgroundColor: '#22c55e', borderColor: 'white', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2, elevation: 3 },
   suggestionsDropdown: { position: 'absolute', top: 68, left: 16, right: 16, maxHeight: 400, borderRadius: 12, borderWidth: 1, zIndex: 1000, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, overflow: 'hidden' },
   dropdownBackdrop: { position: 'absolute', top: -100, left: -100, right: -100, bottom: -2000, zIndex: 999 },
   suggestionItem: { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1 },

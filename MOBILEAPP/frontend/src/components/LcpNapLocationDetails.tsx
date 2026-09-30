@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, Pressable, ScrollView, Linking, useWindowDimensions, StyleSheet, Image, ActivityIndicator } from 'react-native';
 import { X, ExternalLink, MapPin, Navigation2, ChevronLeft, ChevronRight, Edit } from 'lucide-react-native';
 import { WebView } from 'react-native-webview';
+import { ESRI_BASEMAP_JS } from '../config/esriMap';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getRelatedCustomers, RelatedCustomer } from '../services/lcpnapService';
@@ -438,9 +439,8 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
                                   boxZoom: false
                               }).setView([${location.latitude}, ${location.longitude}], 16);
                               
-                              L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                                  maxZoom: 19
-                              }).addTo(map);
+                              ${ESRI_BASEMAP_JS}
+                              window.__esriBasemap(map, ${isDarkMode});
 
                               var greenIcon = L.divIcon({
                                   className: 'leaflet-marker-icon'

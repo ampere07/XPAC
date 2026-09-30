@@ -4,6 +4,7 @@ import LoadingModal from '../components/Loading/LoadingModal';
 import LocationMap from '../components/Map/LocationMap';
 import CameraFileInput from '../components/Form/CameraFileInput';
 import SearchableSelect from '../components/Form/SearchableSelect';
+import EmailVerificationField from '../components/Form/EmailVerificationField';
 import TermsModal from '../components/TermsModal';
 import { trackPixelEvent } from '../utils/metaPixel';
 
@@ -106,6 +107,8 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
   const [showCoverageModal, setShowCoverageModal] = useState(false);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Issued by the backend once the emailed code is confirmed; null means not verified.
+  const [emailVerificationToken, setEmailVerificationToken] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showSubmitFailedModal, setShowSubmitFailedModal] = useState(false);
   const [submitErrorMessage, setSubmitErrorMessage] = useState('');
@@ -641,6 +644,14 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Checked first. The backend enforces this too; this just says so before uploading files.
+    if (!emailVerificationToken) {
+      setValidationMessage('Please verify your email address first. Click "Send" beside the Email field, then enter the 6-character code we email you.');
+      setShowValidationModal(true);
+      document.getElementById('email')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
     if (showCaptcha === 'active' && parseInt(captchaAnswer) !== captchaQuestion.answer) {
       setCaptchaError(true);
       return;
@@ -680,6 +691,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
     submissionData.append('middleInitial', formData.middleInitial);
     submissionData.append('lastName', formData.lastName);
     submissionData.append('email', formData.email);
+    submissionData.append('emailVerificationToken', emailVerificationToken);
     submissionData.append('mobile', formData.mobile);
     submissionData.append('secondaryMobile', formData.secondaryMobile || '');
 
@@ -735,6 +747,10 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
 
       if (!response.ok) {
         const errorData = await response.json();
+        // Token expired or already used: the applicant has to verify again.
+        if (errorData.email_unverified) {
+          setEmailVerificationToken(null);
+        }
         if (errorData.errors) {
           const errorMessages = Object.values(errorData.errors).flat();
           throw new Error(errorMessages.join('\n'));
@@ -766,6 +782,8 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
         });
       }
 
+      // The server has consumed this verification; another application needs a new one.
+      setEmailVerificationToken(null);
       setIsSubmitting(false);
       setShowSuccessModal(true);
       generateCaptcha();
@@ -1373,26 +1391,23 @@ const Form = forwardRef(function Form(props: FormProps, ref: React.ForwardedRef<
               <h3 className="text-lg font-medium mb-4 pb-2 border-b" style={{ color: '#1F2937', borderColor: '#E5E7EB' }}>Contact Information</h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="mb-4">
-                  <label className="block font-medium mb-2" htmlFor="email" style={{ color: '#374151' }}>
-                    Email {requireFields && <span className="text-red-500">*</span>}
-                  </label>
-                  <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    value={formData.email}
-                    onChange={handleInputChange}
-                    required={requireFields}
-                    placeholder="Enter your email address"
-                    className="w-full border-2 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all shadow-sm"
-                    style={{
-                      borderColor: '#E5E7EB',
-                      backgroundColor: '#FFFFFF',
-                      color: '#1F2937'
-                    }}
-                  />
-                </div>
+                <EmailVerificationField
+                  apiBaseUrl={apiBaseUrl}
+                  email={formData.email}
+                  onEmailChange={handleInputChange}
+                  verificationToken={emailVerificationToken}
+                  onVerifiedChange={setEmailVerificationToken}
+                  required={requireFields}
+                  buttonColor={buttonColor}
+                  labelColor="#374151"
+                  mutedColor="#6B7280"
+                  inputClassName="w-full border-2 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all shadow-sm"
+                  inputStyle={{
+                    borderColor: '#E5E7EB',
+                    backgroundColor: '#FFFFFF',
+                    color: '#1F2937'
+                  }}
+                />
 
                 <div className="mb-4">
                   <label className="block font-medium mb-2" htmlFor="firstName" style={{ color: '#374151' }}>

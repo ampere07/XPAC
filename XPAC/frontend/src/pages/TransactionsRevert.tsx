@@ -325,13 +325,15 @@ const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertI
         }
     }, [currentPage]);
 
+    // Keyed on the id so a refreshed copy of the same record does not end the viewing.
+    const selectedRevertId = selectedRevert ? String(selectedRevert.id) : null;
     useEffect(() => {
         return () => {
-            if (selectedRevert) {
-                broadCastViewing(String(selectedRevert.id), 'stopped_viewing');
+            if (selectedRevertId) {
+                broadCastViewing(selectedRevertId, 'stopped_viewing');
             }
         };
-    }, [selectedRevert]);
+    }, [selectedRevertId]);
 
     const paginatedReverts = useMemo(() => {
         return filteredReverts.slice(

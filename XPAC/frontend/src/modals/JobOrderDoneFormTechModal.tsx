@@ -1145,51 +1145,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       return;
     }
 
-    // SmartOLT Validation Logic
-    if (formData.onsiteStatus === 'Done' && formData.connectionType === 'Fiber' && formData.modemSN.trim()) {
-      try {
-        console.log('[SMARTOLT VALIDATION] Validating Modem SN:', formData.modemSN);
-
-        // Show a smaller loading indicator or just set loading state if preferred, 
-        // but user asked for validation BEFORE the main loading modal.
-        // We will momentarily show loading just for this check if needed, 
-        // or relies on the fact that we haven't shown the main modal yet.
-        setLoading(true);
-
-        const smartOltResponse = await apiClient.get('/smart-olt/validate-sn', {
-          params: { sn: formData.modemSN }
-        });
-
-        if (!(smartOltResponse.data as any).success) {
-          console.log('[SMARTOLT VALIDATION] Failed:', smartOltResponse.data);
-          setLoading(false); // Stop loading on failure
-          setErrors(prev => ({
-            ...prev,
-            modemSN: (smartOltResponse.data as any).message || 'Invalid Modem SN'
-          }));
-          showMessageModal('SmartOLT Verification Failed', [
-            { type: 'error', text: (smartOltResponse.data as any).message || 'The provided Modem SN is invalid or not authorized.' }
-          ]);
-          return;
-        }
-
-        console.log('[SMARTOLT VALIDATION] Success');
-        setLoading(false); // Stop loading after success, before main save starts
-      } catch (error: any) {
-        console.error('[SMARTOLT VALIDATION] API Error:', error);
-        setLoading(false); // Stop loading on error
-        const errorMessage = error.response?.data?.message || 'Failed to validate Modem SN with SmartOLT system.';
-        setErrors(prev => ({
-          ...prev,
-          modemSN: errorMessage
-        }));
-        showMessageModal('Validation Error', [
-          { type: 'error', text: errorMessage }
-        ]);
-        return;
-      }
-    }
-
 
 
     console.log('[SAVE VALIDATION] Form validation passed');
@@ -2163,21 +2118,20 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Router Model<span className="text-red-500">*</span></label>
-                  <div className="relative">
-                    <select value={formData.routerModel} onChange={(e) => handleInputChange('routerModel', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
-                      } ${errors.routerModel ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
-                      <option value=""></option>
-                      <option value="None">None</option>
-                      {formData.routerModel && !routerModels.some(rm => rm.model === formData.routerModel) && (
-                        <option value={formData.routerModel}>{formData.routerModel}</option>
-                      )}
-                      {routerModels.map((routerModel, index) => (
-                        <option key={index} value={routerModel.model}>{routerModel.model}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                      }`} size={20} />
-                  </div>
+                  <input
+                    type="text"
+                    list="jo-router-model-options"
+                    value={formData.routerModel}
+                    onChange={(e) => handleInputChange('routerModel', e.target.value)}
+                    placeholder="Enter Router Model"
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                      } ${errors.routerModel ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}
+                  />
+                  <datalist id="jo-router-model-options">
+                    {routerModels.map((routerModel, index) => (
+                      <option key={index} value={routerModel.model} />
+                    ))}
+                  </datalist>
                   {errors.routerModel && (
                     <div className="flex items-center mt-1">
                       <div

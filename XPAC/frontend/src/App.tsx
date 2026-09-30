@@ -8,6 +8,7 @@ import apiClient from './config/api';
 import { userSettingsService } from './services/userSettingsService';
 import PaymentResultModal from './components/PaymentResultModal';
 import SplashScreen from './components/SplashScreen';
+import StartupImageModal from './components/StartupImageModal';
 import { resetAllStores } from './utils/resetAllStores';
 
 function App() {
@@ -18,6 +19,9 @@ function App() {
   const [showPaymentResult, setShowPaymentResult] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [paymentRef, setPaymentRef] = useState('');
+  // Shown once per page load, on the login screen only — never over the dashboard, so an
+  // already-signed-in user reopening the app goes straight to work.
+  const [showStartupImage, setShowStartupImage] = useState(true);
 
   useEffect(() => {
     // Check for payment result in URL
@@ -219,6 +223,7 @@ function App() {
   return (
     <>
       <Login onLogin={handleLogin} />
+      <StartupImageModal isOpen={showStartupImage} onClose={() => setShowStartupImage(false)} />
     </>
   );
 }

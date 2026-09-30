@@ -4,6 +4,7 @@ import LocationMap from './Map/LocationMap';
 import CameraFileInput from './Form/CameraFileInput';
 import TermsModal from './TermsModal';
 import SearchableSelect from './Form/SearchableSelect';
+import EmailVerificationField from './Form/EmailVerificationField';
 import { trackPixelEvent } from '../utils/metaPixel';
 
 interface Region {
@@ -100,6 +101,8 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
   const [showCoverageModal, setShowCoverageModal] = useState(false);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Issued by the backend once the emailed code is confirmed; null means not verified.
+  const [emailVerificationToken, setEmailVerificationToken] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showSaveSuccessModal, setShowSaveSuccessModal] = useState(false);
@@ -608,6 +611,8 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
           missing.push('Email');
         } else if (!emailRegex.test(formData.email)) {
           missing.push('Email (invalid format - must include @ and domain)');
+        } else if (!emailVerificationToken) {
+          missing.push('Email verification (click Send and enter the 6-character code we email you)');
         }
 
         if (!formData.mobile) {
@@ -656,6 +661,14 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Checked first. The backend enforces this too; this just says so before uploading files.
+    if (!emailVerificationToken) {
+      setMissingFields(['Email verification (click Send beside the Email field and enter the 6-character code we email you)']);
+      setShowValidationModal(true);
+      setCurrentStep(1);
+      return;
+    }
+
     if (showCaptcha === 'active' && parseInt(captchaAnswer) !== captchaQuestion.answer) {
       setCaptchaError(true);
       return;
@@ -672,6 +685,7 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
     submissionData.append('middleInitial', formData.middleInitial);
     submissionData.append('lastName', formData.lastName);
     submissionData.append('email', formData.email);
+    submissionData.append('emailVerificationToken', emailVerificationToken);
     submissionData.append('mobile', formData.mobile);
     submissionData.append('secondaryMobile', formData.secondaryMobile || '');
 
@@ -712,6 +726,10 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
 
       if (!response.ok) {
         const errorData = await response.json();
+        // Token expired or already used: the applicant has to verify again.
+        if (errorData.email_unverified) {
+          setEmailVerificationToken(null);
+        }
         if (errorData.errors) {
           const errorMessages = Object.values(errorData.errors).flat();
           throw new Error(errorMessages.join('\n'));
@@ -743,6 +761,8 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
         });
       }
 
+      // The server has consumed this verification; another application needs a new one.
+      setEmailVerificationToken(null);
       setShowSuccessModal(true);
       generateCaptcha();
 
@@ -944,27 +964,23 @@ const MultiStepForm = forwardRef<MultiStepFormRef, MultiStepFormProps>(({ showEd
       <h3 className="text-lg font-medium mb-4 pb-2 border-b border-gray-700" style={{ color: getTextColor() }}>Contact Information</h3>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="mb-4">
-          <label className="block font-medium mb-2" htmlFor="email" style={{ color: getLabelColor() }}>
-            Email {requireFields && <span className="text-red-500">*</span>}
-          </label>
-          <input
-            type="email"
-            id="email"
-            name="email"
-            value={formData.email}
-            onChange={handleInputChange}
-            required={requireFields}
-            placeholder="Enter your email address"
-            title="Please enter a valid email address"
-            className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            style={{
-              borderColor: getBorderColor(),
-              backgroundColor: isColorDark(formBgColor) ? '#1a1a1a' : '#ffffff',
-              color: getTextColor()
-            }}
-          />
-        </div>
+        <EmailVerificationField
+          apiBaseUrl={apiBaseUrl}
+          email={formData.email}
+          onEmailChange={handleInputChange}
+          verificationToken={emailVerificationToken}
+          onVerifiedChange={setEmailVerificationToken}
+          required={requireFields}
+          buttonColor={buttonColor}
+          labelColor={getLabelColor()}
+          mutedColor={isColorDark(formBgColor) ? '#9CA3AF' : '#6B7280'}
+          inputClassName="w-full border rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          inputStyle={{
+            borderColor: getBorderColor(),
+            backgroundColor: isColorDark(formBgColor) ? '#1a1a1a' : '#ffffff',
+            color: getTextColor()
+          }}
+        />
 
         <div className="mb-4">
           <label className="block font-medium mb-2" htmlFor="firstName" style={{ color: getLabelColor() }}>

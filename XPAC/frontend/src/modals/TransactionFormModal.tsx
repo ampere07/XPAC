@@ -826,7 +826,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                         : 'border-amber-400 bg-amber-50 text-amber-700'
                         }`}>
                         <strong>Warning:</strong> on approval the new plan starts immediately and the
-                        prepaid period is reset to 30 days from the payment date. Any days remaining on
+                        prepaid period is reset to 34 days from the payment date. Any days remaining on
                         the current plan are forfeited and cannot be restored. Any scheduled plan change
                         is cancelled.
                       </div>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "837804511604",
+    "project_id": "sync-6af44",
+    "storage_bucket": "sync-6af44.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:837804511604:android:110d71af262e60e98c9c21",
+        "android_client_info": {
+          "package_name": "com.xpac.sync"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB9qnlv5TiCy3T2EHnVtTRWJitpzMwb6SM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -281,6 +281,16 @@ class PaymentWorkerService
                 // Commit billing FIRST — payment is real regardless of what RADIUS does
                 DB::commit();
 
+                // Tell open dashboards the balance changed. The webhook's own event fires at
+                // QUEUED, before this worker has posted anything, so a dashboard that refreshed
+                // on that one still showed the old balance until the next manual reload.
+                try {
+                    event(new \App\Events\PaymentUpdated(['action' => 'posted', 'reference_no' => $ref, 'status' => 'PAID']));
+                } catch (\Throwable $broadcastError) {
+                    // Broadcasting is best-effort; the payment is already committed.
+                    $this->workerLog("Warning: could not broadcast PAID for $ref: " . $broadcastError->getMessage());
+                }
+
                 // Send Approval Notifications (after commit so they're never rolled back)
                 $this->sendApprovalSms($account, $result['invoices_paid'] ?? [], $amount, $ref);
                 $this->sendApprovalEmail($account, $result['invoices_paid'] ?? [], $amount, $ref);

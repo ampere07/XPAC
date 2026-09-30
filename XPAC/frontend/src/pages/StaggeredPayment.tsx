@@ -667,13 +667,15 @@ const StaggeredPayment: React.FC = () => {
     }
   }, [currentPage]);
 
+  // Keyed on the id so a refreshed copy of the same record does not end the viewing.
+  const selectedStaggeredId = selectedStaggered ? String(selectedStaggered.id) : null;
   useEffect(() => {
     return () => {
-      if (selectedStaggered) {
-        broadCastViewing(String(selectedStaggered.id), 'stopped_viewing');
+      if (selectedStaggeredId) {
+        broadCastViewing(selectedStaggeredId, 'stopped_viewing');
       }
     };
-  }, [selectedStaggered]);
+  }, [selectedStaggeredId]);
 
   const paginatedRecords = React.useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;

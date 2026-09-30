@@ -16,8 +16,6 @@ use App\Http\Controllers\LocationController;
 use App\Http\Controllers\CityController;
 use App\Http\Controllers\RegionController;
 use App\Http\Controllers\DebugController;
-use App\Http\Controllers\EmergencyLocationController;
-use App\Http\Controllers\RadiusController;
 use App\Http\Controllers\RadiusConfigController;
 use App\Http\Controllers\ManualRadiusOperationsController;
 use App\Http\Controllers\SmsConfigController;
@@ -223,6 +221,11 @@ Route::put('/smart-olt/{id}', [\App\Http\Controllers\SmartOltController::class ,
 Route::delete('/smart-olt/{id}', [\App\Http\Controllers\SmartOltController::class , 'destroy']);
 Route::get('/reconnection-logs', [ReconnectionLogsController::class , 'index']);
 Route::get('/data-logs', [\App\Http\Controllers\Api\DataLogsController::class , 'index']);
+Route::get('/modem-router-logs', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'index']);
+Route::get('/modem-router-logs/sn/{sn}', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'getBySn']);
+Route::get('/modem-router-logs/summary', [\App\Http\Controllers\Api\ModemRouterLogsController::class, 'summary']);
+// The RADIUS retry queue, read-only.
+Route::get('/radius-queue', [\App\Http\Controllers\Api\RadiusQueueController::class , 'index']);
 
 // File-based Log Viewers (SmartOLT & Radius)
 Route::get('/file-logs/{type}', [\App\Http\Controllers\FileLogController::class, 'getLogFile']);
@@ -299,11 +302,6 @@ Route::get('/debug/transaction-relationships', function () {
 // Route::post('/fixed/location/region', [\App\Http\Controllers\Api\LocationFixedEndpointsController::class, 'addRegion']);
 // Route::post('/fixed/location/city', [\App\Http\Controllers\Api\LocationFixedEndpointsController::class, 'addCity']);
 // Route::post('/fixed/location/barangay', [\App\Http\Controllers\Api\LocationFixedEndpointsController::class, 'addBarangay']);
-
-// Emergency region endpoints directly accessible in API routes
-Route::post('/emergency/regions', [EmergencyLocationController::class , 'addRegion']);
-Route::post('/emergency/cities', [EmergencyLocationController::class , 'addCity']);
-Route::post('/emergency/barangays', [EmergencyLocationController::class , 'addBarangay']);
 
 // Direct location routes at API root level - matching frontend requests
 Route::get('/regions', [\App\Http\Controllers\Api\LocationApiController::class , 'getRegions']);
@@ -1579,6 +1577,10 @@ Route::get('/auth/session', function (Request $request) {
 Route::prefix('users')->middleware('ensure.database.tables')->group(function () {
     Route::get('/', [UserController::class , 'index']);
     Route::post('/', [UserController::class , 'store']);
+    // The mobile app registers its own Expo token here. Declared above /{id} so the
+    // literal path is never read as an id, and UserController::updatePushToken writes
+    // only to the caller's own row.
+    Route::post('/push-token', [UserController::class , 'updatePushToken']);
     Route::get('/{id}', [UserController::class , 'show']);
     Route::put('/{id}', [UserController::class , 'update']);
     Route::delete('/{id}', [UserController::class , 'destroy']);
@@ -2347,9 +2349,6 @@ Route::prefix('barangay_list')->group(function () {
         }
         );    });
 
-// Add debug routes for location troubleshooting
-Route::get('/debug/location-tables', [\App\Http\Controllers\LocationDebugController::class , 'verifyTables']);
-
 // Add debug route to inspect database tables
 Route::get('/debug/tables', function () {
     try {
@@ -2426,6 +2425,15 @@ Route::prefix('service_orders')->group(function () {
 
 // Customer Detail Management - Dedicated endpoint for customer details view
 Route::get('/customer-detail/{accountNo}', [\App\Http\Controllers\CustomerDetailController::class , 'show']);
+
+// The browser reporting failures the server never sees — see ClientLogController.
+// Throttled: it writes to disk.
+Route::post('/client-log', [\App\Http\Controllers\ClientLogController::class , 'store'])
+    ->middleware('throttle:30,1');
+
+// Just the amount due, its due date and whether a payment is already in progress — the
+// three things the customer dashboard's balance card and Pay Now button wait on.
+Route::get('/customer-detail/{accountNo}/pay-summary', [\App\Http\Controllers\CustomerPaySummaryController::class , 'show']);
 
 // Customer Detail Update Routes - Update customer, billing, and technical details
 Route::put('/customer-detail/{accountNo}', [\App\Http\Controllers\CustomerDetailUpdateController::class , 'update']);
@@ -2663,8 +2671,6 @@ Route::prefix('installment-schedules')->group(function () {
 });
 
 Route::prefix('radius')->group(function () {
-    Route::post('/create-account', [RadiusController::class , 'createAccount']);
-    
     // Manual Operations
     Route::post('/operation', [ManualRadiusOperationsController::class, 'handleOperation']);
     Route::post('/disconnect', [ManualRadiusOperationsController::class, 'disconnectUser']);
@@ -3621,14 +3627,6 @@ Route::get('/xendit-webhook', function () {
 // Public webhook endpoint (no auth required)
 Route::post('/xendit-webhook', [\App\Http\Controllers\Api\XenditPaymentController::class , 'handleWebhook']);
 
-// Job Order Notification routes
-Route::prefix('job-order-notifications')->group(function () {
-    Route::post('/', [\App\Http\Controllers\JobOrderNotificationController::class , 'createJobOrderDoneNotification']);
-    Route::get('/recent', [\App\Http\Controllers\JobOrderNotificationController::class , 'getRecentJobOrderNotifications']);
-    Route::get('/unread-count', [\App\Http\Controllers\JobOrderNotificationController::class , 'getUnreadCount']);
-    Route::put('/{id}/read', [\App\Http\Controllers\JobOrderNotificationController::class , 'markAsRead']);
-    Route::put('/mark-all-read', [\App\Http\Controllers\JobOrderNotificationController::class , 'markAllAsRead']);
-});
 
 Route::prefix('payment-portal-logs')->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\PaymentPortalLogsController::class , 'index']);
@@ -3825,7 +3823,6 @@ Route::get('/lookup/payment-portal', [RelatedDataController::class , 'getPayment
 Route::get('/lookup/job-orders', [RelatedDataController::class , 'getJobOrderLookupData']);
 Route::get('/lookup/service-orders', [RelatedDataController::class , 'getServiceOrderLookupData']);
 Route::get('/lookup/customers', [RelatedDataController::class , 'getCustomerLookupData']);
-Route::get('/lookup/application-visits', [RelatedDataController::class , 'getApplicationVisitLookupData']);
 Route::get('/lookup/work-orders', [RelatedDataController::class , 'getWorkOrderLookupData']);
 Route::get('/lookup/invoices', [RelatedDataController::class , 'getInvoiceLookupData']);
 Route::get('/lookup/statements', [RelatedDataController::class , 'getSOALookupData']);

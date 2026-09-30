@@ -65,5 +65,6 @@ class Kernel extends HttpKernel
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
         'admin' => \App\Http\Middleware\AdminMiddleware::class,
         'ensure.tables' => \App\Http\Middleware\EnsureTablesExist::class,
+        'apply.token' => \App\Http\Middleware\RequireApplyToken::class,
     ];
 }

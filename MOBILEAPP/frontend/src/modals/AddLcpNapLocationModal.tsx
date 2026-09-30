@@ -9,6 +9,7 @@ import { FlashList } from '@shopify/flash-list';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { WebView } from 'react-native-webview';
+import { ESRI_BASEMAP_JS } from '../config/esriMap';
 import { getCurrentPosition, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
@@ -103,7 +104,8 @@ const LEAFLET_HTML = `<!DOCTYPE html>
     <div id="map"></div>
     <script>
       var map = L.map('map',{zoomControl:false}).setView([14.46658,121.201807],16);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+      ${ESRI_BASEMAP_JS}
+      window.__esriBasemap(map, false);
       var marker = L.marker([14.46658,121.201807],{draggable:false}).addTo(map);
       map.on('click',function(e){
         marker.setLatLng([e.latlng.lat,e.latlng.lng]);

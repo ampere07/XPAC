@@ -1,9 +1,8 @@
 {
   "expo": {
     "name": "XPAC",
-    "slug": "gowiser",
-    "owner": "gowiserphs-team",
-    "scheme": "gowiser-app",
+    "slug": "xpac",
+    "scheme": "xpac-app",
     "version": "2.5.61",
     "orientation": "portrait",
     "icon": "./assets/xpacslogo-icon.png",
@@ -17,7 +16,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.gowiserzc.sync",
+      "bundleIdentifier": "com.xpac.sync",
       "entitlements": {
         "aps-environment": "production"
       },
@@ -26,7 +25,6 @@
       }
     },
     "android": {
-      "name": "XPAC",
       "icon": "./assets/xpacslogo-icon.png",
       "allowBackup": false,
       "adaptiveIcon": {
@@ -35,14 +33,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.gowiserzc.sync",
-      "launchMode": "singleTask",
+      "package": "com.xpac.sync",
       "googleServicesFile": "./google-services.json",
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyACI3bm9Mno0-DeH3BiSQ69Y_wSV_PMe9g"
-        }
-      },
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO"
@@ -106,8 +98,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "2fbf2341-d65d-471d-b13a-f5731b27b88e"
+        "projectId": "8048d629-ca0b-4c38-a8db-2da52975e0f9"
       }
-    }
+    },
+    "owner": "xpac"
   }
 }

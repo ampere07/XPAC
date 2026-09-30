@@ -21,8 +21,12 @@ use Carbon\Carbon;
  */
 class PrepaidRenewalService
 {
-    /** Length of one prepaid service period, in days. */
-    public const PREPAID_PERIOD_DAYS = 30;
+    /**
+     * Length of one prepaid service period, in days: 30 days of service plus a built-in 4-day
+     * grace, so there is no separate grace after expiry (AutoDisconnectService::PREPAID_GRACE_DAYS
+     * is 0 and restricts as soon as the days left reach 0).
+     */
+    public const PREPAID_PERIOD_DAYS = 34;
 
     /**
      * Extend or (re)start a prepaid customer's service period after a settling payment.
@@ -31,8 +35,8 @@ class PrepaidRenewalService
      *
      * Rules (see spec):
      *   - Still active (prepaid_expires_at is in the future relative to the payment): EXTEND from
-     *     the current expiry (+30 days) so an early payer never loses their remaining days.
-     *   - Expired or never set (null / in the past): start a FRESH 30-day period from the
+     *     the current expiry (+34 days) so an early payer never loses their remaining days.
+     *   - Expired or never set (null / in the past): start a FRESH 34-day period from the
      *     payment date.
      *   - $activateNow: start a fresh period from the payment date REGARDLESS, forfeiting any
      *     remaining days. See the parameter note below.

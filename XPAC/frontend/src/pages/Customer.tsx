@@ -668,13 +668,18 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     }
   };
 
+  // Keyed on the account number, not the customer object: polling replaces the object every
+  // few seconds (balance / online-status refresh), and keying on it broadcast "stopped_viewing"
+  // for the very record still open — the viewer badge vanished moments after appearing. This
+  // now fires only when the viewer moves to another account or leaves the page.
+  const selectedAccountNo = selectedCustomer?.billingAccount?.accountNo;
   useEffect(() => {
     return () => {
-      if (selectedCustomer && selectedCustomer.billingAccount?.accountNo) {
-        broadCastViewing(selectedCustomer.billingAccount.accountNo, 'stopped_viewing');
+      if (selectedAccountNo) {
+        broadCastViewing(selectedAccountNo, 'stopped_viewing');
       }
     };
-  }, [selectedCustomer]);
+  }, [selectedAccountNo]);
 
   // Keep selected customer details in sync with the billing records from the store (updated via polling)
   useEffect(() => {

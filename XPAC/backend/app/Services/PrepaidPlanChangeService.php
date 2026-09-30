@@ -679,6 +679,11 @@ class PrepaidPlanChangeService
             $desiredPlan = trim(explode(' - ', $desiredPlan)[0]);
         }
 
+        // A plan whose name itself contains a space ("FIBER 50") is matched whole first;
+        // only when no plan has that exact name is it cut to the first word ("SWIFT 1000" -> "SWIFT").
+        if (AppPlan::where('plan_name', trim($desiredPlan))->exists()) {
+            return trim($desiredPlan);
+        }
         if (strpos($desiredPlan, ' ') !== false) {
             return trim(explode(' ', $desiredPlan)[0]);
         }

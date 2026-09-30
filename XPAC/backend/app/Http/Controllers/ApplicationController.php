@@ -580,6 +580,11 @@ class ApplicationController extends Controller
                 'application' => $application,
                 'success' => true
             ]);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'message' => 'Application not found. It may have been deleted.',
+                'success' => false
+            ], 404);
         } catch (\Exception $e) {
             Log::error('ApplicationController update error: ' . $e->getMessage());
             

@@ -1380,10 +1380,44 @@ class ServiceOrderApiController extends Controller
                 Log::info("Logged details update (API) for account_no: {$accountRef}");
             }
 
+            // A pullout that THIS save marks Resolved (support) or Done (visit) permanently
+            // deletes the customer: their RADIUS username first, then every record except
+            // disconnected_logs (see CustomerPurgeService). Decided on the saved row, and only
+            // on the transition, so re-saving an already-finished pullout does nothing — unless
+            // the account still exists because an earlier attempt was stopped by RADIUS, in
+            // which case saving again retries it.
+            $customerPurge = null;
+            $savedOrder = DB::table('service_orders')->where('id', $id)->first();
+            $finishedNow = $savedOrder
+                && \App\Services\CustomerPurgeService::shouldPurge($savedOrder->concern, $savedOrder->support_status, $savedOrder->visit_status ?? null);
+            $finishedBefore = \App\Services\CustomerPurgeService::shouldPurge($serviceOrder->concern, $serviceOrder->support_status, $serviceOrder->visit_status ?? null);
+            if (
+                $finishedNow
+                && (!$finishedBefore || BillingAccount::where('account_no', $savedOrder->account_no)->exists())
+            ) {
+                $purgeAccount = BillingAccount::where('account_no', $savedOrder->account_no)->first();
+                if ($purgeAccount) {
+                    // Disconnect in RADIUS first, unless this save already ran the pullout or the
+                    // account is already in Pullout status: deleting a customer who is still
+                    // online would leave them with free service and no record.
+                    if ($pulloutStatus === null && (int) $purgeAccount->billing_status_id !== 5) {
+                        $pulloutStatus = $this->attemptPullout($purgeAccount, $updatedByUser, $organizationId);
+                    }
+
+                    $customerPurge = app(\App\Services\CustomerPurgeService::class)
+                        ->purge($savedOrder->account_no, (string) $updatedByUser, (int) $id);
+                }
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Service order updated successfully',
+                'message' => match ($customerPurge['status'] ?? null) {
+                    'success' => 'Pullout completed. Customer ' . $customerPurge['account_no'] . ' was deleted from RADIUS and all related records were permanently deleted (disconnection logs kept).',
+                    'failed' => 'Service order updated, but customer ' . $customerPurge['account_no'] . ' was NOT deleted: ' . $customerPurge['error'] . ' Save the service order again to retry.',
+                    default => 'Service order updated successfully',
+                },
                 'data' => $updatedServiceOrder,
+                'customer_purge' => $customerPurge,
                 'reconnect_status' => $reconnectStatus,
                 'reactivate_status' => $reactivateStatus,
                 'restricted_status' => $restrictedStatus,

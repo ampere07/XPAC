@@ -61,9 +61,13 @@ class ProcessAutoDisconnectPullout extends Command
         $pulloutOnly = $this->option('pullout-only');
         $dryRun = $this->option('dry-run');
 
+        // AutoDisconnectService has no dry-run mode: every path below disconnects,
+        // charges and pulls out for real. This option used to print "no changes will
+        // be made" and then do all of it anyway, so it now refuses instead.
         if ($dryRun) {
-            $this->warn("[DRY RUN MODE] No changes will be made");
-            $this->newLine();
+            $this->error("[DRY RUN] Not supported by this command — nothing was done.");
+            $this->line("Run without --dry-run only when you intend to disconnect accounts.");
+            return 1;
         }
 
         try {

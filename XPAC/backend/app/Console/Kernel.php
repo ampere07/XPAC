@@ -115,6 +115,21 @@ class Kernel extends ConsoleKernel
                      \Illuminate\Support\Facades\Log::error('Auto disconnect/pullout failed');
                  });
 
+        // Prepaid restriction retry at 12:00. Restriction falls due at 00:00 once the days left
+        // reach 0 (no grace), so the 02:00 run above does the cutting off; this midday pass
+        // catches anything it missed (server down, RADIUS unreachable).
+        // Logs: storage/logs/disconnectionday.log
+        $schedule->command('prepaid:restrict-expired')
+                 ->dailyAt('12:00')
+                 ->withoutOverlapping()
+                 ->runInBackground()
+                 ->onSuccess(function () {
+                     \Illuminate\Support\Facades\Log::info('Prepaid noon restriction completed successfully');
+                 })
+                 ->onFailure(function () {
+                     \Illuminate\Support\Facades\Log::error('Prepaid noon restriction failed');
+                 });
+
         // ===================================================================
         // VIP ACCOUNTS EXPIRATION CHECK
         // ===================================================================

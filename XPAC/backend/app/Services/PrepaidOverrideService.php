@@ -437,7 +437,7 @@ class PrepaidOverrideService
      * online until the 02:00 `cron:auto-disconnect-pullout` run reached them.
      *
      * Applies exactly the cutoff {@see AutoDisconnectService::processPrepaidRestrictions()} applies
-     * — same grace day, same restrictedUser() workflow, same flip to Inactive — so a customer ends
+     * — same grace period, same restrictedUser() workflow, same flip to Inactive — so a customer ends
      * up in the same state whichever path reaches them first.
      *
      * MUST be called AFTER the approving transaction has committed: a RADIUS group change cannot be
@@ -474,12 +474,12 @@ class PrepaidOverrideService
             }
 
             /*
-             * Identical cutoff to processPrepaidRestrictions(): the expiry DATE is served in full
-             * and restriction falls due at the start of the following day, so an account expiring
-             * 07/30 is restricted on 07/31. Normalising to the calendar date is what stops the
-             * expiry's inherited time-of-day from cutting customers off mid-afternoon.
+             * Identical cutoff to processPrepaidRestrictions(), from the same helper: no grace, the
+             * restriction falls due once the days left reach 0, so an account expiring 07/30 is
+             * restricted from 00:00 on 07/31. Anchoring on the calendar date is what stops the
+             * expiry's inherited time-of-day from moving the cut-off hour.
              */
-            $restrictFrom = Carbon::now()->startOfDay()->subDays(AutoDisconnectService::PREPAID_GRACE_DAYS - 1);
+            $restrictFrom = AutoDisconnectService::prepaidRestrictFrom(Carbon::now());
             $expiry = Carbon::parse($account->prepaid_expires_at);
             $hasLapsed = $expiry->lessThan($restrictFrom);
 
@@ -552,7 +552,7 @@ class PrepaidOverrideService
     }
 
     /**
-     * Restrict a customer whose adjusted period is already past its grace day.
+     * Restrict a customer whose adjusted period is already past its grace period.
      *
      * @return array{action:string, reason?:string, expires_at:string, username:string}
      */

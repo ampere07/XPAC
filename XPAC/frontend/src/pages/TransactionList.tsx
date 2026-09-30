@@ -890,13 +890,15 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     }
   }, [currentPage]);
 
+  // Keyed on the id so a refreshed copy of the same record does not end the viewing.
+  const selectedTransactionId = selectedTransaction ? String(selectedTransaction.id) : null;
   useEffect(() => {
     return () => {
-      if (selectedTransaction) {
-        broadCastViewing(String(selectedTransaction.id), 'stopped_viewing');
+      if (selectedTransactionId) {
+        broadCastViewing(selectedTransactionId, 'stopped_viewing');
       }
     };
-  }, [selectedTransaction]);
+  }, [selectedTransactionId]);
 
   const paginatedTransactions = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;

@@ -869,6 +869,33 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
   };
 
   const handleSave = async () => {
+    // ── Resolving a pullout permanently deletes the customer (server side, CustomerPurgeService) ──
+    // Only on the transition to Resolved, matching the backend. Typing the account number is
+    // the confirmation, so a stray click on Save cannot wipe a customer.
+    const foldConcern = (v: any) => String(v ?? '').toLowerCase().replace(/\s+/g, '');
+    const isPulloutConcern = ['pullout', 'forpullout'].includes(foldConcern(formData.concern));
+    const wasResolved = String(serviceOrderData?.supportStatus || serviceOrderData?.support_status || '').trim().toLowerCase() === 'resolved';
+    if (isPulloutConcern && formData.supportStatus === 'Resolved' && !wasResolved) {
+      const accountNo = String(formData.accountNo || '').trim();
+      const typed = window.prompt(
+        `WARNING: Resolving this pullout will PERMANENTLY DELETE customer ${accountNo} ` +
+        `and ALL of their data — customer, billing account, application, job orders, service orders, ` +
+        `invoices, transactions and payment logs. This cannot be undone.\n\n` +
+        `Type the account number (${accountNo}) to confirm:`
+      );
+      if (typed === null || typed.trim() !== accountNo) {
+        if (typed !== null) {
+          setModal({
+            isOpen: true,
+            type: 'error',
+            title: 'Not Deleted',
+            message: 'The account number did not match. Nothing was saved.'
+          });
+        }
+        return;
+      }
+    }
+
     // ── Block technician reassignment only once the job is actually being worked on ──
     // A ticket counts as "started" only when its visit status is In Progress AND a real
     // start time exists. Empty / placeholder start times (''/null/'0000-00-00 ...') do
@@ -1209,6 +1236,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
           reconnect_status?: string | null;
           migration_status?: string | null;
           pullout_status?: string | null;
+          customer_purge?: { status: string; account_no: string; total: number; error?: string | null } | null;
           restricted_status?: string | null;
           disconnect_status?: string | null;
           radius_queued?: boolean;
@@ -1350,6 +1378,13 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       // Pullout Messages
       if (response.data.pullout_status === 'success') {
         successMessage += '\n\nRADIUS account disabled for pullout.';
+      }
+
+      // Customer purge (resolved pullout)
+      if (response.data.customer_purge?.status === 'success') {
+        successMessage += `\n\nCustomer ${response.data.customer_purge.account_no} and all related records were permanently deleted (${response.data.customer_purge.total} records).`;
+      } else if (response.data.customer_purge?.status === 'failed') {
+        successMessage += `\n\nWarning: deleting the customer failed and nothing was deleted: ${response.data.customer_purge.error || 'unknown error'}`;
       }
 
       // Restriction / Disconnection Messages (Joined logic)

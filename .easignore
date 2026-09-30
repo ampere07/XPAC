@@ -1,0 +1,49 @@
+# EAS Build upload filter for MOBILEAPP/frontend.
+# EAS reads this file from the git root and it REPLACES .gitignore for the upload, so the
+# relevant .gitignore rules are repeated here.
+
+# Everything outside the mobile app — not needed to build it, and holds backend secrets.
+/APPLY/
+/XPAC/
+/privacy.php
+/sync_db_schema.php
+
+# Dependencies (EAS runs npm install itself)
+node_modules/
+.pnp
+.pnp.js
+
+# Native folders — EAS regenerates these from app.json (prebuild). A stale local copy
+# carries the old package name and Windows line endings that break gradlew on Linux.
+/MOBILEAPP/frontend/android/
+/MOBILEAPP/frontend/ios/
+
+# Expo / build output
+.expo/
+dist/
+web-build/
+build/
+
+# Secrets (google-services.json is intentionally NOT listed: the build needs it)
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+/MOBILEAPP/frontend/credentials.json
+/MOBILEAPP/frontend/google-services.gowiser.json
+
+# OS / IDE / logs
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.log

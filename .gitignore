@@ -65,3 +65,10 @@ storage/*.key
 *.keystore
 upload_certificate.pem
 proposals/CLIENT_NAME_proposal.md
+
+# Local database exports (customer PII, PPPoE passwords)
+/XPAC/data-export/
+/XPAC/customer/
+/XPAC/serviceorder/
+/XPAC/joborder/
+/XPAC/invoice/

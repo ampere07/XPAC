@@ -351,11 +351,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // is meaningless to them. Show the expiry plus how long they have left.
     const prepaidDaysLeft = useMemo(() => {
         if (!isPrepaid || !prepaidExpiresAt) return null;
-        // Replace the space so the string parses on both iOS and Android.
-        const expiry = new Date(String(prepaidExpiresAt).replace(' ', 'T')).getTime();
-        if (isNaN(expiry)) return null;
-        // Rounded UP, so any remaining part of a day still reads as "1 day left" rather than 0.
-        return Math.ceil((expiry - Date.now()) / (24 * 60 * 60 * 1000));
+        // Whole calendar days, inclusive of the expiry date — same rule as the admin Customer page
+        // and AutoDisconnectService, which only restricts the day AFTER expiry. The stored
+        // time-of-day is ignored so the count doesn't change depending on the hour it's viewed.
+        const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(prepaidExpiresAt).trim());
+        if (!parts) return null;
+        const expiry = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+        if (isNaN(expiry.getTime())) return null;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+        return Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1;
     }, [isPrepaid, prepaidExpiresAt]);
 
     const dueDateLabel = isPrepaid ? 'Expires' : 'Due Date';
@@ -1270,7 +1276,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                 <View style={styles.activateNowWarning}>
                                                     <Text style={styles.activateNowWarningText}>
                                                         Heads up: {selectedPlan?.name} starts as soon as your payment is
-                                                        confirmed and your service period resets to 30 days from today.
+                                                        confirmed and your service period resets to 34 days from today.
                                                         You will lose the{' '}
                                                         {prepaidDaysLeft !== null && prepaidDaysLeft > 0
                                                             ? `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'}`

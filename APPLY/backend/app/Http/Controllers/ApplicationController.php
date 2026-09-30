@@ -13,13 +13,24 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use App\Models\SMSTemplate;
 use App\Services\EmailQueueService;
+use App\Services\EmailVerificationService;
 use App\Services\ItexmoSmsService;
 
 class ApplicationController extends Controller
 {
-    public function store(Request $request)
+    public function store(Request $request, EmailVerificationService $emailVerification)
     {
         try {
+            // Checked first and on the server, so the form's own check cannot be bypassed:
+            // the token is only issued by EmailVerificationController::verify for this address.
+            if (!$emailVerification->isVerified((string) $request->input('email'), $request->input('emailVerificationToken'))) {
+                return response()->json([
+                    'message' => 'Please verify your email address before submitting the application.',
+                    'errors' => ['email' => ['Please verify your email address before submitting the application.']],
+                    'email_unverified' => true,
+                ], 422);
+            }
+
             // Load the form field visibility settings so validation matches what the
             // applicant actually saw. A hidden field must not be required.
             $formUi = DB::table('form_ui')->first();
@@ -91,7 +102,10 @@ class ApplicationController extends Controller
                 
                 $plan = Plan::find($request->plan);
                 if ($plan) {
-                    $application->desired_plan = $plan->plan_name . ' - ' . number_format($plan->price, 2);
+                    // "NAME - P999.00": the format XPAC writes everywhere and the only one
+                    // JobOrderController::approve parses to find plan_id. Without the "P" the
+                    // customer was onboarded with no plan unless the JO screen rewrote it first.
+                    $application->desired_plan = $plan->plan_name . ' - P' . number_format($plan->price, 2, '.', '');
                 } else {
                     $application->desired_plan = $request->plan;
                 }
@@ -105,9 +119,18 @@ class ApplicationController extends Controller
                 $application->terms_agreed = true;
                 $application->status = 'pending';
                 
-                $application->proof_of_billing_url = 'processing';
-                $application->government_valid_id_url = 'processing';
-                $application->house_front_picture_url = 'processing';
+                // Only a field with an uploaded file gets the placeholder: an optional or hidden
+                // field (per form_ui) never gets a queue row, so nothing would ever replace it.
+                $placeholderFields = [
+                    'proofOfBilling' => 'proof_of_billing_url',
+                    'governmentIdPrimary' => 'government_valid_id_url',
+                    'houseFrontPicture' => 'house_front_picture_url',
+                ];
+                foreach ($placeholderFields as $requestKey => $dbField) {
+                    if ($request->hasFile($requestKey)) {
+                        $application->{$dbField} = 'processing';
+                    }
+                }
                 
                 if ($request->has('created_by_email')) {
                     $user = DB::table('users')->where('email_address', $request->created_by_email)->first();
@@ -171,6 +194,9 @@ class ApplicationController extends Controller
                 }
 
                 DB::commit();
+
+                // One verification, one application.
+                $emailVerification->consume($application->email_address);
 
                 Log::info('Application submitted successfully with queued images', [
                     'application_id' => $application->id,

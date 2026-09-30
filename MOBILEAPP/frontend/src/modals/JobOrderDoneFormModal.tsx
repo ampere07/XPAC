@@ -1886,21 +1886,14 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                     <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
                       Router Model<Text className="text-red-500">*</Text>
                     </Text>
-                    <View className={`border ${errors.routerModel ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
-                      <Picker
-                        selectedValue={formData.routerModel}
-                        onValueChange={(value) => handleInputChange('routerModel', value)}
-                        style={{ color: isDarkMode ? '#fff' : '#000' }}
-                      >
-                        <Picker.Item label="Select Router Model" value="" />
-                        {formData.routerModel && !routerModels.some(rm => rm.model === formData.routerModel) && (
-                          <Picker.Item label={formData.routerModel} value={formData.routerModel} />
-                        )}
-                        {routerModels.map((routerModel, index) => (
-                          <Picker.Item key={index} label={routerModel.model} value={routerModel.model} />
-                        ))}
-                      </Picker>
-                    </View>
+                    <TextInput
+                      value={formData.routerModel}
+                      onChangeText={(text) => handleInputChange('routerModel', text)}
+                      placeholder="Enter Router Model"
+                      placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
+                      autoCapitalize="characters"
+                      className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.routerModel ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
+                    />
                     {errors.routerModel && (
                       <View className="flex flex-row items-center mt-1">
                         <View className="flex items-center justify-center w-4 h-4 rounded-full bg-orange-500 mr-2">

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, Pressable, Alert, ActivityIndicator } from 'react-native';
-import MapView, { Marker, MapPressEvent } from 'react-native-maps';
+import EsriMapView, { EsriMapHandle, EsriMarker, LatLng } from './EsriMapView';
 import { MapPin, Navigation } from 'lucide-react-native';
 import { getCurrentPosition, hasLocationServicesEnabled, isLocationAvailable, requestForegroundPermission } from '../services/locationGateway';
 
@@ -35,12 +35,11 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
 }) => {
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
-  const [region, setRegion] = useState(DEFAULT_REGION);
 
   const [latInput, setLatInput] = useState('');
   const [lngInput, setLngInput] = useState('');
 
-  const mapRef = React.useRef<MapView>(null);
+  const mapRef = React.useRef<EsriMapHandle>(null);
 
   useEffect(() => {
     if (value !== undefined) {
@@ -61,7 +60,6 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
             latitudeDelta: 0.01,
             longitudeDelta: 0.01,
           };
-          setRegion(newRegion);
           mapRef.current?.animateToRegion(newRegion, 1000);
         }
       }
@@ -76,7 +74,6 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     };
-    setRegion(newRegion);
     mapRef.current?.animateToRegion(newRegion, 1000);
     onChange(`${lat}, ${lng}`);
     setLatInput(lat.toString());
@@ -96,7 +93,6 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-      setRegion(newRegion);
       mapRef.current?.animateToRegion(newRegion, 1000);
       onChange(`${lat}, ${lng}`);
     } else {
@@ -118,7 +114,6 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       };
-      setRegion(newRegion);
       mapRef.current?.animateToRegion(newRegion, 1000);
       onChange(`${lat}, ${lng}`);
     } else {
@@ -162,19 +157,21 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
     }
   };
 
-  const handleMapPress = (e: MapPressEvent) => {
-    const { latitude, longitude } = e.nativeEvent.coordinate;
+  const handleMapPress = ({ latitude, longitude }: LatLng) => {
     const roundedLat = parseFloat(latitude.toFixed(6));
     const roundedLng = parseFloat(longitude.toFixed(6));
     updateCoordinates(roundedLat, roundedLng);
   };
 
-  const handleMarkerDragEnd = (e: any) => {
-    const { latitude, longitude } = e.nativeEvent.coordinate;
+  const handleMarkerDragEnd = (_id: string, { latitude, longitude }: LatLng) => {
     const roundedLat = parseFloat(latitude.toFixed(6));
     const roundedLng = parseFloat(longitude.toFixed(6));
     updateCoordinates(roundedLat, roundedLng);
   };
+
+  const markers = useMemo<EsriMarker[]>(() => coordinates
+    ? [{ id: 'picked', kind: 'pin', color: '#ef4444', draggable: true, ...coordinates }]
+    : [], [coordinates]);
 
   return (
     <View className="mb-4">
@@ -185,26 +182,15 @@ const LocationPicker: React.FC<LocationPickerProps> = ({
       <View className={`border rounded-lg overflow-hidden ${isDarkMode ? 'border-gray-700' : 'border-gray-300'
         } ${error ? 'border-red-500' : ''}`}>
         <View className="relative h-64 w-full bg-gray-200">
-          <MapView
+          <EsriMapView
             ref={mapRef}
             style={{ flex: 1 }}
-            region={region}
-            onRegionChangeComplete={setRegion}
+            initialRegion={DEFAULT_REGION}
             onPress={handleMapPress}
-            showsPointsOfInterest={false}
-            showsBuildings={false}
-            showsTraffic={false}
-            showsIndoors={false}
-            userInterfaceStyle={isDarkMode ? 'dark' : 'light'}
-          >
-            {coordinates && (
-              <Marker
-                draggable
-                coordinate={coordinates}
-                onDragEnd={handleMarkerDragEnd}
-              />
-            )}
-          </MapView>
+            markers={markers}
+            onMarkerDragEnd={handleMarkerDragEnd}
+            isDark={isDarkMode}
+          />
           {/* Hidden if location services are ever switched off again (config/featureFlags). The
               map, tap-to-place, marker drag and the manual lat/lng fields below do not depend on
               GPS, so the location stays settable either way — just not readable off the device. */}

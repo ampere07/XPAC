@@ -10,6 +10,16 @@ use Illuminate\Support\Facades\DB;
 
 class ImageProcessingService
 {
+    // A row still 'processing' after this long was abandoned by a crashed or killed run.
+    const STALE_PROCESSING_MINUTES = 15;
+
+    // Fields ApplicationController::store() sets to the 'processing' placeholder on submit.
+    const PLACEHOLDER_FIELDS = [
+        'proof_of_billing_url',
+        'government_valid_id_url',
+        'house_front_picture_url',
+    ];
+
     private $googleDriveService;
     private $storageSettings;
 
@@ -76,7 +86,7 @@ class ImageProcessingService
                 }
             } catch (\Exception $e) {
                 Log::error("Image Processing Error for queue ID {$imageQueue->id}: " . $e->getMessage());
-                $imageQueue->markAsFailed($e->getMessage());
+                $this->failImage($imageQueue, $e->getMessage());
                 $failed++;
             }
         }
@@ -104,7 +114,7 @@ class ImageProcessingService
                 'queue_id' => $imageQueue->id,
                 'application_id' => $imageQueue->application_id
             ]);
-            $imageQueue->markAsFailed($errorMsg);
+            $this->failImage($imageQueue, $errorMsg);
             return ['success' => false, 'error' => $errorMsg];
         }
 
@@ -161,6 +171,9 @@ class ImageProcessingService
             ]);
             Log::info("Updated application {$imageQueue->application_id} field {$imageQueue->field_name} with URL: {$gdriveUrl}");
 
+            // The job order may already have been approved and copied the placeholder over.
+            $this->replaceCustomerPlaceholder((int) $imageQueue->application_id, $imageQueue->field_name, $gdriveUrl);
+
             $imageQueue->markAsCompleted($gdriveUrl);
 
             try {
@@ -191,13 +204,108 @@ class ImageProcessingService
                 'local_path' => $imageQueue->local_path,
                 'exception' => $e->getTraceAsString()
             ]);
-            $imageQueue->markAsFailed($errorMsg);
-            
+            $this->failImage($imageQueue, $errorMsg);
+
             return [
                 'success' => false,
                 'error' => $errorMsg,
             ];
         }
+    }
+
+    /**
+     * Mark a queue row failed and, once it has no retries left, clear the 'processing'
+     * placeholder it was meant to replace so the field no longer shows as processing forever.
+     */
+    private function failImage(ImageQueue $imageQueue, string $error): void
+    {
+        $imageQueue->markAsFailed($error);
+
+        if ($imageQueue->canRetry() || !in_array($imageQueue->field_name, self::PLACEHOLDER_FIELDS, true)) {
+            return;
+        }
+
+        try {
+            Application::where('id', $imageQueue->application_id)
+                ->where($imageQueue->field_name, 'processing')
+                ->update([$imageQueue->field_name => null]);
+
+            $this->replaceCustomerPlaceholder((int) $imageQueue->application_id, $imageQueue->field_name, null);
+
+            Log::warning("Image upload gave up after {$imageQueue->retry_count} attempts, cleared placeholder", [
+                'queue_id' => $imageQueue->id,
+                'application_id' => $imageQueue->application_id,
+                'field_name' => $imageQueue->field_name,
+                'error' => $error
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Failed to clear placeholder for queue ID {$imageQueue->id}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Carry an upload result over to the customer created from this application.
+     *
+     * Only a field still holding the 'processing' placeholder is touched, so a value set on the
+     * customer since approval is never overwritten. Errors are logged, never thrown: the upload
+     * itself has already succeeded or failed on its own terms.
+     */
+    private function replaceCustomerPlaceholder(int $applicationId, string $field, ?string $value): void
+    {
+        if (!in_array($field, self::PLACEHOLDER_FIELDS, true)) {
+            return;
+        }
+
+        try {
+            $updated = DB::table('customers')
+                ->join('billing_accounts', 'billing_accounts.customer_id', '=', 'customers.id')
+                ->join('job_orders', 'job_orders.account_id', '=', 'billing_accounts.id')
+                ->where('job_orders.application_id', $applicationId)
+                ->where("customers.{$field}", 'processing')
+                ->update(["customers.{$field}" => $value]);
+
+            if ($updated > 0) {
+                Log::info("Replaced customer placeholder for application {$applicationId}", [
+                    'field_name' => $field,
+                    'value' => $value,
+                    'customers_updated' => $updated
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error("Failed to replace customer placeholder for application {$applicationId}: " . $e->getMessage(), [
+                'field_name' => $field
+            ]);
+        }
+    }
+
+    /**
+     * Put rows abandoned in 'processing' back in the queue.
+     *
+     * Each recovery counts as a failed attempt, so a row that keeps crashing the worker still
+     * runs out of retries instead of looping forever.
+     */
+    public function recoverStaleProcessing(): array
+    {
+        $recovered = 0;
+
+        $staleImages = ImageQueue::where('status', 'processing')
+            ->where('updated_at', '<', now()->subMinutes(self::STALE_PROCESSING_MINUTES))
+            ->get();
+
+        foreach ($staleImages as $imageQueue) {
+            $this->failImage($imageQueue, 'Abandoned in processing for over ' . self::STALE_PROCESSING_MINUTES . ' minutes');
+
+            if ($imageQueue->canRetry()) {
+                $imageQueue->resetForRetry();
+            }
+            $recovered++;
+        }
+
+        if ($recovered > 0) {
+            Log::warning("Recovered {$recovered} image(s) stuck in processing");
+        }
+
+        return ['recovered' => $recovered];
     }
 
     private function resizeImageIfNeeded(string $localPath): string

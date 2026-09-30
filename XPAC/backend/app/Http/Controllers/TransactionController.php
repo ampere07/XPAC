@@ -589,6 +589,13 @@ class TransactionController extends Controller
                 ]
             ]);
         }
+        catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Transaction not found. It may have been deleted.',
+            ], 404);
+        }
         catch (\Exception $e) {
             DB::rollBack();
             \Log::error('Error approving transaction: ' . $e->getMessage());

@@ -3,11 +3,14 @@ import FormPage from './pages/FormPage';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import LoadingScreen from './components/Loading/LoadingScreen';
+import StartupImageModal from './components/StartupImageModal';
 import './App.css';
 
 const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
   const [isLoading, setIsLoading] = useState(true);
+  // Shown once each time the app is opened (page load), after the loading screen.
+  const [showStartupImage, setShowStartupImage] = useState(true);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -48,6 +51,7 @@ const App: React.FC = () => {
   return (
     <div className="App">
       {renderPage()}
+      <StartupImageModal isOpen={showStartupImage} onClose={() => setShowStartupImage(false)} />
     </div>
   );
 };

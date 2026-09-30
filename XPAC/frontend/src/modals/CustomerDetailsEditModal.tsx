@@ -887,7 +887,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   };
 
   /**
-   * Prepaid accounts bill on a rolling 30-day period that starts when they pay, so they have no
+   * Prepaid accounts bill on a rolling 34-day period that starts when they pay, so they have no
    * fixed billing day — the field is hidden and not required for them, and the prepaid expiry is
    * shown in its place. Letters-only compare so a row still holding 'Pre Paid' also resolves.
    */
@@ -1722,7 +1722,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                   {isPrepaidBillingType && (
                     <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      Prepaid accounts are billed on a rolling 30-day period that starts when they
+                      Prepaid accounts are billed on a rolling 34-day period that starts when they
                       pay, so they have no fixed billing day.
                     </p>
                   )}
@@ -1757,7 +1757,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     />
                     <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                       {formData.prepaid_expires_at
-                        ? 'End of the current paid period. Service is restricted once this passes; a payment extends it by 30 days.'
+                        ? 'End of the current paid period. Service is restricted once this passes (0 days left, no grace); a payment extends it by 34 days.'
                         : 'Empty means the prepaid clock has not started — it begins on their first payment.'}
                     </p>
                     <p className={`text-xs mt-1 font-medium ${isDarkMode ? 'text-yellow-500' : 'text-yellow-700'}`}>

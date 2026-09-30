@@ -385,21 +385,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
   const [datePickerMode, setDatePickerMode] = useState<'date' | 'time'>('date');
   const [tempPickedDate, setTempPickedDate] = useState<Date | null>(null);
   const [isDoneRendering, setIsDoneRendering] = useState(false);
-  const [isValidatingSN, setIsValidatingSN] = useState(false);
-  const [isSNValidated, setIsSNValidated] = useState(false);
-  const [validateCooldown, setValidateCooldown] = useState(0);
-
-  useEffect(() => {
-    let timer: any;
-    if (validateCooldown > 0) {
-      timer = setInterval(() => {
-        setValidateCooldown(prev => prev - 1);
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [validateCooldown]);
 
   // Shared mounted flag – set false on unmount so ALL async callbacks can bail out
   const isMountedRef = useRef(true);
@@ -548,8 +533,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       setErrors({});
       setOrderItems([{ itemId: '', quantity: '' }]);
       setTechInputValue('');
-      setIsSNValidated(false);
-      setValidateCooldown(0);
       return;
     }
 
@@ -805,13 +788,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     const isCurrentSession = () => isMountedRef.current && openCycleRef.current === session;
     const controller = new AbortController();
 
-    const initialSN = jobOrderData.Modem_SN || jobOrderData.modem_sn || '';
-    if (initialSN && initialSN.trim() !== '') {
-      setIsSNValidated(true);
-    } else {
-      setIsSNValidated(false);
-    }
-
     const loadedOnsiteStatus = jobOrderData.Onsite_Status || jobOrderData.onsite_status || 'In Progress';
 
     const isEmptyValue = (value: any): boolean => {
@@ -960,9 +936,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       return newData;
     });
 
-    if (field === 'modemSN' || field === 'connectionType') {
-      setIsSNValidated(false);
-    }
     setErrors(prev => {
       if (prev[field]) {
         return { ...prev, [field]: '' };
@@ -1201,68 +1174,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     }
 
     return failed.length === 0;
-  };
-
-  const handleValidateSN = async () => {
-    const sn = formData.modemSN?.trim();
-    if (!sn) {
-      Alert.alert('Validation Error', 'Please enter a Modem Serial Number first.');
-      return;
-    }
-
-    if (isValidatingSN || validateCooldown > 0) return;
-
-    if (formData.connectionType !== 'Fiber' && formData.connectionType !== 'Antenna') {
-      Alert.alert('Validation Info', 'SN validation is only available for Fiber and Antenna connections.');
-      return;
-    }
-
-    setIsValidatingSN(true);
-    setValidateCooldown(30);
-    try {
-      const response = await apiClient.get('/smart-olt/validate-sn', {
-        params: { 
-          sn,
-          jo_id: jobOrderData?.id || jobOrderData?.JobOrder_ID,
-          user_email: currentUserEmail
-        },
-        timeout: 15000
-      });
-
-      const result = response?.data;
-
-      if (!result || !result.success) {
-        const msg = result?.message || 'Serial Number not found in SmartOLT system.';
-        Alert.alert('Validation Error', msg);
-        setErrors(prev => ({ ...prev, modemSN: msg }));
-        setIsSNValidated(false);
-        return;
-      }
-
-      // Success logic
-      setIsSNValidated(true);
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors.modemSN;
-        return newErrors;
-      });
-
-      // Auto-populate router model safely
-      const onuType = result.data?.onu_type_name || result.onus?.[0]?.onu_type_name;
-      if (onuType) {
-        setFormData(prev => ({ ...prev, routerModel: onuType }));
-      }
-
-      Alert.alert('Success', 'Modem Serial Number is valid and verified in SmartOLT.');
-    } catch (error: any) {
-      console.error('[Validation Error]', error);
-      const errorMsg = error.response?.data?.message || error.message || 'System communication error. Please check your internet.';
-      Alert.alert('Validation Error', errorMsg);
-      setErrors(prev => ({ ...prev, modemSN: errorMsg }));
-      setIsSNValidated(false);
-    } finally {
-      setIsValidatingSN(false);
-    }
   };
 
   const handleSave = async () => {
@@ -2702,10 +2613,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                 {/* Submit Button Logic */}
                 {(() => {
-                  const requiresSNValidation = formData.onsiteStatus === 'Done' &&
-                    (formData.connectionType === 'Fiber' || formData.connectionType === 'Antenna');
-                  const needsValidation = requiresSNValidation && !isSNValidated;
-                  const isSubmitDisabled = loading || needsValidation;
+                  const isSubmitDisabled = loading;
                   const submitButtonBgColor = isSubmitDisabled
                     ? (isDarkMode ? '#4b5563' : '#9ca3af')
                     : (colorPalette?.primary || '#7c3aed');
@@ -3010,25 +2918,19 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
                               Router Model<Text style={styles.required}>*</Text>
                             </Text>
-                            <View
-                              style={[styles.searchContainer, {
-                                backgroundColor: isDarkMode ? '#1f2937' : '#f3f4f6', // Light grey background
-                                borderColor: errors.routerModel ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+                            <TextInput
+                              value={formData.routerModel}
+                              onChangeText={(text) => handleInputChange('routerModel', text)}
+                              placeholder="Enter Router Model"
+                              placeholderTextColor={isDarkMode ? '#9CA3AF' : '#4B5563'}
+                              autoCapitalize="characters"
+                              style={[styles.textInput, {
                                 height: 50,
-                                paddingHorizontal: 12,
-                                opacity: 0.8
+                                backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                                color: isDarkMode ? '#ffffff' : '#111827',
+                                borderColor: errors.routerModel ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db')
                               }]}
-                            >
-                              <Text style={{
-                                flex: 1,
-                                paddingHorizontal: 4,
-                                color: formData.routerModel ? (isDarkMode ? '#ffffff' : '#111827') : (isDarkMode ? '#9CA3AF' : '#4B5563'),
-                                fontSize: 14,
-                                fontWeight: '500'
-                              }}>
-                                {formData.routerModel || "Validated Modem SN to Get Router Model..."}
-                              </Text>
-                            </View>
+                            />
                             {errors.routerModel && (
                               <View ref={registerAnchor('routerModel')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
@@ -3043,42 +2945,18 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
                               Modem SN<Text style={styles.required}>*</Text>
                             </Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                              <TouchableOpacity
-                                onPress={handleValidateSN}
-                                disabled={isValidatingSN || validateCooldown > 0}
-                                style={{
-                                  paddingVertical: 14,
-                                  paddingHorizontal: 16,
-                                  backgroundColor: (isValidatingSN || validateCooldown > 0) ? '#9ca3af' : (colorPalette?.primary || '#7c3aed'),
-                                  borderRadius: 12,
-                                  justifyContent: 'center',
-                                  alignItems: 'center',
-                                  minWidth: 90,
-                                  height: 50 // Matching standard input height
-                                }}
-                              >
-                                {isValidatingSN ? (
-                                  <ActivityIndicator size="small" color="#ffffff" />
-                                ) : validateCooldown > 0 ? (
-                                  <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 13 }}>{validateCooldown}s</Text>
-                                ) : (
-                                  <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 13 }}>VALIDATE</Text>
-                                )}
-                              </TouchableOpacity>
-                              <TextInput
-                                value={formData.modemSN}
-                                onChangeText={(text) => handleInputChange('modemSN', text)}
-                                placeholderTextColor={isDarkMode ? '#9CA3AF' : '#4B5563'}
-                                style={[styles.textInput, {
-                                  flex: 1,
-                                  height: 50,
-                                  backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                                  color: isDarkMode ? '#ffffff' : '#111827',
-                                  borderColor: errors.modemSN ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db')
-                                }]}
-                              />
-                            </View>
+                            <TextInput
+                              value={formData.modemSN}
+                              onChangeText={(text) => handleInputChange('modemSN', text)}
+                              placeholder="Enter Modem Serial Number"
+                              placeholderTextColor={isDarkMode ? '#9CA3AF' : '#4B5563'}
+                              style={[styles.textInput, {
+                                height: 50,
+                                backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+                                color: isDarkMode ? '#ffffff' : '#111827',
+                                borderColor: errors.modemSN ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db')
+                              }]}
+                            />
                             {errors.modemSN && (
                               <View ref={registerAnchor('modemSN')} collapsable={false} style={styles.errorContainer}>
                                 <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>

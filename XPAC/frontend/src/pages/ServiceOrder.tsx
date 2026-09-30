@@ -598,16 +598,19 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     };
   }, []);
 
-  // Sync viewing status when selectedServiceOrder changes
+  // Sync viewing status when the selected service order changes. Keyed on the id, not the
+  // object: polling replaces the object every few seconds, and keying on it sent a
+  // stopped_viewing for the record still open, so the viewer badge vanished.
+  const selectedServiceOrderId = selectedServiceOrder ? String(selectedServiceOrder.id) : null;
   useEffect(() => {
-    if (selectedServiceOrder) {
-      broadCastViewing(String(selectedServiceOrder.id), 'started_viewing');
-      
+    if (selectedServiceOrderId) {
+      broadCastViewing(selectedServiceOrderId, 'started_viewing');
+
       return () => {
-        broadCastViewing(String(selectedServiceOrder.id), 'stopped_viewing');
+        broadCastViewing(selectedServiceOrderId, 'stopped_viewing');
       };
     }
-  }, [selectedServiceOrder, broadCastViewing]);
+  }, [selectedServiceOrderId, broadCastViewing]);
 
   // Polling for updates every 3 seconds - Incremental fetch
   useEffect(() => {
