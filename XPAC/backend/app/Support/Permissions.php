@@ -561,6 +561,9 @@ final class Permissions
             'service-order.tech-edit',
             'work-order',
             'lcp-nap-location',
+            // View only: the list and details. No 'transaction-list.approve', so no
+            // Approve / Mark as Failed (TransactionController also refuses them for role 2).
+            'transaction-list',
         ],
 
         // The customer portal. No sidebar, no admin pages.

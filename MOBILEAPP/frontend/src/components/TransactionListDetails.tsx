@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import { transactionService } from '../services/transactionService';
+import { usePermissions } from '../hooks/usePermissions';
 import { relatedDataService } from '../services/relatedDataService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from './common/LoadingModalGlobal';
@@ -78,6 +79,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   onPrevious,
   onNext,
 }) => {
+  // Approve is hidden from roles without 'transaction-list.approve' (e.g. technicians,
+  // who may view transactions but not settle them).
+  const { can: hasPermission } = usePermissions();
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -244,7 +248,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           >
             {accountNo} | {transaction.account?.customer?.full_name || '-'}
           </Text>
-          {statusLower === 'pending' && (
+          {hasPermission('transaction-list.approve') && statusLower === 'pending' && (
             <TouchableOpacity
               onPress={handleApprove}
               disabled={loading}

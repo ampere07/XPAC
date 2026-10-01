@@ -115,6 +115,33 @@ class TransactionController extends Controller
         }
     }
 
+    /**
+     * A reference number may be used by only one transaction.
+     *
+     * Compared ignoring case and surrounding spaces, so "GCASH-123 " and "gcash-123" count as
+     * the same payment. $ignoreId is the transaction being edited, so re-saving it with its own
+     * reference number is allowed.
+     */
+    private function uniqueReferenceNoRule(?int $ignoreId = null): \Closure
+    {
+        return function (string $attribute, $value, \Closure $fail) use ($ignoreId) {
+            $normalized = mb_strtolower(trim((string) $value));
+            if ($normalized === '') {
+                return;
+            }
+
+            $existing = Transaction::whereRaw('LOWER(TRIM(reference_no)) = ?', [$normalized])
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->first(['id', 'account_no']);
+
+            if ($existing) {
+                $fail('Reference No. "' . trim((string) $value) . '" is already used by transaction #' . $existing->id
+                    . ($existing->account_no ? ' (account ' . $existing->account_no . ')' : '')
+                    . '. Each payment needs its own reference number.');
+            }
+        };
+    }
+
     public function store(Request $request): JsonResponse
     {
         try {
@@ -134,7 +161,7 @@ class TransactionController extends Controller
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => 'required|string|max:255',
+                'reference_no' => ['required', 'string', 'max:255', $this->uniqueReferenceNoRule()],
                 'or_no' => 'required|string|max:255',
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
@@ -374,8 +401,30 @@ class TransactionController extends Controller
         }
     }
 
+    /**
+     * Technicians may view transactions but not settle them: no approve, batch approve or
+     * status change (Mark as Failed). Enforced here because the API permission layer only
+     * logs, so hiding the buttons alone would not stop a direct call.
+     */
+    private function denyTechnician(): ?JsonResponse
+    {
+        $user = auth()->user();
+        if ($user && (int) $user->role_id === 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Technicians can view transactions but cannot approve them or change their status.',
+            ], 403);
+        }
+
+        return null;
+    }
+
     public function approve(Request $request, string $id): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
@@ -1066,6 +1115,10 @@ class TransactionController extends Controller
 
     public function updateStatus(Request $request, string $id): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
@@ -1133,7 +1186,7 @@ class TransactionController extends Controller
                 'received_payment' => 'nullable|numeric|min:0',
                 'payment_date' => 'nullable|date',
                 'payment_method' => 'nullable|string|max:255',
-                'reference_no' => 'nullable|string|max:255',
+                'reference_no' => ['nullable', 'string', 'max:255', $this->uniqueReferenceNoRule((int) $id)],
                 'or_no' => 'nullable|string|max:255',
                 'remarks' => 'nullable|string',
                 'image_url' => 'nullable|string|max:255',
@@ -1206,6 +1259,10 @@ class TransactionController extends Controller
 
     public function batchApprove(Request $request): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;

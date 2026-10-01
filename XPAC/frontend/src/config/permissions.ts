@@ -849,6 +849,8 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
     'service-order.tech-edit',
     'work-order',
     'lcp-nap-location',
+    // View only: no 'transaction-list.approve', so no Approve / Mark as Failed.
+    'transaction-list',
   ],
   [ROLE.CUSTOMER]: [
     'customer-dashboard',

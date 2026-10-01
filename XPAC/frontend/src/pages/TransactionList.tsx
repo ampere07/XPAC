@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Receipt, ChevronLeft, ChevronDown, CheckCheck, X, Check, ChevronRight, Menu, FileText, Globe, Filter, ChevronsLeft, ChevronsRight, RefreshCw, Loader2, ArrowUp, ArrowDown, Columns3, Download } from 'lucide-react';
+import { Receipt, ChevronLeft, ChevronDown, CheckCheck, X, Check, ChevronRight, Menu, FileText, Globe, Filter, ChevronsLeft, ChevronsRight, RefreshCw, Loader2, ArrowUp, ArrowDown, Columns3, Download, Plus } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import TransactionListDetails from '../components/TransactionListDetails';
 import { transactionService } from '../services/transactionService';
@@ -22,6 +22,7 @@ import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
+import TransactionFormModal from '../modals/TransactionFormModal';
 
 const hexToRgba = (hex: string, opacity: number) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -365,6 +366,17 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
     fetchThemeData();
   }, []);
+
+  // Technicians record a payment from here; the modal lets them pick the account.
+  const isTechnicianUser = (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('authData') || '{}');
+      return String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician';
+    } catch {
+      return false;
+    }
+  })();
+  const [showAddTransaction, setShowAddTransaction] = useState(false);
 
   const handleRefresh = async () => {
     setHasNewData(false);
@@ -1625,6 +1637,18 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 />
               </div>
             </div>
+            {isTechnicianUser && (
+              <button
+                onClick={() => setShowAddTransaction(true)}
+                className="p-2 md:px-4 md:py-2 rounded flex items-center justify-center transition-colors text-white flex-shrink-0"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                onMouseEnter={(e) => { if (colorPalette?.accent) e.currentTarget.style.backgroundColor = colorPalette.accent; }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed'; }}
+                title="Add Transaction"
+              >
+                <Plus size={18} />
+              </button>
+            )}
             {hasPermission('transaction-list.batch-approve') && (
               <button
                 onClick={() => isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true)}
@@ -2198,6 +2222,15 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           window.location.reload();
         }} 
       />
+
+      {/* Technician's "+": no account given, so the modal shows its account picker. */}
+      {showAddTransaction && (
+        <TransactionFormModal
+          isOpen={showAddTransaction}
+          onClose={() => setShowAddTransaction(false)}
+          onSave={() => { setShowAddTransaction(false); handleRefresh(); }}
+        />
+      )}
     </div >
   );
 };

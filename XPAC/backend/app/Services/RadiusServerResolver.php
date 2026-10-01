@@ -193,7 +193,12 @@ class RadiusServerResolver
      */
     private function lookupOnConfig(RadiusConfig $config, string $username, int $position): ?array
     {
-        $path = '/rest/user-manage/user/' . urlencode($username);
+        // An all-digit username ("000002") is searched by name: RouterOS reads it as an item
+        // number in /user/<name> and answers "no such command prefix".
+        $isNumeric = preg_match('/^\d+$/', $username) === 1;
+        $path = $isNumeric
+            ? '/rest/user-manage/user?name=' . urlencode($username)
+            : '/rest/user-manage/user/' . urlencode($username);
 
         foreach ($this->baseUrlsFor($config) as $baseUrl) {
             $this->log('info', 'Searching for account on RADIUS server', [
@@ -211,6 +216,11 @@ class RadiusServerResolver
 
                 if ($response->successful()) {
                     $data = $response->json();
+                    if ($isNumeric) {
+                        // A name search answers a list; keep the exact match only.
+                        $data = collect(is_array($data) ? $data : [])
+                            ->first(fn ($u) => is_array($u) && isset($u['.id']) && (string) ($u['name'] ?? '') === $username);
+                    }
                     if (is_array($data) && isset($data['.id'])) {
                         return [
                             'base_url'  => $baseUrl,

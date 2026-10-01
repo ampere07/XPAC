@@ -29,6 +29,22 @@ class PrepaidRenewalService
     public const PREPAID_PERIOD_DAYS = 34;
 
     /**
+     * A FRESH period counts the payment day itself as day 1, so its expiry is payment date + 33.
+     *
+     * Service runs through the whole expiry date (restriction starts the day after — see
+     * AutoDisconnectService::prepaidRestrictionDue()), and the Customer page counts "days left"
+     * the same way. With +34 a top-up on 09/30 expired 11/03: 09/30..11/03 is 35 days of service,
+     * shown as "35 days left". With +33 it is 09/30..11/02 — exactly 34 days, shown as 34.
+     *
+     * An EXTENSION (topping up while still active) keeps +PREPAID_PERIOD_DAYS: the current
+     * expiry day is already counted in the remaining days, so adding 34 adds exactly 34.
+     */
+    private function freshPeriodExpiry(Carbon $paymentDate): Carbon
+    {
+        return $paymentDate->copy()->addDays(self::PREPAID_PERIOD_DAYS - 1);
+    }
+
+    /**
      * Extend or (re)start a prepaid customer's service period after a settling payment.
      *
      * No-op for non-prepaid accounts, so it is safe to call unconditionally on every payment.
@@ -84,7 +100,7 @@ class PrepaidRenewalService
             // Counted (not just discarded) because the figure is what the receipt and the audit
             // trail need in order to show what the customer gave up.
             $forfeitedDays = (int) ceil($paymentDate->floatDiffInDays($current));
-            $newExpiry = $paymentDate->copy()->addDays(self::PREPAID_PERIOD_DAYS);
+            $newExpiry = $this->freshPeriodExpiry($paymentDate);
             $mode = 'activated';
         } elseif ($current && $current->greaterThan($paymentDate)) {
             // Early payment while still active — extend from the EXISTING expiry, preserving
@@ -95,7 +111,7 @@ class PrepaidRenewalService
             // Expired or never set — start a fresh period from the payment date. Note this is also
             // where an "Activate Now" on an already-lapsed account lands: there is nothing left to
             // forfeit, so the two are the same operation and 'renewed' is the honest label.
-            $newExpiry = $paymentDate->copy()->addDays(self::PREPAID_PERIOD_DAYS);
+            $newExpiry = $this->freshPeriodExpiry($paymentDate);
             $mode = 'renewed';
         }
 

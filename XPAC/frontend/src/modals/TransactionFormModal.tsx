@@ -9,6 +9,10 @@ import { User } from '../types/api';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import { planService, Plan } from '../services/planService';
 import { API_BASE_URL } from '../config/api';
+import { useBillingStore } from '../store/billingStore';
+import { getBillingRecordDetails } from '../services/billingService';
+import { technicianService } from '../services/technicianService';
+import { Technician } from '../types/api';
 
 interface ModalConfig {
   isOpen: boolean;
@@ -68,9 +72,34 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   isOpen,
   onClose,
   onSave,
-  billingRecord,
+  billingRecord: billingRecordProp,
   initialTransactionData
 }) => {
+  // Opened from a customer, the account is given. Opened from the Transaction List (the
+  // technician's "+"), there is none yet: the account picker below fills this in, and the rest
+  // of the form then works exactly as it does for a given account.
+  const [pickedRecord, setPickedRecord] = useState<any>(null);
+  const [isPickingAccount, setIsPickingAccount] = useState(false);
+  const billingRecord = billingRecordProp ?? pickedRecord;
+  const accountRecords = useBillingStore(s => s.billingRecords);
+  const fetchAccountRecords = useBillingStore(s => s.fetchBillingRecords);
+
+  // A technician records who collected the payment by picking from the technicians table;
+  // everyone else is recorded as themselves, as before.
+  const isTechnicianUser = (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('authData') || '{}');
+      return String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician';
+    } catch {
+      return false;
+    }
+  })();
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+
+  // The account picker is a technician-only feature (their "+" on the Transaction List).
+  // Every other caller passes the account in, and keeps the fixed account field.
+  const showAccountPicker = !billingRecordProp && isTechnicianUser;
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [processors, setProcessors] = useState<User[]>([]);
@@ -327,8 +356,11 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     fetchImageSizeSettings();
 
-    // Refresh processedBy from authData when modal opens
-    if (isOpen) {
+    // Refresh processedBy from authData when modal opens. A technician picks it from the
+    // technicians list instead, so theirs starts empty (or keeps an edited row's value).
+    if (isOpen && isTechnicianUser) {
+      setFormData(prev => ({ ...prev, processedBy: initialTransactionData?.processed_by_user || '' }));
+    } else if (isOpen) {
       const authData = localStorage.getItem('authData');
       if (authData) {
         try {
@@ -343,6 +375,60 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       }
     }
   }, [isOpen]);
+
+  // Technicians table, for the technician's Processed By dropdown.
+  useEffect(() => {
+    if (!isOpen || !isTechnicianUser) return;
+    technicianService.getAllTechnicians()
+      .then(res => setTechnicians(Array.isArray(res?.data) ? res.data : []))
+      .catch(() => setTechnicians([]));
+  }, [isOpen, isTechnicianUser]);
+
+  // No account given (opened from the Transaction List): load the accounts to pick from.
+  // fetchBillingRecords() is a no-op when the list is already loaded.
+  useEffect(() => {
+    if (isOpen && showAccountPicker) fetchAccountRecords();
+    if (!isOpen) setPickedRecord(null);
+  }, [isOpen, showAccountPicker, fetchAccountRecords]);
+
+  const technicianName = (t: Technician) =>
+    [t.first_name, t.middle_initial ? `${t.middle_initial}.` : '', t.last_name].filter(Boolean).join(' ').trim();
+
+  // Account picker: the first 10 accounts until something is typed, then every account whose
+  // number or name matches (capped, so a short query never renders thousands of rows).
+  const ACCOUNTS_SHOWN_BY_DEFAULT = 10;
+  const ACCOUNTS_SHOWN_WHEN_SEARCHING = 50;
+  const [accountQuery, setAccountQuery] = useState('');
+  const [isAccountListOpen, setIsAccountListOpen] = useState(false);
+  const accountOptions = useMemo(() => accountRecords
+    .filter(r => !!r.accountNo)
+    .map(r => ({
+      accountNo: String(r.accountNo),
+      label: [r.accountNo, r.customerName, r.address].filter(Boolean).join(' | '),
+    })), [accountRecords]);
+  const visibleAccounts = useMemo(() => {
+    const q = accountQuery.trim().toLowerCase();
+    if (!q) return accountOptions.slice(0, ACCOUNTS_SHOWN_BY_DEFAULT);
+    return accountOptions
+      .filter(o => o.label.toLowerCase().includes(q))
+      .slice(0, ACCOUNTS_SHOWN_WHEN_SEARCHING);
+  }, [accountOptions, accountQuery]);
+
+  const handlePickAccount = async (accountNo: string) => {
+    if (!accountNo) return;
+    setIsAccountListOpen(false);
+    setAccountQuery('');
+    setIsPickingAccount(true);
+    try {
+      // The same detail record Customer Details passes in, so plan, balance and prepaid
+      // handling all behave as they do when the form is opened from a customer.
+      const detail = await getBillingRecordDetails(accountNo);
+      setPickedRecord(detail);
+      setErrors(prev => ({ ...prev, accountNo: '' }));
+    } finally {
+      setIsPickingAccount(false);
+    }
+  };
 
   const getProxiedImageUrl = (url: string) => {
     if (!url) return '';
@@ -601,12 +687,23 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             setModal(prev => ({ ...prev, isOpen: false }));
           }
         });
+      } else if (result.errors?.reference_no?.length) {
+        // Duplicate reference number: shown on the field itself, and nothing is saved.
+        const message = result.errors.reference_no[0];
+        setErrors(prev => ({ ...prev, referenceNo: message }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Duplicate Reference No.',
+          message
+        });
       } else {
+        const fieldMessages = result.errors ? Object.values(result.errors).flat().join('\n') : '';
         setModal({
           isOpen: true,
           type: 'error',
           title: 'Error',
-          message: `Failed to create transaction: ${result.message}`
+          message: `Failed to ${isEdit ? 'update' : 'create'} transaction: ${fieldMessages || result.message}`
         });
       }
     } catch (error) {
@@ -693,18 +790,65 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Account No.<span className="text-red-500">*</span>
             </label>
-            <div className="relative">
-              <select
-                value={formData.accountNo}
-                onChange={(e) => handleInputChange('accountNo', e.target.value)}
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
-                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
-                  }`}
-              >
-                <option value={billingRecord?.applicationId || ''}>{billingRecord?.applicationId || ''} | {billingRecord?.customerName || ''} | {billingRecord?.address || ''}</option>
-              </select>
-              <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
-            </div>
+            {!showAccountPicker ? (
+              <div className="relative">
+                <select
+                  value={formData.accountNo}
+                  onChange={(e) => handleInputChange('accountNo', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value={billingRecord?.applicationId || ''}>{billingRecord?.applicationId || ''} | {billingRecord?.customerName || ''} | {billingRecord?.address || ''}</option>
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+              </div>
+            ) : (
+              // No account given: search and pick one. Shows 10 accounts until something is typed.
+              <div className="relative">
+                <input
+                  type="text"
+                  value={isAccountListOpen
+                    ? accountQuery
+                    : (pickedRecord ? [pickedRecord.applicationId, pickedRecord.customerName, pickedRecord.address].filter(Boolean).join(' | ') : '')}
+                  onChange={(e) => { setAccountQuery(e.target.value); setIsAccountListOpen(true); }}
+                  onFocus={() => { setAccountQuery(''); setIsAccountListOpen(true); }}
+                  onBlur={() => setTimeout(() => setIsAccountListOpen(false), 150)}
+                  placeholder={isPickingAccount ? 'Loading account…' : 'Search account no. or name…'}
+                  className={`w-full px-3 py-2 pr-9 border rounded focus:outline-none focus:border-orange-500 ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+                />
+                {isPickingAccount
+                  ? <Loader2 className="absolute right-3 top-2.5 text-gray-400 animate-spin" size={18} />
+                  : <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />}
+                {isAccountListOpen && (
+                  <div className={`absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded border shadow-lg ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+                    {visibleAccounts.length === 0 ? (
+                      <div className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {accountRecords.length ? 'No matching account' : 'Loading accounts…'}
+                      </div>
+                    ) : (
+                      visibleAccounts.map(o => (
+                        <button
+                          key={o.accountNo}
+                          type="button"
+                          // onMouseDown, not onClick: it fires before the input's blur closes the list.
+                          onMouseDown={(e) => { e.preventDefault(); handlePickAccount(o.accountNo); }}
+                          className={`block w-full text-left px-3 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-800 hover:bg-gray-100'}`}
+                        >
+                          {o.label}
+                        </button>
+                      ))
+                    )}
+                    {!accountQuery.trim() && accountOptions.length > ACCOUNTS_SHOWN_BY_DEFAULT && (
+                      <div className={`px-3 py-1.5 text-xs border-t ${isDarkMode ? 'text-gray-500 border-gray-700' : 'text-gray-400 border-gray-200'}`}>
+                        Showing {ACCOUNTS_SHOWN_BY_DEFAULT} of {accountOptions.length}. Type to search all accounts.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {errors.accountNo && <p className="text-red-500 text-xs mt-1">{errors.accountNo}</p>}
           </div>
 
@@ -938,13 +1082,35 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Processed By<span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
-              value={formData.processedBy}
-              readOnly
-              className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
-                }`}
-            />
+            {isTechnicianUser ? (
+              // Technicians pick who collected the payment from the technicians table.
+              <div className="relative">
+                <select
+                  value={formData.processedBy}
+                  onChange={(e) => handleInputChange('processedBy', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+                >
+                  <option value="">Select technician</option>
+                  {formData.processedBy && !technicians.some(t => technicianName(t) === formData.processedBy) && (
+                    // An edited row's stored value that is not a current technician name.
+                    <option value={formData.processedBy}>{formData.processedBy}</option>
+                  )}
+                  {technicians.map(t => (
+                    <option key={t.id} value={technicianName(t)}>{technicianName(t)}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={formData.processedBy}
+                readOnly
+                className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
+                  }`}
+              />
+            )}
             {errors.processedBy && <p className="text-red-500 text-xs mt-1">{errors.processedBy}</p>}
           </div>
 

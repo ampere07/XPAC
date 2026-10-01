@@ -671,8 +671,7 @@ class ManualRadiusOperationsService
             $this->writeLog("[CREDENTIALS] Processing $serverName");
 
             // 1. Find the user on THIS specific server to get the correct ID
-            $userPath = "/rest/user-manage/user/" . urlencode($oldUsername);
-            $findResult = $this->callApiWithRetry($endpoint['url'] . $userPath, 'GET', null, $endpoint['username'], $endpoint['password']);
+            $findResult = $this->getUserRecord($endpoint, $oldUsername);
 
             if (!$findResult || !isset($findResult['.id'])) {
                 $this->writeLog("[CREDENTIALS] [SKIP] User '$oldUsername' not found on $serverName");
@@ -810,22 +809,51 @@ class ManualRadiusOperationsService
      *
      * @return array{id: string, group: string, endpoint: array}|null Null if not found on any server.
      */
+    /**
+     * One user record from one server, or null.
+     *
+     * RouterOS reads an all-digit path segment ("000002") as an item NUMBER, so
+     * /user-manage/user/000002 fails with "no such command prefix". Those usernames are
+     * looked up with a name search instead. Every other username keeps the direct
+     * lookup, so nothing else pays for an extra call.
+     */
+    private function getUserRecord(array $endpoint, string $username)
+    {
+        if (!preg_match('/^\d+$/', $username)) {
+            return $this->callApiWithRetry(
+                $endpoint['url'] . "/rest/user-manage/user/" . urlencode($username),
+                'GET',
+                null,
+                $endpoint['username'],
+                $endpoint['password']
+            );
+        }
+
+        $list = $this->callApiWithRetry(
+            $endpoint['url'] . "/rest/user-manage/user?name=" . urlencode($username),
+            'GET',
+            null,
+            $endpoint['username'],
+            $endpoint['password']
+        );
+
+        foreach (is_array($list) ? $list : [] as $user) {
+            if (is_array($user) && isset($user['.id']) && (string) ($user['name'] ?? '') === $username) {
+                return $user;
+            }
+        }
+
+        return null;
+    }
+
     private function findRadiusUser(array $radiusEndpoints, string $username): ?array
     {
-        $userPath = "/rest/user-manage/user/" . urlencode($username);
-
         foreach ($radiusEndpoints as $index => $endpoint) {
             $serverName = "Server #" . ($index + 1) . " ({$endpoint['url']})";
             $this->writeLog("[LOOKUP] Searching for '$username' on $serverName");
 
             try {
-                $result = $this->callApiWithRetry(
-                    $endpoint['url'] . $userPath,
-                    'GET',
-                    null,
-                    $endpoint['username'],
-                    $endpoint['password']
-                );
+                $result = $this->getUserRecord($endpoint, $username);
             } catch (Throwable $e) {
                 // A failure on this server must not stop us from checking the others.
                 $this->writeLog("[LOOKUP] Error querying $serverName: " . $e->getMessage() . " — continuing to next server");
@@ -1289,9 +1317,18 @@ class ManualRadiusOperationsService
             
             $deleteCount = 0;
             foreach ($radiusEndpoints as $endpoint) {
-                // Construct path using username directly as requested
-                $targetPath = "/rest/user-manage/user/" . urlencode($username);
-                $targetUrl = $endpoint['url'] . $targetPath;
+                // By username directly — except an all-digit one, which RouterOS would read as
+                // an item number; that is deleted by its record id instead.
+                $target = urlencode($username);
+                if (preg_match('/^\d+$/', $username)) {
+                    $record = $this->getUserRecord($endpoint, $username);
+                    if (!$record || !isset($record['.id'])) {
+                        $this->writeLog("[DELETE] User '$username' not found on {$endpoint['url']}");
+                        continue;
+                    }
+                    $target = $record['.id'];
+                }
+                $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $target;
                 
                 $this->writeLog("[DELETE] Calling endpoint: $targetUrl");
 

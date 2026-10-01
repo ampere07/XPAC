@@ -127,8 +127,12 @@ class RadiusReconnectionService
         $currentRadiusGroup = null;
         $activeEndpoint = null;
 
-        // Find user in RADIUS servers
-        $userPath = "/rest/user-manage/user/" . urlencode($username);
+        // Find user in RADIUS servers. An all-digit username ("000002") is searched by name:
+        // RouterOS reads it as an item number in /user/<name> and answers "no such command prefix".
+        $isNumeric = preg_match('/^\d+$/', $username) === 1;
+        $userPath = $isNumeric
+            ? "/rest/user-manage/user?name=" . urlencode($username)
+            : "/rest/user-manage/user/" . urlencode($username);
 
         foreach ($radiusEndpoints as $endpoint) {
             $fullUrl = $endpoint['url'] . $userPath;
@@ -139,6 +143,17 @@ class RadiusReconnectionService
                 $endpoint['username'],
                 $endpoint['password']
             );
+
+            if ($isNumeric) {
+                $match = null;
+                foreach (is_array($result) ? $result : [] as $user) {
+                    if (is_array($user) && isset($user['.id']) && (string) ($user['name'] ?? '') === $username) {
+                        $match = $user;
+                        break;
+                    }
+                }
+                $result = $match;
+            }
 
             if ($result && isset($result['.id'])) {
                 $radiusId = $result['.id'];

@@ -372,6 +372,7 @@ class JobOrderController extends Controller
                     'house_front_picture_url' => $jobOrder->house_front_picture_url,
                     'client_tagging_url' => $jobOrder->client_tagging_url,
                     'proof_image_url' => $jobOrder->proof_image_url,
+                    'other_photos_url' => $jobOrder->other_photos_url,
                     'installation_landmark' => $jobOrder->installation_landmark,
             
                     'created_at' => $jobOrder->created_at ? $jobOrder->created_at->format('Y-m-d H:i:s') : null,
@@ -917,6 +918,8 @@ class JobOrderController extends Controller
                 'house_front_picture_url' => 'nullable|string|max:500',
                 'proof_image_url' => 'nullable|string|max:500',
                 'client_tagging_url' => 'nullable|string|max:500',
+                // Column is VARCHAR(255).
+                'other_photos_url' => 'nullable|string|max:255',
                 'technicians' => 'nullable|array',
             ]);
 
@@ -1456,6 +1459,89 @@ class JobOrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete job order',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * DELETE /api/job-orders/{id}/with-application — Super Admin only.
+     *
+     * Permanently deletes the job order AND the application it was created from, in one
+     * transaction. Nothing else is touched: a customer account already onboarded from this
+     * job order stays (its link to the job order is nulled by the foreign key).
+     *
+     * The role is checked here, on the server, not just by hiding the button: the API
+     * permission layer only logs, so without this any signed-in user could call it.
+     */
+    public function destroyWithApplication($id): JsonResponse
+    {
+        $user = auth()->user();
+        if (!$user || (int) $user->role_id !== 7) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete a job order and its application.',
+            ], 403);
+        }
+
+        try {
+            $jobOrder = JobOrder::find($id);
+            if (!$jobOrder) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Job order not found. It may have been deleted already.',
+                ], 404);
+            }
+
+            $jobOrderData = $jobOrder->toArray();
+            $application = $jobOrder->application_id ? Application::find($jobOrder->application_id) : null;
+            $applicationData = $application ? $application->toArray() : null;
+
+            DB::transaction(function () use ($jobOrder, $application) {
+                $jobOrder->delete();
+                $application?->delete();
+            });
+
+            $userEmail = $user->email_address ?? $user->email ?? 'System';
+
+            AuditTrailLog::create([
+                'old_details' => [
+                    'type' => 'joborders_with_application',
+                    'id' => $id,
+                    'data' => $jobOrderData,
+                    'application' => $applicationData,
+                ],
+                'new_details' => null,
+                'created_by_user' => $userEmail,
+                'updated_by_user' => $userEmail,
+            ]);
+
+            ActivityLog::log(
+                'Job Order Deleted',
+                "Job Order #{$id}" . ($application ? " and Application #{$application->id}" : '') . " deleted by {$userEmail}",
+                'warning',
+                [
+                    'resource_type' => 'JobOrder',
+                    'resource_id' => $id,
+                    'additional_data' => [
+                        'job_order_data' => $jobOrderData,
+                        'application_id' => $application->id ?? null,
+                    ],
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => $application
+                    ? "Job order #{$id} and application #{$application->id} were deleted."
+                    : "Job order #{$id} was deleted (it had no application).",
+                'deleted_application_id' => $application->id ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("Failed to delete job order {$id} with application: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete the job order and its application.',
                 'error' => $e->getMessage(),
             ], 500);
         }
@@ -2400,6 +2486,7 @@ class JobOrderController extends Controller
                 'has_client_tagging' => $request->hasFile('client_tagging_image'),
                 'has_speed_test' => $request->hasFile('speed_test_image'),
                 'has_proof_image' => $request->hasFile('proof_image'),
+                'has_other_photos' => $request->hasFile('other_photos_image'),
             ]);
 
             $validator = Validator::make($request->all(), [
@@ -2414,6 +2501,8 @@ class JobOrderController extends Controller
                 'speed_test_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'proof_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'house_front_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                // Optional extra photo from the technician's done form.
+                'other_photos_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
             ]);
 
             if ($validator->fails()) {
@@ -2444,7 +2533,8 @@ class JobOrderController extends Controller
                 'client_tagging_image',
                 'speed_test_image',
                 'proof_image',
-                'house_front_image'
+                'house_front_image',
+                'other_photos_image',
             ];
 
             $queuedCount = 0;
@@ -2461,6 +2551,7 @@ class JobOrderController extends Controller
                 'speed_test_image' => 'speedtest_image_url',
                 'proof_image' => 'proof_image_url',
                 'house_front_image' => 'house_front_picture_url',
+                'other_photos_image' => 'other_photos_url',
             ];
 
             foreach ($imageFields as $field) {

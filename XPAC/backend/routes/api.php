@@ -1698,6 +1698,8 @@ Route::prefix('job-orders')->middleware(['auth:sanctum', 'ensure.database.tables
     Route::get('/{id}', [JobOrderController::class , 'show']);
     Route::put('/{id}', [JobOrderController::class , 'update']);
     Route::delete('/{id}', [JobOrderController::class , 'destroy']);
+    // Super Admin only (checked in the controller): deletes the job order and its application.
+    Route::delete('/{id}/with-application', [JobOrderController::class , 'destroyWithApplication']);
     Route::post('/{id}/approve', [JobOrderController::class , 'approve']);
     Route::post('/{id}/log-blocked-transfer', [JobOrderController::class , 'logBlockedTransfer']);
     Route::post('/{id}/create-radius-account', [JobOrderController::class , 'createRadiusAccount']);

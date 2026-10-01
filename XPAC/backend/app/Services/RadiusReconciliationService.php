@@ -1255,7 +1255,9 @@ class RadiusReconciliationService
                 return true;
             }
             $text = (string) ($r['error'] ?? '') . ' ' . json_encode($r['data'] ?? null);
-            return $status === 400 && preg_match('/no such|not found|does not exist/i', $text) === 1;
+            // "no such item", not the broader "no such": RouterOS answers "no such command
+            // prefix" when it misreads the path, which says nothing about the user existing.
+            return $status === 400 && preg_match('/no such item|not found|does not exist/i', $text) === 1;
         };
 
         $username = trim($username);
@@ -1287,7 +1289,12 @@ class RadiusReconciliationService
             // Looked up by path — /user/<name> answers the record or a 404 — the same call
             // RadiusServerResolver and the disconnect/reconnect code use against these devices.
             // The query form (/user?name=<name>) was reset by the device in production.
-            $lookup = $this->callDevice($config, 'GET', '/rest/user-manage/user/' . rawurlencode($username), null, $noTrace, '', $connect, $request);
+            // An all-digit username ("000002") is searched by name instead: RouterOS reads it as an
+            // item number in /user/<name> and answers "no such command prefix".
+            $lookupPath = preg_match('/^\d+$/', $username)
+                ? '/rest/user-manage/user?name=' . rawurlencode($username)
+                : '/rest/user-manage/user/' . rawurlencode($username);
+            $lookup = $this->callDevice($config, 'GET', $lookupPath, null, $noTrace, '', $connect, $request);
 
             if (!$lookup['success'] && $isNotFound($lookup)) {
                 $outcome['absent'][] = $label;

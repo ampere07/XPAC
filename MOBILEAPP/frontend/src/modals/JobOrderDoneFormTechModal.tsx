@@ -107,6 +107,7 @@ interface JobOrderDoneFormData {
   ip: string;
   addressCoordinates: string;
   proofImage: File | null;
+  otherPhotosImage: File | null;
 }
 
 interface OrderItem {
@@ -242,7 +243,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     visit_with_other: '',
     ip: '',
     addressCoordinates: '',
-    proofImage: null
+    proofImage: null,
+    otherPhotosImage: null
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -335,6 +337,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     clientSignatureImage: string | null;
     clientTaggingImage: string | null;
     proofImage: string | null;
+    otherPhotosImage: string | null;
   }>({
     signedContractImage: null,
     setupImage: null,
@@ -343,7 +346,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     portLabelImage: null,
     clientSignatureImage: null,
     clientTaggingImage: null,
-    proofImage: null
+    proofImage: null,
+    otherPhotosImage: null
   });
 
   const [showModal, setShowModal] = useState(false);
@@ -528,7 +532,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         visit_with_other: '',
         ip: '',
         addressCoordinates: '',
-        proofImage: null
+        proofImage: null,
+        otherPhotosImage: null
       }));
       setErrors({});
       setOrderItems([{ itemId: '', quantity: '' }]);
@@ -872,7 +877,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
       portLabelImage: safeConvert(jobOrderData.port_label_image_url || jobOrderData.Port_Label_Image_URL),
       clientSignatureImage: safeConvert(jobOrderData.client_signature_url || jobOrderData.Client_Signature_URL),
       clientTaggingImage: safeConvert(jobOrderData.client_tagging_url || jobOrderData.Client_Tagging_URL),
-      proofImage: safeConvert(jobOrderData.proof_image_url || jobOrderData.Proof_Image_URL)
+      proofImage: safeConvert(jobOrderData.proof_image_url || jobOrderData.Proof_Image_URL),
+      otherPhotosImage: safeConvert(jobOrderData.other_photos_url || jobOrderData.Other_Photos_URL)
     });
 
     const safeConvertUrl = (val: any): string | null => {
@@ -944,7 +950,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     });
   }, []);
 
-  const handleImageUpload = useCallback((field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'clientTaggingImage' | 'proofImage', file: any) => {
+  const handleImageUpload = useCallback((field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'clientTaggingImage' | 'proofImage' | 'otherPhotosImage', file: any) => {
     setFormData(prev => ({ ...prev, [field]: file }));
     setImagePreviews(prev => ({ ...prev, [field]: file ? file.uri : null }));
     setErrors(prev => prev[field] ? { ...prev, [field]: '' } : prev);
@@ -1320,6 +1326,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           safeAppendImage('client_signature_image', formData.clientSignatureImage);
           safeAppendImage('client_tagging_image', formData.clientTaggingImage);
           safeAppendImage('proof_image', formData.proofImage);
+          // Optional extra photo; only sent when the technician added one.
+          safeAppendImage('other_photos_image', formData.otherPhotosImage);
         }
 
         if (updatedFormData.onsiteStatus === 'Failed' || updatedFormData.onsiteStatus === 'Reschedule') {
@@ -1341,6 +1349,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 client_signature_image_url?: string;
                 client_tagging_url?: string;
                 proof_image_url?: string;
+                other_photos_url?: string;
               };
               folder_id?: string;
             }>(`/job-orders/${jobOrderId}/upload-images`, imageFormData, {
@@ -1375,6 +1384,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
               }
               if (imageUrls.proof_image_url) {
                 jobOrderUpdateData.proof_image_url = imageUrls.proof_image_url;
+              }
+              if (imageUrls.other_photos_url) {
+                jobOrderUpdateData.other_photos_url = imageUrls.other_photos_url;
               }
             }
           } catch (uploadError: any) {
@@ -3349,6 +3361,19 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                               required={true}
                               onUpload={(file) => handleImageUpload('signedContractImage', file)}
                               error={errors.signedContractImage}
+                              colorPrimary={colorPalette?.primary || '#7c3aed'}
+                              jobOrderName={jobOrderIdentifier}
+                            />
+                          </View>
+
+                          {/* Optional: any extra photos the technician wants to attach. */}
+                          <View ref={registerAnchor('otherPhotosImage')} collapsable={false}>
+                            <ImagePreview
+                              imageUrl={imagePreviews.otherPhotosImage}
+                              label="Other Photos"
+                              required={false}
+                              onUpload={(file) => handleImageUpload('otherPhotosImage', file)}
+                              error={errors.otherPhotosImage}
                               colorPrimary={colorPalette?.primary || '#7c3aed'}
                               jobOrderName={jobOrderIdentifier}
                             />

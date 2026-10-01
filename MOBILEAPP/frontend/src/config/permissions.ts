@@ -454,6 +454,8 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
   [ROLE.TECHNICIAN]: [
     'job-order', 'job-order.tech-edit', 'job-order.attachment', 'service-order',
     'service-order.tech-edit', 'work-order', 'lcp-nap-location',
+    // View only: no 'transaction-list.approve', so no Approve / Mark as Failed.
+    'transaction-list',
   ],
 
   [ROLE.CUSTOMER]: [

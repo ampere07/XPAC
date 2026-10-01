@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   X, ExternalLink, Edit, Settings, Loader, ArrowRightCircle, Paperclip,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Trash2
 } from 'lucide-react';
 import { updateJobOrder, approveJobOrder, getRelatedDetailsUpdateLogs } from '../services/jobOrderService';
 import apiClient from '../config/api';
@@ -24,6 +24,7 @@ import { User as UserType } from '../types/api';
 import { getBillingRecords, getBillingRecordDetails, BillingDetailRecord } from '../services/billingService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
 import { isAgentUser } from '../utils/agentReferral';
+import { isSuperAdminUser } from '../utils/agentAccess';
 import { usePermissions } from '../hooks/usePermissions';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
@@ -67,6 +68,10 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [shouldCloseOnSuccess, setShouldCloseOnSuccess] = useState(false);
+  // Delete job order + its application: Super Admin only (the backend checks the role too).
+  const canDeleteJobOrder = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeletingJobOrder, setIsDeletingJobOrder] = useState(false);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const startXRef = useRef<number>(0);
@@ -2135,6 +2140,17 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </button>
             </div>
 
+            {canDeleteJobOrder && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                disabled={isDeletingJobOrder}
+                className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'} hover:text-red-500 disabled:opacity-50`}
+                title="Delete Job Order and Application"
+              >
+                {isDeletingJobOrder ? <Loader size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              </button>
+            )}
+
             {!(userRole === 'agent' || String(roleId) === '4') && (
               <div className="relative">
                 <button
@@ -2426,6 +2442,32 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         </div>
       )}
+
+      {/* Delete Job Order + Application (Super Admin) */}
+      <ConfirmationModal
+        isOpen={showDeleteModal}
+        title="Delete Job Order"
+        message={`Are you sure you want to permanently delete Job Order #${jobOrder.id} and its application? This cannot be undone.`}
+        confirmText="Yes, Delete"
+        cancelText="Cancel"
+        onConfirm={async () => {
+          setShowDeleteModal(false);
+          setIsDeletingJobOrder(true);
+          try {
+            const res = await apiClient.delete<{ success: boolean; message: string }>(`/job-orders/${jobOrder.id}/with-application`);
+            setSuccessMessage(res.data?.message || 'Job order and application deleted.');
+            setShouldCloseOnSuccess(true);
+            setShowSuccessModal(true);
+            onRefresh?.();
+          } catch (err: any) {
+            setErrorMessage(err?.response?.data?.message || 'Failed to delete the job order and its application.');
+            setShowErrorModal(true);
+          } finally {
+            setIsDeletingJobOrder(false);
+          }
+        }}
+        onCancel={() => setShowDeleteModal(false)}
+      />
 
       {/* Error Modal */}
       <ConfirmationModal

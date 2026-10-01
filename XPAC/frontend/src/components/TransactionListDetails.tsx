@@ -834,7 +834,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                 <span>{loading ? 'Approving...' : 'Approve'}</span>
               </button>
             )}
-            {(transaction.status || '').toLowerCase() === 'pending' && (
+            {/* Same permission as Approve: marking a payment Failed is part of approving. */}
+            {hasPermission('transaction-list.approve') && (transaction.status || '').toLowerCase() === 'pending' && (
               <button
                 onClick={() => setShowFailedConfirmModal(true)}
                 disabled={loading}
@@ -1022,22 +1023,18 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                   }`}>
                   <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                     }`}>Payment Proof</div>
-                  <div className={isDarkMode ? 'text-white flex-1' : 'text-gray-900 flex-1'}>
-                    <div className="mt-2 relative group cursor-pointer" onClick={() => { if (transaction.image_url) window.open(transaction.image_url, '_blank'); }}>
-                      <img
-                        src={transaction.image_url && transaction.image_url.includes('drive.google.com')
-                          ? `${API_BASE_URL}/proxy/image?url=${encodeURIComponent(transaction.image_url)}`
-                          : (transaction.image_url || '')}
-                        alt="Payment Proof"
-                        className="w-full h-auto max-h-48 object-contain rounded border border-gray-700"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                      <div className="mt-1 text-xs text-orange-500 hover:text-orange-400 flex items-center">
-                        View Full Image <ExternalLink size={12} className="ml-1" />
-                      </div>
-                    </div>
+                  <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                    {/* The stored Google Drive link itself; opens in a new tab. */}
+                    <a
+                      href={transaction.image_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-orange-500 hover:text-orange-400 hover:underline break-all inline-flex items-start"
+                      title="Open payment proof in a new tab"
+                    >
+                      <span>{transaction.image_url}</span>
+                      <ExternalLink size={12} className="ml-1 mt-1 flex-shrink-0" />
+                    </a>
                   </div>
                 </div>
               )}

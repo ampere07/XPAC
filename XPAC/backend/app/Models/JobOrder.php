@@ -104,6 +104,7 @@ class JobOrder extends Model
         'end_time',
         'proof_image_url',
         'client_tagging_url',
+        'other_photos_url',
         'organization_id',
         'technicians',
         'commission_status',

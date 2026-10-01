@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Download,
   Filter,
+  Plus,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GlobalSearch from './globalfunctions/GlobalSearch';
@@ -40,6 +41,7 @@ import { BillingDetailRecord } from '../types/billing';
 import { exportToCSV } from '../utils/exportUtils';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
+import AddTransactionModal from '../modals/AddTransactionModal';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const isDarkMode = false;
@@ -510,6 +512,18 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // ─── Pull to refresh ──────────────────────────────────────────────────────
 
+  // Technicians record a payment from here ("+"); the form lets them pick the account.
+  const [isTechnicianUser, setIsTechnicianUser] = useState(false);
+  const [showAddTransaction, setShowAddTransaction] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('authData').then(raw => {
+      try {
+        const u = JSON.parse(raw || '{}');
+        setIsTechnicianUser(String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician');
+      } catch { setIsTechnicianUser(false); }
+    }).catch(() => {});
+  }, []);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     try { await fetchUpdates(); } finally { setRefreshing(false); }
@@ -879,6 +893,16 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           >
             <Download size={18} color={primary} />
           </TouchableOpacity>
+          {/* Add Transaction — technicians only */}
+          {isTechnicianUser && (
+            <TouchableOpacity
+              onPress={() => setShowAddTransaction(true)}
+              style={{ padding: 9, borderRadius: 8, backgroundColor: primary }}
+              accessibilityLabel="Add Transaction"
+            >
+              <Plus size={18} color="#ffffff" />
+            </TouchableOpacity>
+          )}
           {/* Refresh */}
           <TouchableOpacity
             onPress={handleRefresh}
@@ -1155,6 +1179,12 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         loadingPercentage={50}
         isDarkMode={false}
         colorPalette={colorPalette}
+      />
+
+      <AddTransactionModal
+        isOpen={showAddTransaction}
+        onClose={() => setShowAddTransaction(false)}
+        onSaved={() => { handleRefresh(); }}
       />
     </View>
   );
