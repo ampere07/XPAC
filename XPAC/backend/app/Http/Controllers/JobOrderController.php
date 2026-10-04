@@ -21,13 +21,13 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Hash;
 
 use App\Services\GoogleDriveService;
 use App\Services\PppoeUsernameService;
 use App\Services\RadiusServerResolver;
+use App\Services\RouterosApiService;
 use App\Services\VisitTimerResetService;
 use App\Models\RadiusConfig;
 use App\Models\ActivityLog;
@@ -2629,10 +2629,6 @@ class JobOrderController extends Controller
                     continue;
                 }
 
-                $radiusUrl = $radiusConfig->ssl_type . '://' . $radiusConfig->ip . ':' . $radiusConfig->port . '/rest/user-manage/user';
-                $radiusUsername = $radiusConfig->username;
-                $radiusPassword = $radiusConfig->password;
-
                 \Log::channel('radiusrelated')->info('RADIUS server selected for JobOrder account creation', [
                     'job_order_id'     => $id,
                     'position'         => $position,
@@ -2642,31 +2638,61 @@ class JobOrderController extends Controller
 
                 for ($attempt = 1; $attempt <= $maxAttemptsPerConfig; $attempt++) {
                     try {
-                        $response = Http::withOptions([
-                            'verify' => false
-                        ])
-                        ->withBasicAuth($radiusUsername, $radiusPassword)
-                        ->put($radiusUrl, $payload);
+                        $api = app(RouterosApiService::class);
 
-                        $statusCode = $response->status();
+                        // Connect first so an unreachable device is told apart from a
+                        // device that answered and refused the account. connect() walks
+                        // both transports for this config — api-ssl 8729, then api 8728 —
+                        // so reaching here means neither answered.
+                        if (!$api->connect($radiusConfig)) {
+                            $radiusError = $api->getLastError() !== ''
+                                ? $api->getLastError()
+                                : 'No RADIUS endpoint responded.';
+                            $lastFailureWasConnection = true;
+                            \Log::channel('radiusrelated')->error('RADIUS Connection Exception for JobOrder: ' . $id, [
+                                'error' => $radiusError,
+                                'position' => $position,
+                                'attempt' => $attempt,
+                                'radius_config_id' => $radiusConfig->id,
+                                'radius_ip' => $radiusConfig->ip,
+                                'transports' => $api->endpointStates($radiusConfig),
+                            ]);
 
-                        if ($statusCode === 204 || $response->successful()) {
+                            // Both transports are already in cool-off: retrying here only
+                            // repeats the refusal. Hand over to the next config now.
+                            if ($api->lastConnectAllEndpointsDown()) {
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        // addUser() is idempotent: an account that is already on the
+                        // device is reported as success rather than duplicated, so a
+                        // retry after a half-completed attempt is safe.
+                        if ($api->addUser($radiusConfig, $payload['name'], $payload['password'], $payload['group'])) {
                             $radiusSubmitted = true;
                             $radiusError = null;
                             break;
                         }
 
-                        $radiusError = 'HTTP ' . $statusCode . ': ' . $response->body();
+                        $radiusError = $api->getLastError() !== ''
+                            ? $api->getLastError()
+                            : 'The RADIUS device rejected the account.';
                         $lastFailureWasConnection = false;
                         \Log::channel('radiusrelated')->error('RADIUS API Error for JobOrder: ' . $id, [
-                            'status' => $statusCode,
-                            'response' => $response->body(),
+                            'error' => $radiusError,
                             'payload' => $payload,
                             'position' => $position,
                             'attempt' => $attempt,
                             'radius_config_id' => $radiusConfig->id,
                             'radius_ip' => $radiusConfig->ip,
                         ]);
+
+                        // The device answered and refused this exact account (unknown
+                        // group, bad value). Re-sending it produces the same refusal, so
+                        // move on to the next server instead of burning the retries.
+                        break;
                     } catch (\Exception $mikrotikException) {
                         $radiusError = $mikrotikException->getMessage();
                         $lastFailureWasConnection = true;

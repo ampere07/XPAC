@@ -14,7 +14,8 @@ use Throwable;
  * This replaces the REST transport (`/rest/user-manage/...`, RouterOS v7 only) that every
  * RADIUS service in this application used to speak. It talks the binary RouterOS API
  * protocol directly on top of stream_socket_client() over port 8728 (plain) or 8729
- * (TLS) — no composer package is involved, and no new dependency is introduced.
+ * (TLS), or the port they are forwarded to — no composer package is involved, and no new
+ * dependency is introduced.
  *
  * Two things it does that callers rely on:
  *
@@ -40,6 +41,12 @@ class RouterosApiService
     /** Standard RouterOS API service ports. */
     public const API_PORT_PLAIN = 8728;
     public const API_PORT_SSL   = 8729;
+
+    /**
+     * Ports a radius_config row still carries from the REST transport (the device's web
+     * service). Never an API endpoint, so they are skipped rather than dialled.
+     */
+    private const REST_WEB_PORTS = [80, 443];
 
     /** User Manager command trees, by RouterOS major version. */
     public const UM_PREFIX_V7 = '/user-manager';
@@ -185,6 +192,30 @@ class RouterosApiService
         }
 
         return $states;
+    }
+
+    /**
+     * The endpoint a connection to $config tries first. Opens nothing — for a probe that has to
+     * test the same path the API takes.
+     *
+     * @param RadiusConfig|array<string, mixed> $config
+     * @return array{transport: string, host: string, port: int}|null null when the config has no host
+     */
+    public function primaryEndpoint($config): ?array
+    {
+        $credentials = $this->resolveCredentials($config, null, null, null, null, self::DEFAULT_CONNECT_TIMEOUT);
+
+        if ($credentials === null) {
+            return null;
+        }
+
+        $first = $this->candidateEndpoints($credentials)[0];
+
+        return [
+            'transport' => $first['transport'],
+            'host'      => (string) $credentials['host'],
+            'port'      => $first['port'],
+        ];
     }
 
     /**
@@ -844,11 +875,13 @@ class RouterosApiService
     /**
      * Endpoints to try, in order.
      *
-     * `radius_config.port` addresses the device's REST/web service on most installs, so it
-     * is only used as an API endpoint when it really is one (8728/8729). Otherwise the
-     * standard API ports are tried, preferred scheme first then the alternate — mirroring
-     * the https-then-http fallback the REST transport used, so a device with only one of
-     * api / api-ssl enabled still answers.
+     * The saved `radius_config.port` comes first: 8728/8729 on its own transport, and any
+     * other port over the saved ssl_type — a device behind NAT publishes its API on a
+     * forwarded port (e.g. public 58728 -> 8728), and only the saved port reaches it. The
+     * REST transport's web ports (80/443) are skipped; a row still carrying one is reached
+     * on the standard ports. Those standard ports follow, preferred scheme first then the
+     * alternate — mirroring the https-then-http fallback the REST transport used, so a
+     * device with only one of api / api-ssl enabled still answers.
      *
      * A port passed explicitly by the caller is honoured ALONE. Silently falling back to
      * 8728/8729 there would let a probe of one endpoint report success for a different one.
@@ -871,6 +904,8 @@ class RouterosApiService
             $candidates[] = ['transport' => 'ssl', 'port' => self::API_PORT_SSL];
         } elseif ($configured === self::API_PORT_PLAIN) {
             $candidates[] = ['transport' => 'tcp', 'port' => self::API_PORT_PLAIN];
+        } elseif ($configured > 0 && !in_array($configured, self::REST_WEB_PORTS, true)) {
+            $candidates[] = ['transport' => $secure ? 'ssl' : 'tcp', 'port' => $configured];
         }
 
         $candidates[] = $secure

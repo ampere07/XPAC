@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, ChevronDown, Calendar, Camera, Search } from 'lucide-react';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
@@ -75,6 +75,29 @@ const formatDateTimeForInput = (raw?: string | null): string => {
   return `${y}-${mo}-${d}T${h ?? '00'}:${mi ?? '00'}`;
 };
 
+/**
+ * Days of prepaid service left, counted as the Customer page and the restriction cron count them:
+ * whole calendar days, with the expiry date itself as the last day. 0 when the period is over or
+ * has not started.
+ */
+const prepaidDaysLeft = (raw?: string | null): number => {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw ?? '').trim());
+  if (!parts) return 0;
+
+  // Local midnight on both sides so the subtraction is a pure date difference.
+  const expiry = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (isNaN(expiry.getTime())) return 0;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+  return Math.max(0, Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1);
+};
+
+/** Billing statuses a Billing Type change acts on; any other is left as it is. */
+const SWITCHABLE_STATUSES = ['active', 'inactive', 'restricted', 'disconnected'];
+
 const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   isOpen,
   onClose,
@@ -117,6 +140,8 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   // The plan the form opened with. Sent only when changed, so an old plan name that is no longer
   // in the plan list never blocks an unrelated customer-details save.
   const originalPlanRef = useRef<string>('');
+  // The Billing Type the form opened with, so a switch can be told apart from a re-save.
+  const originalGenerationTypeRef = useRef<string>('');
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
     type: 'success',
@@ -300,6 +325,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
             return stored === undefined || stored === null || stored === '' ? '' : Number(stored).toFixed(2);
           })()
         });
+        originalGenerationTypeRef.current = normalizeGenerationType(
+          recordData.generation_type || recordData.generationType || recordData.billingAccount?.generation_type || ''
+        );
       } else if (editType === 'technical_details') {
         let lcpnapValue = recordData.lcpnap || recordData.LCPNAP || '';
 
@@ -792,6 +820,97 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const isPrepaidBillingType =
     String(formData.generation_type ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid';
 
+  /**
+   * What saving a changed Billing Type does to the connection, shown before the save.
+   *
+   * The same rule BillingTypeSwitchService applies on the server once the save commits — change
+   * both together. Reconnect when nothing is owed and, for Prepaid, days are left; disconnect when
+   * a balance is owed or, for Prepaid, none are. Postpaid has no paid period, so the balance alone
+   * decides. Only Active, Inactive, Restricted and Disconnected accounts are touched.
+   *
+   * null while the Billing Type is unchanged.
+   */
+  const billingTypeSwitchPlan = useMemo((): { tone: 'reconnect' | 'disconnect' | 'none'; text: string } | null => {
+    if (editType !== 'billing_details') return null;
+
+    const newType = normalizeGenerationType(formData.generation_type);
+    if (!newType || (newType === 'Prepaid') === (originalGenerationTypeRef.current === 'Prepaid')) {
+      return null;
+    }
+
+    const switching = `Saving switches this account to ${newType}`;
+
+    const statusValue = String(formData.billing_status_id ?? '').trim();
+    const statusName = (billingStatuses.find(s => s.id.toString() === statusValue)?.status_name ?? statusValue).trim();
+    const status = statusName.toLowerCase();
+    const statusKnown = status !== '' && !/^\d+$/.test(status);
+
+    if (statusKnown && !SWITCHABLE_STATUSES.includes(status)) {
+      return { tone: 'none', text: `${switching}. It is ${statusName}, so the billing type change does not reconnect or disconnect it.` };
+    }
+
+    const balanceText = String(formData.account_balance ?? '').trim();
+    const balance = Number(balanceText);
+    if (balanceText === '' || isNaN(balance)) {
+      return {
+        tone: 'none',
+        text: `${switching}. It is then reconnected or disconnected to match: connected only if nothing is owed${newType === 'Prepaid' ? ' and it has days left' : ''}.`,
+      };
+    }
+
+    let action: 'reconnect' | 'disconnect';
+    let reason: string;
+    const daysLeft = prepaidDaysLeft(formData.prepaid_expires_at);
+
+    if (balance > 0) {
+      action = 'disconnect';
+      reason = `it has a balance of ₱${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    } else if (newType === 'Prepaid' && daysLeft <= 0) {
+      action = 'disconnect';
+      reason = formData.prepaid_expires_at ? 'it has 0 days left' : 'it has no prepaid days yet';
+      if (isSuperAdmin) {
+        reason += ' (set a future Prepaid Expiration below to give it days)';
+      }
+    } else {
+      action = 'reconnect';
+      reason = newType === 'Prepaid'
+        ? `no balance is owed and it has ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left`
+        : 'no balance is owed';
+    }
+
+    // Unknown status (the list has not loaded): say what will happen without claiming the
+    // current state.
+    if (!statusKnown) {
+      return { tone: action, text: `${switching} and ${action}s it if needed: ${reason}.` };
+    }
+
+    const isActive = status === 'active';
+
+    if (action === 'reconnect') {
+      return {
+        tone: 'reconnect',
+        text: isActive
+          ? `${switching}. It stays connected: ${reason}.`
+          : `${switching} and reconnects it: ${reason}.`,
+      };
+    }
+
+    return {
+      tone: 'disconnect',
+      text: isActive
+        ? `${switching} and disconnects it: ${reason}.`
+        : `${switching}. It stays disconnected: ${reason}.`,
+    };
+  }, [
+    editType,
+    formData.generation_type,
+    formData.billing_status_id,
+    formData.account_balance,
+    formData.prepaid_expires_at,
+    billingStatuses,
+    isSuperAdmin,
+  ]);
+
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -838,15 +957,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         }
       }
     } else if (editType === 'technical_details') {
+      // Connection Type, LCP-NAP, Port and VLAN are optional: the details save with them empty.
       if (!formData.username?.trim()) newErrors.username = 'Username is required';
-      if (!formData.connection_type?.trim()) newErrors.connection_type = 'Connection Type is required';
       if (!formData.router_model?.trim()) newErrors.router_model = 'Router Model is required';
-
-      if (formData.connection_type === 'Fiber') {
-        if (!formData.lcpnap?.trim()) newErrors.lcpnap = 'LCPNAP is required';
-        if (!formData.port?.trim()) newErrors.port = 'Port is required';
-        if (!formData.vlan?.toString().trim()) newErrors.vlan = 'VLAN is required';
-      }
 
       if (formData.connection_type === 'Antenna' || formData.connection_type === 'Local') {
         if (!formData.ip_address?.trim()) newErrors.ip_address = 'IP Address is required';
@@ -930,7 +1043,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         loggedInUserId = parsedUser.id || parsedUser.user?.id || '';
       }
 
-      const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId };
+      // autoConnectionCheck: once the save commits, the server reconnects a prepaid account that
+      // owes nothing and has more than 1 day left, and disconnects one that owes more than 1.00
+      // with 0 days left. Sent only from this modal; other callers of the endpoint are unaffected.
+      const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId, autoConnectionCheck: true };
 
       /*
        * Account Balance, Prepaid Expiration and PPPoE Password are SuperAdmin-only. For anyone
@@ -970,18 +1086,24 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
       // Surface RADIUS queue outcome for the PPPoE username change. The details are
       // already saved; a failed RADIUS push is queued for automatic retry (not an error).
+      // The server's own message wins when there is one: it says which operation was queued
+      // (a Billing Type switch can queue a reconnect or a disconnect), which the generic line cannot.
       let successMessage = 'Details updated successfully.';
-      if (saveResult?.radius_queued) {
+      if (saveResult?.radius_message) {
+        successMessage += `\n\n${saveResult.radius_message}`;
+      } else if (saveResult?.radius_queued) {
         successMessage += '\n\nRADIUS operation has been queued and will be processed automatically.';
       } else if (saveResult?.radius_queue_failed) {
         successMessage += '\n\nWarning: The RADIUS update could not be queued. Please notify an administrator to retry it manually.';
-      } else if (saveResult?.radius_message) {
-        successMessage += `\n\n${saveResult.radius_message}`;
       }
       // Customer details: what the name change did to the PPPoE username (renamed / queued for
       // RADIUS retry / unchanged / skipped). The server writes the message.
       if (saveResult?.pppoe_rename?.message) {
         successMessage += `\n\n${saveResult.pppoe_rename.message}`;
+      }
+      // The automatic reconnect/disconnect (autoConnectionCheck), when the save triggered one.
+      if (saveResult?.auto_connection?.message) {
+        successMessage += `\n\n${saveResult.auto_connection.message}`;
       }
 
       setModal({
@@ -1655,6 +1777,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       pay, so they have no fixed billing day.
                     </p>
                   )}
+                  {/* What the switch does to the connection on save — see billingTypeSwitchPlan. */}
+                  {billingTypeSwitchPlan && (
+                    <p
+                      className={`text-xs mt-2 px-3 py-2 rounded border ${
+                        billingTypeSwitchPlan.tone === 'reconnect'
+                          ? `bg-emerald-500/10 border-emerald-500/30 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`
+                          : billingTypeSwitchPlan.tone === 'disconnect'
+                            ? `bg-red-500/10 border-red-500/30 ${isDarkMode ? 'text-red-400' : 'text-red-700'}`
+                            : isDarkMode
+                              ? 'bg-gray-800 border-gray-700 text-gray-300'
+                              : 'bg-gray-50 border-gray-300 text-gray-600'
+                      }`}
+                    >
+                      {billingTypeSwitchPlan.text}
+                    </p>
+                  )}
                 </div>
 
                 {/* Account Balance — SuperAdmin only. Written straight to the billing account; the
@@ -1870,7 +2008,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                    Connection Type<span className="text-red-500">*</span>
+                    Connection Type
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     <button
@@ -2004,12 +2142,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       optionLabelKey="lcpnap_name"
                       isDarkMode={isDarkMode}
                       error={errors.lcpnap}
-                      required
                     />
 
                     <div>
                       <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        Port<span className="text-red-500">*</span>
+                        Port
                       </label>
                       <div className="relative">
                         <select
@@ -2062,7 +2199,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
                     <div>
                       <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        VLAN<span className="text-red-500">*</span>
+                        VLAN
                       </label>
                       <div className="relative">
                         <select

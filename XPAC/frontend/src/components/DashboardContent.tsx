@@ -323,7 +323,7 @@ const DashboardContent: React.FC = () => {
               <div className={`mt-6 pt-4 border-t text-[10px] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 ${
                 isDarkMode ? 'border-gray-800 text-slate-500' : 'border-gray-200 text-slate-400'
               }`}>
-                <span>INTEGRATION TYPE: REST API</span>
+                <span>INTEGRATION TYPE: ROUTEROS API</span>
                 <span>LAST RUN: {new Date(counts.services.radius.updated_at).toLocaleString()}</span>
               </div>
             )}

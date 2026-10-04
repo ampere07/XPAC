@@ -40,6 +40,26 @@ interface RadiusConfigResponse {
   message?: string;
 }
 
+// The server talks to every RADIUS device over the native RouterOS API, never REST.
+// ssl_type keeps its stored values ('https' / 'http') so existing rows need no
+// migration; RouterosApiService reads 'https' as api-ssl and 'http' as plain api.
+const CONNECTION_TYPE_LABELS: Record<string, string> = {
+  https: 'API-SSL (encrypted, 8729)',
+  http: 'API (plain, 8728)',
+};
+
+const connectionTypeLabel = (sslType: string): string =>
+  CONNECTION_TYPE_LABELS[(sslType || '').toLowerCase()] || sslType || 'Not set';
+
+// The port the API dials first — mirrors RouterosApiService::candidateEndpoints(). The
+// saved port is used as is (8728/8729, or a NAT-forwarded one such as 58728), except a web
+// port saved from the REST days (80, 443), which is replaced by the standard API port.
+const apiPortFor = (config: RadiusConfigData): string => {
+  const saved = String(config.port ?? '').trim();
+  if (/^\d+$/.test(saved) && Number(saved) > 0 && saved !== '80' && saved !== '443') return saved;
+  return (config.ssl_type || '').toLowerCase() === 'https' ? '8729' : '8728';
+};
+
 interface ModalConfig {
   isOpen: boolean;
   type: 'success' | 'error' | 'warning' | 'confirm';
@@ -247,8 +267,8 @@ const RadiusConfig: React.FC = () => {
             dropdownIconColor="#6b7280"
           >
             <Picker.Item label="Select Connection Type" value="" />
-            <Picker.Item label="HTTPS" value="https" />
-            <Picker.Item label="HTTP" value="http" />
+            <Picker.Item label="API-SSL (encrypted, 8729)" value="https" />
+            <Picker.Item label="API (plain, 8728)" value="http" />
           </Picker>
         </View>
       </View>
@@ -258,7 +278,7 @@ const RadiusConfig: React.FC = () => {
       </View>
       <View>
         <Text style={labelStyle}>Port</Text>
-        <TextInput value={formData.port} onChangeText={(t) => handleInputChange('port', t)} placeholder="e.g., 1812" placeholderTextColor="#9ca3af" editable={!loading} keyboardType="numeric" style={inputStyle} />
+        <TextInput value={formData.port} onChangeText={(t) => handleInputChange('port', t)} placeholder="8728 (API), 8729 (API-SSL), or the forwarded API port" placeholderTextColor="#9ca3af" editable={!loading} keyboardType="numeric" style={inputStyle} />
       </View>
       <View>
         <Text style={labelStyle}>Username</Text>
@@ -331,7 +351,7 @@ const RadiusConfig: React.FC = () => {
       </View>
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        <InfoCell label="Connection Type"><Text style={{ fontSize: 14, fontWeight: '500', textTransform: 'uppercase', color: '#111827' }}>{config.ssl_type || 'Not set'}</Text></InfoCell>
+        <InfoCell label="Connection Type"><Text style={{ fontSize: 14, fontWeight: '500', color: '#111827' }}>{connectionTypeLabel(config.ssl_type)}</Text></InfoCell>
         <InfoCell label="IP Address"><Text style={{ fontSize: 14, fontWeight: '500', color: '#111827' }}>{config.ip || 'Not set'}</Text></InfoCell>
         <InfoCell label="Port"><Text style={{ fontSize: 14, fontWeight: '500', color: '#111827' }}>{config.port || 'Not set'}</Text></InfoCell>
         <InfoCell label="Username"><Text style={{ fontSize: 14, fontWeight: '500', color: '#111827' }}>{config.username || 'Not set'}</Text></InfoCell>
@@ -355,7 +375,7 @@ const RadiusConfig: React.FC = () => {
           <Metric label="PUBLIC IP" value={config.public_ip || config.ip || '0.0.0.0'} />
           <Metric label="PING" value={config.is_online ? `${config.latency}ms` : 'TIMEOUT'} color={config.is_online ? '#16a34a' : '#dc2626'} />
           <Metric label="LOSS" value={`${config.loss ?? (config.is_online ? '0%' : '100%')}${typeof config.loss === 'number' ? '%' : ''}`} color={config.is_online ? '#16a34a' : '#dc2626'} />
-          <Metric label="API PORT" value={config.port || '8728'} />
+          <Metric label="API PORT" value={apiPortFor(config)} />
         </View>
       </View>
     </View>

@@ -2788,6 +2788,7 @@ Route::delete('/billing-config', [\App\Http\Controllers\BillingConfigController:
 // RADIUS Configuration Management Routes
 Route::get('/radius-config', [\App\Http\Controllers\RadiusConfigController::class , 'index']);
 Route::post('/radius-config', [\App\Http\Controllers\RadiusConfigController::class , 'store']);
+Route::post('/radius-config/{id}/ping', [\App\Http\Controllers\RadiusConfigController::class , 'ping']);
 Route::put('/radius-config/{id}', [\App\Http\Controllers\RadiusConfigController::class , 'update']);
 Route::delete('/radius-config/{id}', [\App\Http\Controllers\RadiusConfigController::class , 'destroy']);
 

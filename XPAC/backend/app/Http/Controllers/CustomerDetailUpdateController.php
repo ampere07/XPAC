@@ -337,6 +337,9 @@ class CustomerDetailUpdateController extends Controller
 
             $this->broadcastCustomerUpdated($accountNo, 'customer_details');
 
+            // Last, so a reconnect runs against the username and plan the account ends up with.
+            $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'customer_details');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Customer details updated successfully',
@@ -349,6 +352,7 @@ class CustomerDetailUpdateController extends Controller
                 // renamed | queued (in the system, RADIUS will retry) | failed (nothing renamed) |
                 // unchanged | skipped.
                 'pppoe_rename' => $pppoeRename,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -717,6 +721,13 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['generation_type'] = $generationType;
             }
 
+            // Prepaid <-> Postpaid. Judged on what the type means, not its spelling, so a row moving
+            // from 'Pre Paid' to 'Prepaid' is not a change. After the commit this reconnects or
+            // disconnects the account to match its new type — see BillingTypeSwitchService.
+            $billingTypeChanged = !empty($updateData['generation_type'])
+                && BillingAccount::isPrepaidType($updateData['generation_type'])
+                    !== BillingAccount::isPrepaidType($billingAccount->generation_type);
+
             // Keep vat_type and vat_enabled in lockstep. Billing generation reads vat_enabled, so
             // editing only the legacy text here would otherwise silently change nothing.
             // 'Excluded Vat' is the only LEGACY value that still adds VAT — old vocabulary, not the
@@ -802,10 +813,14 @@ class CustomerDetailUpdateController extends Controller
              * customer cut off with time still on the clock. Only when the account is Inactive and
              * the SuperAdmin left the status as it was, or picked Active themselves; any other status
              * they chose is kept. The RADIUS reconnect runs after the commit, below.
+             *
+             * Not when the same save switches the billing type: that is BillingTypeSwitchService's to
+             * settle, and it weighs the balance as well as the days left.
              */
             $inactiveStatusId = (int) (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4);
             $activeStatusId = (int) (DB::table('billing_status')->where('status_name', 'Active')->value('id') ?? 1);
             $restoreLapsedPrepaid = $isSuperAdmin
+                && !$billingTypeChanged
                 && !empty($updateData['prepaid_expires_at'])
                 && \Carbon\Carbon::parse($updateData['prepaid_expires_at'])->isFuture()
                 && BillingAccount::isPrepaidType($updateData['generation_type'] ?? $billingAccount->generation_type)
@@ -950,16 +965,37 @@ class CustomerDetailUpdateController extends Controller
 
                 $radiusMessage = $reconnectOutcome['message'];
                 $radiusQueued = $reconnectOutcome['queued'];
+            } elseif ($billingTypeChanged) {
+                // Prepaid <-> Postpaid: reconnect when nothing is owed and (for prepaid) days are
+                // left, disconnect when a balance is owed or (for prepaid) none are. Never throws.
+                $switchOutcome = app(\App\Services\BillingTypeSwitchService::class)->enforce(
+                    $billingAccount,
+                    (string) ($request->input('updatedBy') ?: 'System')
+                );
+
+                $radiusMessage = $switchOutcome['message'];
+                $radiusQueued = $switchOutcome['queued'];
+            }
+
+            // Any other save from the edit modal: reconnect or disconnect a prepaid account to match
+            // its balance and days left. Not when the same save set the billing status by hand —
+            // that choice stands.
+            $autoConnection = null;
+            if (!$becameVip && !$restoreLapsedPrepaid && !$billingTypeChanged
+                && $newBillingStatusId === $oldBillingStatusId) {
+                $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'billing_details');
             }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Billing status updated successfully',
                 'data' => $billingAccount->fresh(),
-                // Null on every non-VIP edit, so existing clients see the response they always
-                // did. Mirrors the shape updateTechnicalDetails() already returns.
+                // Null on an edit that touched neither VIP, the prepaid expiry nor the billing
+                // type, so existing clients see the response they always did. Mirrors the shape
+                // updateTechnicalDetails() already returns.
                 'radius_message' => $radiusMessage,
-                'radius_queued' => $radiusQueued
+                'radius_queued' => $radiusQueued,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -1073,15 +1109,26 @@ class CustomerDetailUpdateController extends Controller
                 $technicalDetail->username = $oldUsername;
             }
 
-            $technicalDetail->connection_type = (!empty($validated['connection_type'])) ? $validated['connection_type'] : $technicalDetail->connection_type;
+            /*
+             * Connection Type, LCP-NAP, Port and VLAN are optional. Sent empty, the field is cleared
+             * (switching a line off Fiber empties its LCP-NAP, Port and VLAN on the form, and that
+             * has to reach the record); left out of the request, it keeps its stored value, so a
+             * client posting only some fields changes only those. LCP-NAP is cleared as a whole,
+             * and only when lcpnap is sent with LCP and NAP all empty.
+             */
+            $lcpNapCleared = $request->has('lcpnap') && !$newLcpNapInput && !$newLcp && !$newNap;
+
+            $technicalDetail->connection_type = $request->has('connection_type')
+                ? ($validated['connection_type'] ?? null)
+                : $technicalDetail->connection_type;
             $technicalDetail->router_model = (!empty($validated['router_model'])) ? $validated['router_model'] : $technicalDetail->router_model;
             $technicalDetail->router_modem_sn = $validated['router_modem_sn'] ?? $technicalDetail->router_modem_sn;
             $technicalDetail->ip_address = $validated['ip_address'] ?? $technicalDetail->ip_address;
-            $technicalDetail->lcp = $newLcp ?? $technicalDetail->lcp;
-            $technicalDetail->nap = $newNap ?? $technicalDetail->nap;
-            $technicalDetail->port = $validated['port'] ?? $technicalDetail->port;
-            $technicalDetail->vlan = $validated['vlan'] ?? $technicalDetail->vlan;
-            $technicalDetail->lcpnap = $lcpnap;
+            $technicalDetail->lcp = $lcpNapCleared ? null : ($newLcp ?? $technicalDetail->lcp);
+            $technicalDetail->nap = $lcpNapCleared ? null : ($newNap ?? $technicalDetail->nap);
+            $technicalDetail->port = $request->has('port') ? ($validated['port'] ?? null) : $technicalDetail->port;
+            $technicalDetail->vlan = $request->has('vlan') ? ($validated['vlan'] ?? null) : $technicalDetail->vlan;
+            $technicalDetail->lcpnap = $lcpNapCleared ? null : $lcpnap;
             $technicalDetail->usage_type = $validated['usage_type'] ?? $technicalDetail->usage_type;
 
             // The billing record of the PPPoE password, SuperAdmin only. It is not pushed to RADIUS:
@@ -1280,13 +1327,17 @@ class CustomerDetailUpdateController extends Controller
             // stays on it until the queue catches up.
             $this->syncSmartOltForTechnicalDetail($accountNo, $billingAccount, $technicalDetail, $oldTechnicalDetails);
 
+            // After the RADIUS rename, so a reconnect runs against the username that landed.
+            $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'technical_details');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Technical details updated successfully',
                 'data' => $technicalDetail->fresh(),
                 'radius_message' => $radiusMessage,
                 'radius_queued' => $radiusQueued,
-                'radius_queue_failed' => $radiusQueueFailed
+                'radius_queue_failed' => $radiusQueueFailed,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -1310,6 +1361,49 @@ class CustomerDetailUpdateController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * After a save from the Customer Details edit modal, reconnect or disconnect a prepaid account
+     * to match its balance and days left — see BillingTypeSwitchService::decideAfterSave().
+     *
+     * Only for a request the modal flags with autoConnectionCheck, so every other caller of these
+     * endpoints keeps the behaviour it had. Runs after the commit and never throws: the save stands
+     * whatever RADIUS does. When the account's connection changed, the customer-updated event is
+     * sent again so open screens pick up the new status.
+     *
+     * @return array{action: string, message: string, queued: bool}|null null when nothing was done
+     */
+    private function autoConnectionAfterSave(Request $request, BillingAccount $billingAccount, string $editType): ?array
+    {
+        if (!$request->boolean('autoConnectionCheck')) {
+            return null;
+        }
+
+        try {
+            $account = $billingAccount->fresh();
+            if (!$account) {
+                return null;
+            }
+
+            $outcome = app(\App\Services\BillingTypeSwitchService::class)->enforceAfterSave(
+                $account,
+                (string) ($request->input('updatedBy') ?: 'System')
+            );
+        } catch (\Throwable $e) {
+            Log::error('Auto reconnect/disconnect after customer details save failed', [
+                'account_no' => $billingAccount->account_no,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if ($outcome !== null && $outcome['action'] !== 'skipped') {
+            $this->broadcastCustomerUpdated($billingAccount->account_no, $editType);
+        }
+
+        return $outcome;
     }
 
     /**

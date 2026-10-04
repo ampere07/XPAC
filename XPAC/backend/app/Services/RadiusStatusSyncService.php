@@ -7,14 +7,10 @@ use App\Models\BillingAccount;
 use App\Models\TechnicalDetail;
 use App\Models\RadiusConfig;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class RadiusStatusSyncService
 {
-    private const MAX_RETRIES = 3;
-    private const RETRY_DELAY = 2;
-
     public function syncRadiusStatus(): array
     {
         $stats = [
@@ -151,9 +147,9 @@ class RadiusStatusSyncService
 
         foreach ($radiusConfigs as $index => $config) {
             $label = 'Radius Config ' . ($index + 1);
-            $response = $this->callRadiusApiForConfig($config, '/rest/user-manage/user', 'GET');
+            $response = $this->readRadiusList($config, 'users');
 
-            if ($response === null || !is_array($response)) {
+            if ($response === null) {
                 $perConfig[$label] = 0;
                 \Log::channel('radiusrelated')->warning("[STATUS SYNC] {$label} ({$config->ip}) unreachable for users; continuing with remaining server(s).");
                 continue;
@@ -163,7 +159,7 @@ class RadiusStatusSyncService
             $count = 0;
 
             foreach ($response as $user) {
-                $username = $user['name'] ?? null;
+                $username = $user['username'] ?? null;
                 if (!$username) {
                     continue;
                 }
@@ -180,7 +176,7 @@ class RadiusStatusSyncService
                 $merged[$username] = [
                     'id'       => $user['.id'] ?? '',
                     'group'    => $user['group'] ?? '',
-                    'disabled' => ($user['disabled'] ?? 'false') === 'true',
+                    'disabled' => (bool) ($user['disabled'] ?? false),
                     'source'   => $label,
                 ];
             }
@@ -213,9 +209,9 @@ class RadiusStatusSyncService
 
         foreach ($radiusConfigs as $index => $config) {
             $label = 'Radius Config ' . ($index + 1);
-            $response = $this->callRadiusApiForConfig($config, '/rest/user-manage/session', 'GET');
+            $response = $this->readRadiusList($config, 'sessions');
 
-            if ($response === null || !is_array($response)) {
+            if ($response === null) {
                 $perConfig[$label] = 0;
                 \Log::channel('radiusrelated')->warning("[STATUS SYNC] {$label} ({$config->ip}) unreachable for sessions; continuing with remaining server(s).");
                 continue;
@@ -225,7 +221,7 @@ class RadiusStatusSyncService
             $count = 0;
 
             foreach ($response as $session) {
-                $username = $session['user'] ?? null;
+                $username = $session['username'] ?? null;
                 if (!$username) {
                     continue;
                 }
@@ -241,8 +237,8 @@ class RadiusStatusSyncService
                 $sessions[$username]['active_count']++;
                 $sessions[$username]['last_session'] = [
                     'session_id' => $session['.id'] ?? '',
-                    'ip'         => $session['user-address'] ?? '',
-                    'mac'        => $session['calling-station-id'] ?? '',
+                    'ip'         => $session['ip'] ?? '',
+                    'mac'        => $session['mac'] ?? '',
                     'upload'     => $session['upload'] ?? 0,
                     'download'   => $session['download'] ?? 0,
                 ];
@@ -368,56 +364,45 @@ class RadiusStatusSyncService
     }
 
     /**
-     * Call the RADIUS API for a SINGLE config, trying https then http with retries.
-     * Returns the decoded array on success, or null if this server is unreachable —
-     * the caller isolates the failure and continues with the other server(s).
+     * Read one list from a SINGLE config over the native RouterOS API.
+     *
+     * Returns the rows as RouterosApiService normalises them, or null if this server
+     * could not be read — the caller isolates the failure and continues with the other
+     * server(s). A read that fails part-way is a failure, not an empty server: the list
+     * calls return [] in both cases and only lastError tells them apart, and reading it
+     * as empty would mark every account on that server "Not Found" or "Offline".
+     *
+     * Transport failover (api-ssl 8729, then api 8728) and the circuit breaker live in
+     * RouterosApiService::connect(), so there is no protocol loop or retry sleep here.
+     *
+     * @param 'users'|'sessions' $what
      */
-    private function callRadiusApiForConfig($config, string $path, string $method): ?array
+    private function readRadiusList($config, string $what): ?array
     {
-        $protocols = ['https', 'http'];
+        $api = app(RouterosApiService::class);
 
-        foreach ($protocols as $protocol) {
-            $url = sprintf('%s://%s:%s%s', $protocol, $config->ip, $config->port, $path);
+        try {
+            if ($api->connect($config)) {
+                $rows = $what === 'users'
+                    ? $api->getAllUsers($config)
+                    : $api->getActiveSessions($config);
 
-            for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
-                try {
-                    $response = Http::withBasicAuth($config->username, $config->password)
-                        ->withOptions([
-                            'verify' => false,
-                            'timeout' => 5,
-                        ])
-                        ->$method($url);
-
-                    if ($response->successful()) {
-                        return $response->json();
-                    }
-
-                    Log::warning('RADIUS API request failed', [
-                        'url' => $url,
-                        'attempt' => $attempt,
-                        'status' => $response->status(),
-                        'body' => $response->body()
-                    ]);
-
-                } catch (\Exception $e) {
-                    Log::warning('RADIUS API request exception', [
-                        'url' => $url,
-                        'attempt' => $attempt,
-                        'error' => $e->getMessage()
-                    ]);
-                }
-
-                if ($attempt < self::MAX_RETRIES) {
-                    sleep(self::RETRY_DELAY);
+                if ($api->getLastError() === '') {
+                    return $rows;
                 }
             }
+
+            $error = $api->getLastError();
+        } catch (\Throwable $e) {
+            $error = $e->getMessage();
         }
 
         \Log::channel('radiusrelated')->error(sprintf(
-            '[STATUS SYNC API FAILED] Config #%s (%s) unreachable for path %s after all protocols/retries.',
+            '[STATUS SYNC API FAILED] Config #%s (%s) could not be read for %s: %s',
             $config->id ?? '?',
             $config->ip ?? '?',
-            $path
+            $what,
+            $error !== '' ? $error : 'no reply'
         ));
 
         return null;
