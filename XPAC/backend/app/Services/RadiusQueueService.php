@@ -273,6 +273,25 @@ class RadiusQueueService
                 }
                 return true;
 
+            // Removing a pulled-out customer's username. Queued by CustomerPurgeService when
+            // RADIUS could not be confirmed at purge time; the customer's records are already
+            // deleted, so this is the only thing left to finish. "Not found" counts as done.
+            case 'delete_user':
+                $radius = app(RadiusReconciliationService::class);
+                $orgId = isset($params['organization_id']) ? ((int) $params['organization_id'] ?: null) : null;
+                $errors = [];
+                foreach ((array) ($params['usernames'] ?? [$params['username'] ?? '']) as $username) {
+                    $outcome = $radius->deleteUserFromAllServers((string) $username, $orgId);
+                    if (!$outcome['success']) {
+                        $errors[] = implode(' | ', $outcome['errors']) ?: "RADIUS delete of '{$username}' returned failure";
+                    }
+                }
+                if ($errors !== []) {
+                    $errorMessage = implode(' | ', $errors);
+                    return false;
+                }
+                return true;
+
             default:
                 $errorMessage = "Unknown operation: {$operation}";
                 $this->writeLog("  [ERROR] " . $errorMessage);

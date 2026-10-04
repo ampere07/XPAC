@@ -200,7 +200,8 @@ describe('sessions signed in before the permission table', () => {
   const STAFF_ROLES = [ROLE.ADMINISTRATOR, ROLE.TECHNICIAN, ROLE.AGENT, ROLE.INVENTORY_STAFF, ROLE.OSP, ROLE.SUPER_ADMIN, ROLE.HEAD_TECH];
 
   test('every seeded role lands where it always did, on a page it can open, with no stored list', () => {
-    const before: Record<number, string> = { 1: 'dashboard', 2: 'job-order', 3: 'customer-dashboard', 4: 'dashboard', 5: 'inventory', 6: 'work-order', 7: 'dashboard', 8: 'application-management' };
+    // Agents (4) were moved to the Transaction List only, technician-style, so they land there now.
+    const before: Record<number, string> = { 1: 'dashboard', 2: 'job-order', 3: 'customer-dashboard', 4: 'transaction-list', 5: 'inventory', 6: 'work-order', 7: 'dashboard', 8: 'application-management' };
     Object.entries(before).forEach(([roleId, landing]) => {
       const auth: AuthLike = { role_id: Number(roleId), permissions: null };
       expect(homeSectionFor(auth)).toBe(landing);
@@ -228,11 +229,22 @@ describe('sessions signed in before the permission table', () => {
   // role, and before the section guard each shortcut opened its page.
   test('every staff role still opens the bell shortcuts it could open before', () => {
     const bell = ['application-management', 'job-order', 'service-order', 'work-order', 'transaction-list'];
-    STAFF_ROLES.forEach(roleId => {
+    // Agents are deliberately restricted to the Transaction List, bell shortcuts included.
+    STAFF_ROLES.filter(roleId => roleId !== ROLE.AGENT).forEach(roleId => {
       bell.forEach(section => {
         expect(canOpenSection({ role_id: roleId }, section)).toBe(true);
       });
     });
+  });
+
+  test('an agent opens the Transaction List and nothing else', () => {
+    const agent = { role_id: ROLE.AGENT };
+    expect(homeSectionFor(agent)).toBe('transaction-list');
+    expect(canOpenSection(agent, 'transaction-list')).toBe(true);
+    ['dashboard', 'agent-dashboard', 'application-management', 'job-order', 'service-order', 'work-order', 'bonus-history', 'agent-invoices']
+      .forEach(section => expect(canOpenSection(agent, section)).toBe(false));
+    // Technician-style: viewing, never approving.
+    expect(permissionsAllow(permissionsFor(agent), 'transaction-list.approve')).toBe(false);
   });
 
   test('a bell shortcut is not a key: no menu entry, no landing, no button', () => {

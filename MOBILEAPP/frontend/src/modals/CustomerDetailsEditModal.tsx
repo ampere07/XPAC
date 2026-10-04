@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ChevronDown, Calendar, Camera, Search } from 'lucide-react';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
@@ -79,6 +79,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [agents, setAgents] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
 
+  const originalNameRef = useRef<{ firstName: string; lastName: string } | null>(null);
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
     type: 'success',
@@ -156,6 +157,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
             firstName = nameParts[0];
           }
         }
+
+        // Remembered so a save can tell whether the name changed — that renames the PPPoE
+        // username on the server, which needs a confirmation (see handleSave).
+        originalNameRef.current = { firstName: firstName.trim(), lastName: lastName.trim() };
 
         let houseFrontPictureUrl = recordData.houseFrontPicture || recordData.house_front_picture_url || recordData.house_front_picture || '';
         
@@ -743,7 +748,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (nameChangeConfirmed = false) => {
     const isValid = validateForm();
 
     if (!isValid) {
@@ -752,6 +757,28 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         type: 'warning',
         title: 'Validation Error',
         message: 'Please fill in all required fields before saving.'
+      });
+      return;
+    }
+
+    // A first/last name change renames the PPPoE username in RADIUS (the username is built from
+    // the name). That drops the customer's session, and they stay offline until their router is
+    // given the new username — so it is confirmed first rather than happening as a side effect.
+    const original = originalNameRef.current;
+    const nameChanged = editType === 'customer_details' && !!original && (
+      (formData.firstName || '').trim() !== original.firstName
+      || (formData.lastName || '').trim() !== original.lastName
+    );
+    const currentUsername = recordData?.username || recordData?.Username || recordData?.pppoe_username;
+    if (nameChanged && currentUsername && !nameChangeConfirmed) {
+      setModal({
+        isOpen: true,
+        type: 'confirm',
+        title: 'Rename PPPoE Username?',
+        message: `Changing the name also renames this customer's PPPoE username (${currentUsername}) in RADIUS to match.\n\n`
+          + 'Their current session will be disconnected, and they stay offline until their router is updated with the new username. The password does not change.',
+        onConfirm: () => { setModal(prev => ({ ...prev, isOpen: false })); handleSave(true); },
+        onCancel: () => setModal(prev => ({ ...prev, isOpen: false })),
       });
       return;
     }
@@ -859,7 +886,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         delete dataWithUpdatedBy.referredById;
       }
 
-      await onSave(dataWithUpdatedBy, editType);
+      const saveResult: any = await onSave(dataWithUpdatedBy, editType);
 
       clearInterval(progressInterval);
       setLoadingPercentage(100);
@@ -871,7 +898,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         isOpen: true,
         type: 'success',
         title: 'Success',
-        message: 'Details updated successfully.',
+        // Customer details: what the name change did to the PPPoE username (renamed / queued
+        // for RADIUS retry / unchanged / skipped). The server writes the message.
+        message: 'Details updated successfully.' + (saveResult?.pppoe_rename?.message ? `\n\n${saveResult.pppoe_rename.message}` : ''),
         onConfirm: () => {
           setModal(prev => ({ ...prev, isOpen: false }));
           onClose();
@@ -927,7 +956,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
               Cancel
             </button>
             <button
-              onClick={handleSave}
+              onClick={() => handleSave()}
               disabled={loading}
               className="px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm flex items-center"
               style={{

@@ -40,8 +40,11 @@ use Illuminate\Support\Facades\Schema;
  */
 class ReportMetricsService
 {
-    /** Status values that represent money actually collected. */
-    private const SUCCESSFUL_PAYMENT_STATUSES = [
+    /**
+     * Status values that represent money actually collected. Public so the Finance page
+     * (FinanceSummaryService) counts exactly what this report counts.
+     */
+    public const SUCCESSFUL_PAYMENT_STATUSES = [
         'paid', 'done', 'completed', 'complete', 'success', 'successful', 'approved', 'settled',
     ];
 

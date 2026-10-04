@@ -3,6 +3,7 @@ import {
   Modal, View, Text, TextInput, ScrollView, Pressable, TouchableOpacity, ActivityIndicator, Alert, Platform,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { X, Calendar } from 'lucide-react-native';
 import apiClient from '../config/api';
 import { useBillingStore } from '../store/billingStore';
@@ -67,6 +68,12 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const [transactionType, setTransactionType] = useState('');
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [receivedPayment, setReceivedPayment] = useState('');
+  // Agents enter what they collected in two parts; Received Payment is their sum, read-only.
+  // That sum is what approval applies to the account; both parts are stored too
+  // (transactions.collected_payment / agent_collected).
+  const [isAgentUser, setIsAgentUser] = useState(false);
+  const [collectedPayment, setCollectedPayment] = useState('');
+  const [agentCollected, setAgentCollected] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('');
@@ -83,12 +90,19 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
 
   const reset = () => {
     setAccount(null); setTransactionType(''); setSelectedPlanId(null); setReceivedPayment('');
+    setCollectedPayment(''); setAgentCollected('');
     setPaymentDate(today()); setPaymentMethod(''); setReferenceNo(''); setOrNo(''); setProcessedBy('');
     setRemarks(''); setImage(null); setErrors({}); setPicker(null); setSearch('');
   };
 
   useEffect(() => {
     if (!isOpen) { reset(); return; }
+    AsyncStorage.getItem('authData').then(raw => {
+      try {
+        const u = JSON.parse(raw || '{}');
+        setIsAgentUser(String(u.role_id) === '4' || String(u.role || '').toLowerCase().trim() === 'agent');
+      } catch { setIsAgentUser(false); }
+    }).catch(() => {});
     settingsColorPaletteService.getActive().then(p => p?.primary && setPrimary(p.primary)).catch(() => {});
     fetchAccountRecords();
     technicianService.getAllTechnicians().then(r => setTechnicians(Array.isArray(r?.data) ? r.data : [])).catch(() => {});
@@ -136,8 +150,20 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   /** Prepaid Top Up: the amount due is the plan's price. */
   const applyPlan = (plan: Plan | null) => {
     setSelectedPlanId(plan?.id ?? null);
-    if (plan) setReceivedPayment(Number(plan.price ?? 0).toFixed(2));
+    if (!plan) return;
+    // An agent's Received Payment is derived, so the price goes into Collected Payment.
+    if (isAgentUser) { setCollectedPayment(Number(plan.price ?? 0).toFixed(2)); setAgentCollected(''); }
+    else setReceivedPayment(Number(plan.price ?? 0).toFixed(2));
   };
+
+  // Agent: Received Payment is always Collected Payment + Agent Collected — never typed, so the
+  // two can never disagree. Blank when both parts are blank, so the required check still fires.
+  useEffect(() => {
+    if (!isAgentUser) return;
+    const bothBlank = !collectedPayment.trim() && !agentCollected.trim();
+    const sum = (parseFloat(collectedPayment) || 0) + (parseFloat(agentCollected) || 0);
+    setReceivedPayment(bothBlank ? '' : (Math.round(sum * 100) / 100).toFixed(2));
+  }, [isAgentUser, collectedPayment, agentCollected]);
 
   const pickAccount = async (accountNo: string) => {
     setPicker(null);
@@ -200,6 +226,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
     if (!account) e.accountNo = 'Account No. is required';
     if (!transactionType) e.transactionType = 'Transaction Type is required';
     if (showPlanPicker && !selectedPlanId) e.plan = 'Select the plan this payment is for';
+    if (isAgentUser && (!collectedPayment.trim() || isNaN(Number(collectedPayment)))) e.collectedPayment = 'Collected Payment is required';
+    if (isAgentUser && agentCollected.trim() && isNaN(Number(agentCollected))) e.agentCollected = 'Enter a valid amount';
     if (!receivedPayment.trim() || isNaN(Number(receivedPayment))) e.receivedPayment = 'Received Payment is required';
     if (!paymentDate.trim()) e.paymentDate = 'Payment Date is required';
     if (!paymentMethod.trim()) e.paymentMethod = 'Payment Method is required';
@@ -223,7 +251,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         fd.append('folder_name', `transactionform - ${account.fullName}`);
         fd.append('payment_proof_image', image, image.name || `payment_proof_${Date.now()}.jpg`);
         const up = await transactionService.uploadTransactionImage(fd);
-        if (!up?.success) {
+        // No URL is a failure too: saving on would store the transaction without its proof.
+        if (!up?.success || !up.data?.payment_proof_image_url) {
           Alert.alert('Upload Failed', up?.message || 'Failed to upload the payment proof.');
           return;
         }
@@ -234,6 +263,11 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         account_no: account.accountNo,
         transaction_type: transactionType,
         received_payment: parseFloat(receivedPayment) || 0,
+        // Agent only. The server re-derives received_payment from these two.
+        ...(isAgentUser ? {
+          collected_payment: parseFloat(collectedPayment) || 0,
+          agent_collected: parseFloat(agentCollected) || 0,
+        } : {}),
         payment_date: paymentDate,
         date_processed: new Date().toISOString(),
         processed_by_user: processedBy,
@@ -283,11 +317,13 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         onChangeText={(t) => { onChange(t); if (errors[key]) setErrors(e => ({ ...e, [key]: '' })); }}
         placeholder={opts.placeholder}
         keyboardType={opts.keyboardType}
+        editable={opts.readOnly ? false : undefined}
         multiline={opts.multiline}
         style={{
           borderWidth: 1, borderColor: errors[key] ? '#ef4444' : '#d1d5db', borderRadius: 8, paddingHorizontal: 12,
           paddingVertical: 10, fontSize: 15, color: '#111827', backgroundColor: '#ffffff', minHeight: opts.multiline ? 80 : undefined,
           textAlignVertical: opts.multiline ? 'top' : 'center',
+          ...(opts.readOnly ? { backgroundColor: '#f3f4f6', color: '#4b5563' } : {}),
         }}
       />
       {!!errors[key] && <Text style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{errors[key]}</Text>}
@@ -339,7 +375,9 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
               placeholder="Select the plan this payment buys" onPress={() => openPicker('plan')} error={errors.plan} />
           )}
 
-          {input('Received Payment', receivedPayment, setReceivedPayment, 'receivedPayment', { keyboardType: 'decimal-pad', placeholder: '0.00' })}
+          {isAgentUser && input('Collected Payment', collectedPayment, setCollectedPayment, 'collectedPayment', { keyboardType: 'decimal-pad', placeholder: '0.00' })}
+          {isAgentUser && input('Agent Collected', agentCollected, setAgentCollected, 'agentCollected', { keyboardType: 'decimal-pad', placeholder: '0.00', optional: true })}
+          {input(isAgentUser ? 'Received Payment (Collected + Agent)' : 'Received Payment', receivedPayment, setReceivedPayment, 'receivedPayment', { keyboardType: 'decimal-pad', placeholder: '0.00', readOnly: isAgentUser })}
 
           <View style={{ marginBottom: 14 }}>
             <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Payment Date<Text style={{ color: '#ef4444' }}> *</Text></Text>

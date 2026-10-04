@@ -512,14 +512,16 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // ─── Pull to refresh ──────────────────────────────────────────────────────
 
-  // Technicians record a payment from here ("+"); the form lets them pick the account.
+  // Technicians and agents record a payment from here ("+"); the form lets them pick the account.
+  // Agents get the technician view exactly: view and add, never approve.
   const [isTechnicianUser, setIsTechnicianUser] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   useEffect(() => {
     AsyncStorage.getItem('authData').then(raw => {
       try {
         const u = JSON.parse(raw || '{}');
-        setIsTechnicianUser(String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician');
+        const role = String(u.role || '').toLowerCase().trim();
+        setIsTechnicianUser(['2', '4'].includes(String(u.role_id)) || role === 'technician' || role === 'agent');
       } catch { setIsTechnicianUser(false); }
     }).catch(() => {});
   }, []);

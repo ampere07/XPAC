@@ -189,13 +189,6 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
       newErrors.role_id = 'Required';
     }
 
-    const isAgent = roles.find(r => r.id === formData.role_id)?.role_name.toLowerCase() === 'agent' || agentOnly;
-    if (isAgent) {
-      if (formData.commission === undefined || isNaN(formData.commission)) newErrors.commission = 'Required';
-      if (formData.quota === undefined || isNaN(formData.quota)) newErrors.quota = 'Required';
-      if (formData.incentives_value === undefined || isNaN(formData.incentives_value)) newErrors.incentives_value = 'Required';
-    }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -395,22 +388,10 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
                   {errors.agent_id && <p className="text-red-500 text-[10px] mt-1 font-medium">{errors.agent_id}</p>}
                 </div>
 
-                <div className="col-span-1 animate-in fade-in slide-in-from-top-1 duration-200">
-                  <label className={labelClass}>Commission*</label>
+                <div className="col-span-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <label className={labelClass}>Commission</label>
                   <input type="number" step="0.01" name="commission" value={formData.commission ?? ''} onChange={handleInputChange} className={`${inputClass} ${errors.commission ? 'border-red-500' : ''}`} placeholder="0.00" />
                   {errors.commission && <p className="text-red-500 text-[10px] mt-1 font-medium">{errors.commission}</p>}
-                </div>
-
-                <div className="col-span-1 animate-in fade-in slide-in-from-top-1 duration-200">
-                  <label className={labelClass}>Quota*</label>
-                  <input type="number" step="0.01" name="quota" value={formData.quota ?? ''} onChange={handleInputChange} className={`${inputClass} ${errors.quota ? 'border-red-500' : ''}`} placeholder="0.00" />
-                  {errors.quota && <p className="text-red-500 text-[10px] mt-1 font-medium">{errors.quota}</p>}
-                </div>
-
-                <div className="col-span-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                  <label className={labelClass}>Incentives*</label>
-                  <input type="number" step="0.01" name="incentives_value" value={formData.incentives_value ?? ''} onChange={handleInputChange} className={`${inputClass} ${errors.incentives_value ? 'border-red-500' : ''}`} placeholder="0.00" />
-                  {errors.incentives_value && <p className="text-red-500 text-[10px] mt-1 font-medium">{errors.incentives_value}</p>}
                 </div>
 
                 <div className="col-span-2 animate-in fade-in slide-in-from-top-1 duration-200">

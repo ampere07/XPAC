@@ -84,6 +84,27 @@ export const paymentService = {
   },
 
   /**
+   * Read-only: the discount a prepaid plan purchase would currently get (full available amount).
+   *
+   * Disclosure only — the server re-derives and applies it at checkout, so a failure here just
+   * means the screen shows no discount (returns 0).
+   */
+  getAvailableDiscount: async (accountNo: string): Promise<number> => {
+    try {
+      const response = await apiClient.post<{ status: string; discount_amount?: number }>(
+        `/payments/available-discount`,
+        { account_no: accountNo },
+        NO_TIMEOUT
+      );
+
+      return Number(response.data.discount_amount) || 0;
+    } catch (error: any) {
+      console.error('Get available discount error:', error.response?.data || error.message);
+      return 0;
+    }
+  },
+
+  /**
    * Read-only: what an unpaid prepaid ONBOARDING bill would come to under a different plan.
    *
    * Returns eligible:false for any account outside that never-paid window — callers should then
@@ -158,7 +179,12 @@ export const paymentService = {
     amount: number,
     redirectUrl?: string,
     planId?: number | null,
-    activateNow?: boolean
+    activateNow?: boolean,
+    // Prepaid advance payment: periods bought at once (2, 3 or 5). The server checks `amount`
+    // covers plan price × months before honouring it. Omitted / 1 = an ordinary top-up.
+    months?: number,
+    // Billing type switch chosen at Pay Now, applied by the server once the payment settles.
+    migrateTo?: 'prepaid' | 'postpaid' | null
   ): Promise<PaymentResponse> => {
     try {
       console.log('Payment Service - Creating payment:', { accountNo, amount });
@@ -181,6 +207,15 @@ export const paymentService = {
         // Only meaningful with a plan. Sent explicitly (not omitted when false) so the row records
         // a deliberate "queue it" rather than an absence the server has to guess at.
         payload.activate_now = !!activateNow;
+
+        if (months && months > 1) {
+          payload.months = months;
+        }
+      }
+
+      // Outside the plan block: a postpaid customer switching to prepaid sends no plan.
+      if (migrateTo) {
+        payload.migrate_to = migrateTo;
       }
 
       console.log('Payment payload:', payload);

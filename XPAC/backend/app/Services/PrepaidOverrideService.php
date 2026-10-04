@@ -36,6 +36,15 @@ class PrepaidOverrideService
     /** Remark stamped on RADIUS operations raised by an approved override. */
     private const RADIUS_REMARKS = 'Prepaid Expiration Override';
 
+    /**
+     * RADIUS groups already read during this request, by username. approve() reads the group in
+     * its missing-user check and enforceAfterCommit() needs the same answer a moment later; reusing
+     * it saves a full lookup across every RADIUS server on each approval.
+     *
+     * @var array<string, ?string>
+     */
+    private array $radiusGroupCache = [];
+
     /** billing_status.status_name => id fallbacks, used only when the lookup table has no match. */
     private const FALLBACK_ACTIVE_STATUS_ID = 1;
     private const FALLBACK_INACTIVE_STATUS_ID = 4;
@@ -274,6 +283,12 @@ class PrepaidOverrideService
      */
     public function approve(int $id, ?User $actor = null): array
     {
+        // Refuse before anything is written when the account's PPPoE user is not on RADIUS:
+        // the days would be granted but no reconnect or restrict could ever reach the customer.
+        if ($blocked = $this->radiusUserMissing($id)) {
+            return $blocked;
+        }
+
         try {
             $outcome = DB::transaction(function () use ($id, $actor) {
                 $request = PrepaidOverrideRequest::lockForUpdate()->find($id);
@@ -341,8 +356,7 @@ class PrepaidOverrideService
                     ];
                 }
 
-                $base = $currentExpiry ?? Carbon::now();
-                $newExpiry = $base->copy()->addDays($days);
+                $newExpiry = self::adjustedExpiry($currentExpiry, $days, Carbon::now());
 
                 $account->prepaid_expires_at = $newExpiry;
                 $account->updated_by = $actor->id ?? $account->updated_by;
@@ -429,6 +443,46 @@ class PrepaidOverrideService
     }
 
     /**
+     * The expiry an approved adjustment of $days produces, counted in the days left the Customer
+     * page shows (expiry date − today + 1, so the expiry date itself is the last day of service).
+     *
+     *   Adding to a running period     the days go on top of the current expiry, as before.
+     *   Adding to a lapsed period      counted from 0 days left, so +N leaves exactly N days with
+     *   (or one never started)         today as day 1 — the same way a payment on a lapsed account
+     *                                  starts a fresh period from the payment day
+     *                                  (PrepaidRenewalService::freshPeriodExpiry()). Adding to the
+     *                                  stale expiry instead left a customer who had been expired
+     *                                  for a week still expired after "+1 day", so they were never
+     *                                  reconnected.
+     *   Deducting                      stops at 0 days left — restricted from today — and never
+     *                                  goes below it. Days past expiry drive the prepaid auto
+     *                                  pullout, so a deduction must not be able to fake them. A
+     *                                  period already at 0 stays where it is.
+     *
+     * "0 days left" is the day before the restriction cut-off (AutoDisconnectService::
+     * prepaidRestrictFrom()), keeping the current time of day like a payment does, so this and
+     * enforceAfterCommit() can never disagree about whether the result has lapsed.
+     *
+     * $currentExpiry may be null only for an addition; approve() refuses a deduction on an
+     * account whose period never started.
+     */
+    public static function adjustedExpiry(?Carbon $currentExpiry, int $days, Carbon $now): Carbon
+    {
+        $restrictFrom = AutoDisconnectService::prepaidRestrictFrom($now);
+        $zeroDaysLeft = $restrictFrom->copy()->subDay()->setTimeFrom($now);
+        $hasLapsed = $currentExpiry === null || $currentExpiry->lessThan($restrictFrom);
+
+        if ($days > 0) {
+            return ($hasLapsed ? $zeroDaysLeft : $currentExpiry)->copy()->addDays($days);
+        }
+
+        $floor = $hasLapsed ? $currentExpiry : $zeroDaysLeft;
+        $newExpiry = $currentExpiry->copy()->addDays($days);
+
+        return $newExpiry->lessThan($floor) ? $floor->copy() : $newExpiry;
+    }
+
+    /**
      * Bring RADIUS in line with an expiry that has just moved.
      *
      * Without this the module does nothing useful in its main case: granting days to a customer who
@@ -497,30 +551,12 @@ class PrepaidOverrideService
              * decisions made elsewhere — granting somebody a few days must never be the thing that
              * quietly puts a terminated account back on the network.
              */
-            if ($hasLapsed) {
-                if ($currentStatusId !== $activeStatusId) {
-                    return [
-                        'action' => 'skipped',
-                        'reason' => 'period has lapsed but the account is not active, so there is nothing to restrict',
-                        'expires_at' => $expiry->toDateTimeString(),
-                    ];
-                }
-            } else {
-                if ($currentStatusId === $activeStatusId) {
-                    return [
-                        'action' => 'skipped',
-                        'reason' => 'period is still running and the account is already active',
-                        'expires_at' => $expiry->toDateTimeString(),
-                    ];
-                }
-
-                if ($currentStatusId !== $inactiveStatusId) {
-                    return [
-                        'action' => 'skipped',
-                        'reason' => 'account is not in the Inactive state the prepaid flow sets, so its status was decided elsewhere',
-                        'expires_at' => $expiry->toDateTimeString(),
-                    ];
-                }
+            if (!in_array($currentStatusId, [$activeStatusId, $inactiveStatusId], true)) {
+                return [
+                    'action' => 'skipped',
+                    'reason' => 'account is not Active or Inactive, so its status was decided elsewhere',
+                    'expires_at' => $expiry->toDateTimeString(),
+                ];
             }
 
             $username = optional($account->technicalDetails->first())->username;
@@ -534,9 +570,41 @@ class PrepaidOverrideService
                 return ['action' => 'skipped', 'reason' => 'no PPPoE username in technical_details'];
             }
 
-            return $hasLapsed
+            /*
+             * Decided from the router, not only from billing_status_id. The two drift apart
+             * (a status set by hand or by a data fix while RADIUS kept the old group), and judging
+             * by the status alone skipped exactly those accounts: one marked Active but still
+             * restricted on the router was never reconnected, one marked Inactive but still online
+             * was never restricted. null = RADIUS could not be read; then the status decides.
+             */
+            $radius = app(ManualRadiusOperationsService::class);
+            $routerRestricted = $this->isRestrictedGroup(
+                array_key_exists($username, $this->radiusGroupCache)
+                    ? $this->radiusGroupCache[$username]
+                    : $radius->findUserGroup($username)
+            );
+
+            if ($hasLapsed) {
+                if ($routerRestricted === true && $currentStatusId === $inactiveStatusId) {
+                    return ['action' => 'skipped', 'reason' => 'period has lapsed and the account is already restricted', 'expires_at' => $expiry->toDateTimeString(), 'username' => $username];
+                }
+                if ($routerRestricted === null && $currentStatusId !== $activeStatusId) {
+                    return ['action' => 'skipped', 'reason' => 'period has lapsed but the account is not active, so there is nothing to restrict', 'expires_at' => $expiry->toDateTimeString(), 'username' => $username];
+                }
+            } else {
+                if ($routerRestricted === false && $currentStatusId === $activeStatusId) {
+                    return ['action' => 'skipped', 'reason' => 'period is still running and the account is already online', 'expires_at' => $expiry->toDateTimeString(), 'username' => $username];
+                }
+                if ($routerRestricted === null && $currentStatusId === $activeStatusId) {
+                    return ['action' => 'skipped', 'reason' => 'period is still running and the account is already active (RADIUS could not be read to confirm)', 'expires_at' => $expiry->toDateTimeString(), 'username' => $username];
+                }
+            }
+
+            $outcome = $hasLapsed
                 ? $this->restrict($account, $username, $expiry, $updatedBy, $actor)
                 : $this->reconnect($account, $username, $expiry, $updatedBy, $actor);
+
+            return $this->verifyEnforcement($account, $username, $expiry, $hasLapsed, $outcome, $updatedBy, $actor);
         } catch (\Throwable $e) {
             // The adjustment is committed and correct; only the enforcement failed. Report it and
             // let the nightly AutoDisconnectService run pick this customer up instead.
@@ -576,6 +644,9 @@ class PrepaidOverrideService
             'username' => $username,
             'remarks' => self::RADIUS_REMARKS . ' — period shortened past expiry',
             'updatedBy' => $updatedBy,
+            // Inactive (4), the status a prepaid lapse uses — not restrictedUser()'s default
+            // 'Restricted'. Carried into a queued retry too.
+            'dbStatus' => 'Inactive',
         ];
 
         $result = app(ManualRadiusOperationsService::class)->restrictedUser($params);
@@ -601,6 +672,13 @@ class PrepaidOverrideService
                 'reason' => $reason,
             ]);
 
+            // The approved period has run out either way, so the account is Inactive (4) now;
+            // the queued retry carries the RADIUS side. restrictedUser() may already have written
+            // it — this covers a failure before it got that far.
+            $account->billing_status_id = $this->statusId('Inactive', self::FALLBACK_INACTIVE_STATUS_ID);
+            $account->updated_by = $actor->id ?? $account->updated_by;
+            $account->save();
+
             return [
                 'action' => 'queued',
                 'reason' => $reason,
@@ -609,8 +687,8 @@ class PrepaidOverrideService
             ];
         }
 
-        // Billing status flips only once RADIUS has accepted the change — same ordering as the
-        // cron, so an Inactive row always means a restriction that really landed.
+        // restrictedUser() already wrote Inactive (dbStatus above); set again so the saved model
+        // matches and updated_by records the approver.
         $account->billing_status_id = $this->statusId('Inactive', self::FALLBACK_INACTIVE_STATUS_ID);
         $account->updated_by = $actor->id ?? $account->updated_by;
         $account->save();
@@ -746,6 +824,161 @@ class PrepaidOverrideService
         );
 
         return ['action' => 'reconnected', 'expires_at' => $expiry->toDateTimeString(), 'username' => $username];
+    }
+
+    /**
+     * Check the router after a restrict / reconnect and confirm it actually took.
+     *
+     * restrictedUser() / reconnectUser() can report success while the RADIUS user ends up in the
+     * wrong group. So the group is read back: Restricted after a restrict, a non-restricted (plan)
+     * group after a reconnect. One retry if it did not take; still wrong after that, the operation
+     * is queued for cron:process-radius-queue and reported as 'queued' with the reason, so the
+     * approver is never told a customer is online (or cut off) when they are not.
+     *
+     * @return array{action:string, reason?:string, expires_at?:string, username?:string, verified?:bool}
+     */
+    private function verifyEnforcement(BillingAccount $account, string $username, Carbon $expiry, bool $restrict, array $outcome, string $updatedBy, ?User $actor): array
+    {
+        $expected = $restrict ? 'restricted' : 'reconnected';
+        if (($outcome['action'] ?? '') !== $expected) {
+            return $outcome;
+        }
+
+        $radius = app(ManualRadiusOperationsService::class);
+        $label = $restrict ? 'restrict' : 'reconnect';
+
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
+            // The PATCH is synchronous, so read back at once; wait a moment only before the second look.
+            if ($attempt > 1) {
+                sleep(1);
+            }
+            $group = $radius->findUserGroup($username);
+            $isRestricted = $this->isRestrictedGroup($group);
+
+            if ($isRestricted === $restrict) {
+                Log::info("[PREPAID OVERRIDE] {$label} verified on RADIUS", [
+                    'account_no' => $account->account_no, 'username' => $username, 'group' => $group, 'attempt' => $attempt,
+                ]);
+                return $outcome + ['verified' => true];
+            }
+
+            Log::warning("[PREPAID OVERRIDE] {$label} not confirmed on RADIUS", [
+                'account_no' => $account->account_no, 'username' => $username, 'group' => $group, 'attempt' => $attempt,
+            ]);
+
+            // One more go at the operation itself before the last read-back.
+            if ($attempt === 1) {
+                $retry = $restrict
+                    ? $this->restrict($account->fresh(), $username, $expiry, $updatedBy, $actor)
+                    : $this->reconnect($account->fresh(), $username, $expiry, $updatedBy, $actor);
+                if (($retry['action'] ?? '') !== $expected) {
+                    return $retry;
+                }
+            }
+        }
+
+        $reason = "the {$label} ran but RADIUS still shows group '" . ($group ?? 'unreadable') . "'";
+        $operation = $restrict ? 'restricted_user' : 'reconnect_user';
+
+        if (!$this->hasQueuedOperation($account->account_no, $operation)) {
+            RadiusQueueService::queue([
+                'organization_id' => $account->organization_id ?? null,
+                'source_type' => 'prepaid_override',
+                'source_id' => $account->id,
+                'account_no' => $account->account_no,
+                'operation' => $operation,
+                'params' => $restrict
+                    ? ['accountNumber' => $account->account_no, 'username' => $username, 'remarks' => self::RADIUS_REMARKS . ' — verify retry', 'updatedBy' => $updatedBy, 'dbStatus' => 'Inactive']
+                    : ['accountNumber' => $account->account_no, 'username' => $username, 'plan' => optional($account->customer)->desired_plan, 'remarks' => self::RADIUS_REMARKS . ' — verify retry', 'updatedBy' => $updatedBy],
+                'last_error' => 'Prepaid override verification failed: ' . $reason,
+                'created_by' => $updatedBy,
+            ]);
+        }
+
+        return [
+            'action' => 'queued',
+            'reason' => $reason,
+            'expires_at' => $expiry->toDateTimeString(),
+            'username' => $username,
+            'verified' => false,
+        ];
+    }
+
+    /**
+     * A 422 refusal when a pending request's account has no PPPoE username, or its username is
+     * not on any RADIUS server; null when the approval may go ahead.
+     *
+     * "Missing" is only concluded when RADIUS answered: a user that cannot be found while the
+     * servers are unreachable is an outage, not a missing account, and must not block approvals
+     * (the post-approval enforcement queues for retry in that case, as before).
+     *
+     * @return array{success:false, status:int, code:string, message:string, username?:string}|null
+     */
+    private function radiusUserMissing(int $id): ?array
+    {
+        try {
+            $request = PrepaidOverrideRequest::find($id);
+            if (!$request || !$request->isPending()) {
+                return null; // approve() reports these cases itself
+            }
+
+            $account = BillingAccount::with('technicalDetails')->where('account_no', $request->account_no)->first();
+            if (!$account) {
+                return null;
+            }
+
+            $username = trim((string) optional($account->technicalDetails->first())->username);
+            if ($username === '') {
+                return [
+                    'success' => false,
+                    'status' => 422,
+                    'code' => 'radius_user_missing',
+                    'message' => "Account {$account->account_no} has no PPPoE username, so it cannot be reconnected or restricted in RADIUS. Add the PPPoE username in Technical Details first. Nothing was changed.",
+                ];
+            }
+
+            $radius = app(ManualRadiusOperationsService::class);
+            $group = $radius->findUserGroup($username);
+            $this->radiusGroupCache[$username] = $group;
+            if ($group !== null) {
+                return null;
+            }
+
+            if (!$radius->isRadiusReachable()) {
+                Log::warning('[PREPAID OVERRIDE] RADIUS unreachable during pre-approval check — approving anyway', [
+                    'request_id' => $id, 'username' => $username,
+                ]);
+                return null;
+            }
+
+            Log::warning('[PREPAID OVERRIDE] Approval blocked — PPPoE user missing in RADIUS', [
+                'request_id' => $id, 'account_no' => $account->account_no, 'username' => $username,
+            ]);
+
+            return [
+                'success' => false,
+                'status' => 422,
+                'code' => 'radius_user_missing',
+                'username' => $username,
+                'message' => "The PPPoE username \"{$username}\" (account {$account->account_no}) is missing in RADIUS. "
+                    . 'Add it to RADIUS (or correct the username in Technical Details) before approving. Nothing was changed.',
+            ];
+        } catch (\Throwable $e) {
+            Log::error('[PREPAID OVERRIDE] Pre-approval RADIUS check failed — approving anyway', [
+                'request_id' => $id, 'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /** true = restricted group, false = a live (plan) group, null = user not found / RADIUS unreachable. */
+    private function isRestrictedGroup(?string $group): ?bool
+    {
+        if ($group === null || trim($group) === '') {
+            return null;
+        }
+
+        return in_array(strtolower(trim($group)), ['restricted', 'disconnected'], true);
     }
 
     /** Is a RADIUS operation of this kind already waiting in the retry queue for this account? */

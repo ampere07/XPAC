@@ -198,7 +198,12 @@ class EnhancedBillingGenerationService
             $query->where('billing_day', $targetDay);
         }
 
-        $accounts = $query->get();
+        // Skip accounts that switched prepaid -> postpaid and are still covered by prepaid days —
+        // the same rule the current billing service applies (one implementation, not a copy).
+        $current = app(\App\Services\EnhancedBillingGenerationServiceWithNotifications::class);
+        $accounts = $query->get()
+            ->reject(fn ($account) => $current->isCoveredByPrepaidDays($account, $generationDate))
+            ->values();
 
         Log::info('Loaded accounts with complete data', [
             'billing_day' => $billingDay,

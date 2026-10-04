@@ -262,6 +262,9 @@ const Invoice: React.FC = () => {
   const [invoiceDateFrom, setInvoiceDateFrom] = useState<string>('');
   const [invoiceDateTo, setInvoiceDateTo] = useState<string>('');
   const [dateRangeType, setDateRangeType] = useState<'invoice' | 'due'>('invoice');
+  // Sidebar Paid / Unpaid toggle. One at a time; clicking the active one again shows both.
+  // "Unpaid" means not fully paid, so it includes Partial invoices.
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<'Paid' | 'Unpaid' | null>(null);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [mobileViewMode, setMobileViewMode] = useState<'sidebar' | 'list'>('sidebar');
@@ -434,8 +437,17 @@ const Invoice: React.FC = () => {
       });
     }
 
+    // Sidebar Paid / Unpaid toggle. Applied here, with the other sidebar filters, so the
+    // All Records and Invoice Month counts follow it.
+    if (paymentStatusFilter) {
+      filtered = filtered.filter(record => {
+        const isPaid = String(record.status || '').trim().toLowerCase() === 'paid';
+        return paymentStatusFilter === 'Paid' ? isPaid : !isPaid;
+      });
+    }
+
     return filtered;
-  }, [invoiceRecords, searchQuery, activeFilters, invoiceDateFrom, invoiceDateTo, dateRangeType, userOrgId]);
+  }, [invoiceRecords, searchQuery, activeFilters, invoiceDateFrom, invoiceDateTo, dateRangeType, userOrgId, paymentStatusFilter]);
 
   // Derive date items from context data instead of fetching separately or static
   const dateItems = useMemo(() => {
@@ -1231,6 +1243,35 @@ const Invoice: React.FC = () => {
                     style={invoiceDateTo ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}}
                   />
                 </div>
+              </div>
+            </div>
+
+            {/* Paid / Unpaid — one at a time; clicking the active one again clears it. */}
+            <div className={`px-4 py-3 border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
+              <div className="grid grid-cols-2 gap-2">
+                {(['Paid', 'Unpaid'] as const).map(status => {
+                  const isActive = paymentStatusFilter === status;
+                  return (
+                    <button
+                      key={status}
+                      type="button"
+                      aria-pressed={isActive}
+                      onClick={() => setPaymentStatusFilter(isActive ? null : status)}
+                      className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${isActive
+                        ? 'text-white'
+                        : isDarkMode
+                          ? 'border-gray-700 text-gray-300 hover:bg-gray-800'
+                          : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                        }`}
+                      style={isActive ? {
+                        backgroundColor: colorPalette?.primary || '#7c3aed',
+                        borderColor: colorPalette?.primary || '#7c3aed'
+                      } : {}}
+                    >
+                      {status}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 

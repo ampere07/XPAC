@@ -166,23 +166,8 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
       newErrors.accountNo = 'Account No. is required';
     }
 
-    if (!formData.dateInstalled) {
-      newErrors.dateInstalled = 'Date Installed is required';
-    }
-
-    if (!formData.fullName.trim()) {
-      newErrors.fullName = 'Full Name is required';
-    }
-
-    if (!formData.contactNumber.trim()) {
-      newErrors.contactNumber = 'Contact Number is required';
-    }
-
-    if (!formData.plan) {
-      newErrors.plan = 'Plan is required';
-    }
-
-
+    // Date Installed, Full Name, Contact Number and Plan are not validated: they are hidden in this
+    // form and already stored on the customer's account.
 
     if (!formData.username.trim()) {
       newErrors.username = 'Username is required';
@@ -473,66 +458,8 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
               {errors.accountNo && <p className="text-red-500 text-xs mt-1">{errors.accountNo}</p>}
             </div>
 
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>
-                Date Installed<span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={formData.dateInstalled}
-                readOnly
-                className={`w-full px-3 py-2 border rounded cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.dateInstalled ? 'border-red-500' : ''
-                  }`}
-              />
-              {errors.dateInstalled && <p className="text-red-500 text-xs mt-1">{errors.dateInstalled}</p>}
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>
-                Full Name<span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.fullName}
-                onChange={(e) => handleInputChange('fullName', e.target.value)}
-                readOnly
-                className={`w-full px-3 py-2 border rounded cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.fullName ? 'border-red-500' : ''
-                  }`}
-              />
-              {errors.fullName && <p className="text-red-500 text-xs mt-1">{errors.fullName}</p>}
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>
-                Contact Number<span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={formData.contactNumber}
-                readOnly
-                className={`w-full px-3 py-2 border rounded cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.contactNumber ? 'border-red-500' : ''
-                  }`}
-              />
-              {errors.contactNumber && <p className="text-red-500 text-xs mt-1">{errors.contactNumber}</p>}
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>
-                Plan<span className="text-red-500">*</span>
-              </label>
-              <div className={`px-3 py-2 border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-gray-100 border-gray-300 text-gray-900'
-                }`}>
-                {formData.plan || 'No plan'}
-              </div>
-              {errors.plan && <p className="text-red-500 text-xs mt-1">{errors.plan}</p>}
-            </div>
+            {/* Date Installed, Full Name, Contact Number and Plan are not shown: they are already
+                on the customer's account this request is raised for. */}
 
 
 

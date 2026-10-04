@@ -1523,69 +1523,9 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               />
             </div>
 
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>Date Installed</label>
-              <div className="relative">
-                <input
-                  type="date"
-                  value={formData.dateInstalled}
-                  readOnly
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                    } ${errors.dateInstalled ? 'border-red-500' : ''}`}
-                />
-                <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                  }`} size={20} />
-              </div>
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>Full Name</label>
-              <input
-                type="text"
-                value={formData.fullName}
-                readOnly
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.fullName ? 'border-red-500' : ''}`}
-              />
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>Contact Number</label>
-              <input
-                type="text"
-                value={formData.contactNumber}
-                readOnly
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.contactNumber ? 'border-red-500' : ''}`}
-              />
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>Email Address</label>
-              <input
-                type="text"
-                value={formData.emailAddress}
-                readOnly
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.emailAddress ? 'border-red-500' : ''}`}
-              />
-            </div>
-
-            <div>
-              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                }`}>Plan</label>
-              <input
-                type="text"
-                value={formData.plan}
-                readOnly
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary cursor-not-allowed ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-100 text-gray-500 border-gray-300'
-                  } ${errors.plan ? 'border-red-500' : ''}`}
-              />
-            </div>
+            {/* Date Installed, Full Name, Contact Number, Email Address and Plan are not shown: they
+                are already on the customer account, and still load into the form, so a save keeps
+                sending them unchanged. */}
 
 
 

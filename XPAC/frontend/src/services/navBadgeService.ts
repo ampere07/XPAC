@@ -17,8 +17,16 @@ export interface NavBadgeCounts {
   work_order: number;
   /** Transactions awaiting approval or processing (Pending / QUEUED). */
   transaction: number;
-  /** Sum of the five — what the header bell shows. */
+  /** Prepaid Override requests still Pending a decision. */
+  prepaid_override: number;
+  /** Sum of all of the above — what the header bell shows. */
   total: number;
+  /**
+   * Records in the For Approval queue: Pending transactions plus Done job orders not yet
+   * approved. Not part of `total` — those rows are already counted by the badges above.
+   * 0 for anyone who cannot open the page.
+   */
+  for_approval: number;
 }
 
 export const EMPTY_NAV_BADGE_COUNTS: NavBadgeCounts = {
@@ -27,7 +35,9 @@ export const EMPTY_NAV_BADGE_COUNTS: NavBadgeCounts = {
   service_order: 0,
   work_order: 0,
   transaction: 0,
+  prepaid_override: 0,
   total: 0,
+  for_approval: 0,
 };
 
 /**
@@ -55,4 +65,18 @@ export const getNavBadgeCounts = async (): Promise<NavBadgeCounts> => {
   }
 
   return EMPTY_NAV_BADGE_COUNTS;
+};
+
+/**
+ * Fired after a Prepaid Override request is submitted or decided, or a record is approved from
+ * For Approval, so the sidebar badges refresh at once.
+ */
+export const NAV_BADGES_CHANGED_EVENT = "nav-badges-changed";
+
+export const notifyNavBadgesChanged = (): void => {
+  try {
+    window.dispatchEvent(new Event(NAV_BADGES_CHANGED_EVENT));
+  } catch {
+    // Intentionally quiet: a badge refresh is never worth an error.
+  }
 };

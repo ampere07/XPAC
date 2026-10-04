@@ -20,18 +20,10 @@ import { getAllLCPNAPs, LCPNAP } from '../services/lcpnapService';
 import { getAllVLANs, VLAN } from '../services/vlanService';
 import { getAllUsageTypes, UsageType } from '../services/usageTypeService';
 
-import { getRegions, getCities, City } from '../services/cityService';
-import { barangayService, Barangay } from '../services/barangayService';
-import { locationDetailService, LocationDetail } from '../services/locationDetailService';
 import apiClient from '../config/api';
 import { getActiveImageSize, resizeImage, ImageSizeSetting } from '../services/imageSettingsService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
-interface Region {
-  id: number;
-  name: string;
-}
 
 interface JobOrderDoneFormModalProps {
   isOpen: boolean;
@@ -199,10 +191,6 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
   const [lcpnapSearch, setLcpnapSearch] = useState('');
   const [isLcpnapOpen, setIsLcpnapOpen] = useState(false);
 
-  const [regions, setRegions] = useState<Region[]>([]);
-  const [allCities, setAllCities] = useState<City[]>([]);
-  const [allBarangays, setAllBarangays] = useState<Barangay[]>([]);
-  const [allLocations, setAllLocations] = useState<LocationDetail[]>([]);
 
   const [imagePreviews, setImagePreviews] = useState<{
     signedContractImage: string | null;
@@ -426,86 +414,6 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
   }, [isOpen, imagePreviews]);
 
 
-
-  useEffect(() => {
-    const fetchRegions = async () => {
-      if (isOpen) {
-        try {
-          const fetchedRegions = await getRegions();
-          if (Array.isArray(fetchedRegions)) {
-            setRegions(fetchedRegions);
-          } else {
-            setRegions([]);
-          }
-        } catch (error) {
-          console.error('Error fetching Regions:', error);
-          setRegions([]);
-        }
-      }
-    };
-
-    fetchRegions();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllCities = async () => {
-      if (isOpen) {
-        try {
-          const fetchedCities = await getCities();
-          if (Array.isArray(fetchedCities)) {
-            setAllCities(fetchedCities);
-          } else {
-            setAllCities([]);
-          }
-        } catch (error) {
-          console.error('Error fetching Cities:', error);
-          setAllCities([]);
-        }
-      }
-    };
-
-    fetchAllCities();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllBarangays = async () => {
-      if (isOpen) {
-        try {
-          const response = await barangayService.getAll();
-          if (response.success && Array.isArray(response.data)) {
-            setAllBarangays(response.data);
-          } else {
-            setAllBarangays([]);
-          }
-        } catch (error) {
-          console.error('Error fetching Barangays:', error);
-          setAllBarangays([]);
-        }
-      }
-    };
-
-    fetchAllBarangays();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllLocations = async () => {
-      if (isOpen) {
-        try {
-          const response = await locationDetailService.getAll();
-          if (response.success && Array.isArray(response.data)) {
-            setAllLocations(response.data);
-          } else {
-            setAllLocations([]);
-          }
-        } catch (error) {
-          console.error('Error fetching Locations:', error);
-          setAllLocations([]);
-        }
-      }
-    };
-
-    fetchAllLocations();
-  }, [isOpen]);
 
   useEffect(() => {
     const fetchLcpnaps = async () => {
@@ -951,21 +859,8 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       return trimmed !== '' && trimmed !== 'null' && trimmed !== 'undefined';
     };
 
-    if (!formData.firstName.trim()) newErrors.firstName = 'First Name is required';
-    if (!formData.lastName.trim()) newErrors.lastName = 'Last Name is required';
-    if (!formData.contactNumber.trim()) newErrors.contactNumber = 'Contact Number is required';
-
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!formData.address.trim()) newErrors.address = 'Address is required';
-    if (!formData.barangay.trim()) newErrors.barangay = 'Barangay is required';
-    if (!formData.city.trim()) newErrors.city = 'City is required';
-    if (!formData.region.trim()) newErrors.region = 'Region is required';
-    if (!formData.location.trim()) newErrors.location = 'Location is required';
+    // The customer section (name, contact numbers, email, address, region, city, barangay,
+    // location) is not validated: it is hidden in this form and already stored on the application.
     if (!formData.choosePlan.trim()) newErrors.choosePlan = 'Choose Plan is required';
     if (!formData.status.trim()) newErrors.status = 'Status is required';
     if (!formData.status.trim()) newErrors.status = 'Status is required';
@@ -1359,17 +1254,9 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
       if (applicationId) {
         const applicationUpdateData: any = {
-          first_name: updatedFormData.firstName,
-          middle_initial: updatedFormData.middleInitial,
-          last_name: updatedFormData.lastName,
-          mobile_number: updatedFormData.contactNumber,
-          secondary_mobile_number: updatedFormData.secondContactNumber,
-          email_address: updatedFormData.email,
-          installation_address: updatedFormData.address,
-          barangay: updatedFormData.barangay,
-          city: updatedFormData.city,
-          region: updatedFormData.region,
-          location: updatedFormData.location,
+          // The customer section (name, contact numbers, email, address, region, city, barangay,
+          // location) is deliberately NOT sent: it is hidden in this form, so writing it back
+          // could only blank values the application already holds.
           desired_plan: updatedFormData.choosePlan,
           referred_by: referredByEcho(jobOrderData, updatedFormData.referredBy),
           status: updatedFormData.status
@@ -1418,30 +1305,6 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
   if (!isOpen) return null;
 
-  const getFilteredCities = () => {
-    if (!formData.region) return [];
-    const selectedRegion = regions.find(reg => reg.name === formData.region);
-    if (!selectedRegion) return [];
-    return allCities.filter(city => city.region_id === selectedRegion.id);
-  };
-
-  const getFilteredBarangays = () => {
-    if (!formData.city) return [];
-    const selectedCity = allCities.find(city => city.name === formData.city);
-    if (!selectedCity) return [];
-    return allBarangays.filter(brgy => brgy.city_id === selectedCity.id);
-  };
-
-  const getFilteredLocations = () => {
-    if (!formData.barangay) return [];
-    const selectedBarangay = allBarangays.find(brgy => brgy.barangay === formData.barangay);
-    if (!selectedBarangay) return [];
-    return allLocations.filter(loc => loc.barangay_id === selectedBarangay.id);
-  };
-
-  const filteredCities = getFilteredCities();
-  const filteredBarangays = getFilteredBarangays();
-  const filteredLocations = getFilteredLocations();
 
   return (
     <>
@@ -1604,185 +1467,9 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </>
               )}
 
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  First Name<Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={formData.firstName}
-                  onChangeText={(text) => handleInputChange('firstName', text)}
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.firstName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
-                />
-                {errors.firstName && <Text className="text-red-500 text-xs mt-1">{errors.firstName}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Middle Initial
-                </Text>
-                <TextInput
-                  value={formData.middleInitial}
-                  onChangeText={(text) => handleInputChange('middleInitial', text)}
-                  maxLength={1}
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'} border rounded`}
-                />
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Last Name<Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={formData.lastName}
-                  onChangeText={(text) => handleInputChange('lastName', text)}
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.lastName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
-                />
-                {errors.lastName && <Text className="text-red-500 text-xs mt-1">{errors.lastName}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Contact Number<Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={formData.contactNumber}
-                  onChangeText={(text) => handleInputChange('contactNumber', text)}
-                  keyboardType="phone-pad"
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.contactNumber ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
-                />
-                {errors.contactNumber && <Text className="text-red-500 text-xs mt-1">{errors.contactNumber}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Second Contact Number
-                </Text>
-                <TextInput
-                  value={formData.secondContactNumber}
-                  onChangeText={(text) => handleInputChange('secondContactNumber', text)}
-                  keyboardType="phone-pad"
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'} border rounded`}
-                />
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Applicant Email Address<Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={formData.email}
-                  onChangeText={(text) => handleInputChange('email', text)}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.email ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
-                />
-                {errors.email && <Text className="text-red-500 text-xs mt-1">{errors.email}</Text>}
-              </View>
-
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Address<Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={formData.address}
-                  onChangeText={(text) => handleInputChange('address', text)}
-                  className={`w-full px-3 py-2 ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'} border ${errors.address ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded`}
-                />
-                {errors.address && <Text className="text-red-500 text-xs mt-1">{errors.address}</Text>}
-              </View>
-
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Region<Text className="text-red-500">*</Text>
-                </Text>
-                <View className={`border ${errors.region ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
-                  <Picker
-                    selectedValue={formData.region}
-                    onValueChange={(value) => handleInputChange('region', value)}
-                    style={{ color: isDarkMode ? '#fff' : '#000' }}
-                  >
-                    <Picker.Item label="Select Region" value="" />
-                    {formData.region && !regions.some(reg => reg.name === formData.region) && (
-                      <Picker.Item label={formData.region} value={formData.region} />
-                    )}
-                    {regions.map((region) => (
-                      <Picker.Item key={region.id} label={region.name} value={region.name} />
-                    ))}
-                  </Picker>
-                </View>
-                {errors.region && <Text className="text-red-500 text-xs mt-1">{errors.region}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  City<Text className="text-red-500">*</Text>
-                </Text>
-                <View className={`border ${errors.city ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded ${isDarkMode ? 'bg-gray-800' : 'bg-white'} ${!formData.region ? 'opacity-50' : ''}`}>
-                  <Picker
-                    selectedValue={formData.city}
-                    onValueChange={(value) => handleInputChange('city', value)}
-                    enabled={!!formData.region}
-                    style={{ color: isDarkMode ? '#fff' : '#000' }}
-                  >
-                    <Picker.Item label={formData.region ? 'Select City' : 'Select Region First'} value="" />
-                    {formData.city && !filteredCities.some(city => city.name === formData.city) && (
-                      <Picker.Item label={formData.city} value={formData.city} />
-                    )}
-                    {filteredCities.map((city) => (
-                      <Picker.Item key={city.id} label={city.name} value={city.name} />
-                    ))}
-                  </Picker>
-                </View>
-                {errors.city && <Text className="text-red-500 text-xs mt-1">{errors.city}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Barangay<Text className="text-red-500">*</Text>
-                </Text>
-                <View className={`border ${errors.barangay ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded ${isDarkMode ? 'bg-gray-800' : 'bg-white'} ${!formData.city ? 'opacity-50' : ''}`}>
-                  <Picker
-                    selectedValue={formData.barangay}
-                    onValueChange={(value) => handleInputChange('barangay', value)}
-                    enabled={!!formData.city}
-                    style={{ color: isDarkMode ? '#fff' : '#000' }}
-                  >
-                    <Picker.Item label={formData.city ? 'Select Barangay' : 'Select City First'} value="" />
-                    {formData.barangay && !filteredBarangays.some(brgy => brgy.barangay === formData.barangay) && (
-                      <Picker.Item label={formData.barangay} value={formData.barangay} />
-                    )}
-                    {filteredBarangays.map((barangay) => (
-                      <Picker.Item key={barangay.id} label={barangay.barangay} value={barangay.barangay} />
-                    ))}
-                  </Picker>
-                </View>
-                {errors.barangay && <Text className="text-red-500 text-xs mt-1">{errors.barangay}</Text>}
-              </View>
-
-              <View className="mb-4">
-                <Text className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'} mb-2`}>
-                  Location<Text className="text-red-500">*</Text>
-                </Text>
-                <View className={`border ${errors.location ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} rounded ${isDarkMode ? 'bg-gray-800' : 'bg-white'} ${!formData.barangay ? 'opacity-50' : ''}`}>
-                  <Picker
-                    selectedValue={formData.location}
-                    onValueChange={(value) => handleInputChange('location', value)}
-                    enabled={!!formData.barangay}
-                    style={{ color: isDarkMode ? '#fff' : '#000' }}
-                  >
-                    <Picker.Item label={formData.barangay ? 'Select Location' : 'Select Barangay First'} value="" />
-                    {formData.location && !filteredLocations.some(loc => loc.location_name === formData.location) && (
-                      <Picker.Item label={formData.location} value={formData.location} />
-                    )}
-                    {filteredLocations.map((location) => (
-                      <Picker.Item key={location.id} label={location.location_name} value={location.location_name} />
-                    ))}
-                  </Picker>
-                </View>
-                {errors.location && <Text className="text-red-500 text-xs mt-1">{errors.location}</Text>}
-              </View>
+              {/* Customer section (first/middle/last name, contact numbers, email, address, region,
+                  city, barangay, location) is not shown here: it is already stored on the application
+                  this job order belongs to, and is edited there. */}
 
               {formData.status === 'Confirmed' && formData.onsiteStatus === 'Done' && (
                 <View className="mb-4">

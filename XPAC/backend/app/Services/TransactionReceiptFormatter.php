@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Customer;
+use App\Models\Invoice;
 use App\Models\PaymentMethod;
 use App\Models\Transaction;
 use Illuminate\Support\Facades\Log;
@@ -124,7 +125,10 @@ class TransactionReceiptFormatter
             'remarks' => $this->firstFilled([$transaction->remarks], null),
             'status' => $this->firstFilled([$transaction->status], null),
             'is_printable' => $this->isPrintable($transaction->status),
-        ];
+        ]
+            // coverage_from / coverage_to: Y-m-d, or null when the payment buys no identifiable
+            // span (deposits, service charges, migrated rows with no snapshot or linked invoices).
+            + $this->resolveCoverage($transaction);
     }
 
     /**
@@ -205,6 +209,122 @@ class TransactionReceiptFormatter
         }
 
         return null;
+    }
+
+    /**
+     * The service span this payment pays for, as ['coverage_from' => Y-m-d, 'coverage_to' => Y-m-d].
+     *
+     * Prepaid: the window PrepaidRenewalService opened at approval. That result is not stored, so
+     * it is recomputed from the approval snapshot with the same rules — the snapshot holds the
+     * pre-approval expiry and balance, which are the only inputs the rules depend on:
+     *   - no renewal unless the payment cleared the balance or covered the plan price
+     *     (PrepaidPlanChangeService::qualifiesForRenewal);
+     *   - still active at payment time -> extended: day after the old expiry, +34 days total;
+     *   - lapsed, never set, or a genuine Activate Now plan switch -> fresh: payment day + 33.
+     *
+     * Postpaid: the billing cycles of the invoices this payment settled. An invoice is dated at
+     * the END of its cycle (see EnhancedBillingGenerationService::calculateProrateAmount), so an
+     * invoice dated Sep 15 covers Aug 15 – Sep 14.
+     *
+     * @return array{coverage_from: ?string, coverage_to: ?string}
+     */
+    private function resolveCoverage(Transaction $transaction): array
+    {
+        $none = ['coverage_from' => null, 'coverage_to' => null];
+
+        try {
+            if (!Transaction::grantsService($transaction->transaction_type)) {
+                return $none;
+            }
+
+            $snapshot = collect($transaction->updated_column ?? []);
+            $prepaid = $snapshot->firstWhere('table', 'billing_accounts_prepaid');
+
+            if (!empty($prepaid['was_prepaid'])) {
+                return $this->resolvePrepaidCoverage($transaction, $prepaid, $snapshot->firstWhere('table', 'billing_accounts')) ?? $none;
+            }
+
+            $invoiceDates = Invoice::where('transaction_id', $transaction->id)
+                ->whereNotNull('invoice_date')
+                ->pluck('invoice_date')
+                ->map(fn ($date) => \Carbon\Carbon::parse($date)->startOfDay());
+
+            if ($invoiceDates->isEmpty()) {
+                return $none;
+            }
+
+            return [
+                'coverage_from' => $invoiceDates->min()->copy()->subMonthNoOverflow()->toDateString(),
+                'coverage_to' => $invoiceDates->max()->copy()->subDay()->toDateString(),
+            ];
+        } catch (\Throwable $e) {
+            // Coverage is a nicety on the slip; it must never stop the receipt printing.
+            Log::warning('Receipt coverage lookup failed', [
+                'transaction_id' => $transaction->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $none;
+        }
+    }
+
+    /**
+     * @see resolveCoverage() for the rules mirrored from PrepaidRenewalService::renew().
+     *
+     * @return array{coverage_from: string, coverage_to: string}|null
+     */
+    private function resolvePrepaidCoverage(Transaction $transaction, array $prepaid, ?array $balanceSnapshot): ?array
+    {
+        $amount = $this->toAmount($transaction->received_payment);
+
+        $paidAtRaw = $transaction->payment_date ?? $transaction->date_processed;
+        if (blank($paidAtRaw)) {
+            return null;
+        }
+
+        $paidAt = \Carbon\Carbon::parse($paidAtRaw);
+        $oldExpiry = !empty($prepaid['old_prepaid_expires_at'])
+            ? \Carbon\Carbon::parse($prepaid['old_prepaid_expires_at'])
+            : null;
+
+        // The same decision approval made (PrepaidPlanChangeService::paymentBuysPeriod), fed from
+        // the approval snapshot — balance and expiry as they stood then. Not qualifiesForRenewal()
+        // itself: that reads the account as it is NOW and logs on every call, which would put a
+        // renewal line in the log each time a receipt is printed.
+        if ($balanceSnapshot && isset($balanceSnapshot['old_account_balance'])) {
+            $balanceAfter = round((float) $balanceSnapshot['old_account_balance'] - $amount, 2);
+            $account = \App\Models\BillingAccount::with('customer')
+                ->where('account_no', (string) $transaction->account_no)->first();
+            $planPrice = $account
+                ? (float) (app(PrepaidPlanChangeService::class)
+                    ->renewalPlanFor($account, $transaction->selected_plan_id)->price ?? 0)
+                : 0.0;
+            $periodActive = $oldExpiry !== null && $oldExpiry->greaterThan($paidAt);
+
+            if (!PrepaidPlanChangeService::paymentBuysPeriod($amount, $balanceAfter, $planPrice, $periodActive)) {
+                return null;
+            }
+        }
+
+        // Activate Now only forfeits the old window on a genuine plan switch.
+        $activatedSwitch = $transaction->activate_now
+            && filled($transaction->selected_plan_id)
+            && (int) $transaction->selected_plan_id !== (int) ($prepaid['old_plan_id'] ?? 0);
+
+        $days = PrepaidRenewalService::PREPAID_PERIOD_DAYS;
+
+        if (!$activatedSwitch && $oldExpiry && $oldExpiry->greaterThan($paidAt)) {
+            $from = $oldExpiry->copy()->addDay();
+            $to = $oldExpiry->copy()->addDays($days);
+        } else {
+            $from = $paidAt->copy();
+            $to = $paidAt->copy()->addDays($days - 1);
+        }
+
+        return [
+            'coverage_from' => $from->toDateString(),
+            'coverage_to' => $to->toDateString(),
+        ];
     }
 
     /**

@@ -238,6 +238,94 @@ class PppoeUsernameService
         return $password;
     }
 
+    /**
+     * The PPPoE username after a customer's name is edited, or null when it cannot be worked out.
+     *
+     * Rewrites the OLD username in place rather than regenerating it from the pattern: a pattern
+     * can include parts that only existed at install (random_* digits/letters, a technician's
+     * tech_input, the install date, LCP/NAP/port at the time), and regenerating would change those
+     * too. Instead, each name part of the pattern is located in the old username — in pattern
+     * order, as the old name produced it — and only that slice is swapped for the new name's
+     * value. Everything between the name parts is kept character for character.
+     *
+     * Returns null (caller leaves the username alone) when a name part cannot be found in the old
+     * username, e.g. it was created under a different pattern or edited by hand. Returns the old
+     * username unchanged when the edit does not touch any name part the pattern uses.
+     *
+     * @param array{first_name?:string, middle_initial?:string, last_name?:string} $oldNames
+     * @param array{first_name?:string, middle_initial?:string, last_name?:string} $newNames
+     */
+    public function renameForNameChange(string $oldUsername, array $oldNames, array $newNames): ?string
+    {
+        $pattern = PPPoEUsernamePattern::getUsernamePattern();
+        $sequence = $pattern && is_array($pattern->sequence)
+            ? $pattern->sequence
+            // generateFallbackUsername() starts with the last name.
+            : [['type' => 'last_name']];
+
+        $nameTypes = [
+            'first_name', 'first_name_capitalized', 'first_name_initial',
+            'middle_name', 'middle_name_capitalized', 'middle_name_initial',
+            'last_name', 'last_name_capitalized', 'last_name_initial',
+        ];
+
+        // Parts whose length is fixed whatever they contain. While the cursor sits exactly at the
+        // start of one (nothing of unknown length before it), it is stepped over, so a short name
+        // token — an initial — cannot be "found" inside random letters or digits that precede it.
+        $fixedLength = [
+            'random_4_digits' => 4, 'random_6_digits' => 6,
+            'random_letters_4' => 4, 'random_letters_6' => 6,
+            'random_alphanumeric_4' => 4, 'random_alphanumeric_6' => 6,
+            'mobile_number_last_4' => 4, 'mobile_number_last_6' => 6,
+        ];
+
+        $result = '';
+        $cursor = 0;
+        $cursorExact = true;
+
+        foreach ($sequence as $part) {
+            $type = $part['type'] ?? '';
+            if (!in_array($type, $nameTypes, true)) {
+                if ($cursorExact && isset($fixedLength[$type])) {
+                    $result .= substr($oldUsername, $cursor, $fixedLength[$type]);
+                    $cursor = min(strlen($oldUsername), $cursor + $fixedLength[$type]);
+                } else {
+                    // tech_input, LCP/NAP/port, the full mobile number, the install date: their
+                    // length is not known here, so the next name token is searched for instead.
+                    $cursorExact = false;
+                }
+                continue;
+            }
+
+            $oldToken = $this->sanitizeUsername($this->getValueForType($type, $oldNames));
+            $newToken = $this->sanitizeUsername($this->getValueForType($type, $newNames));
+
+            if ($oldToken === '') {
+                // Nothing to locate. Only a problem if the new name now produces something here.
+                if ($newToken !== '') {
+                    return null;
+                }
+                continue;
+            }
+
+            // Where the position is known, the name must start exactly there; otherwise search on.
+            $pos = $cursorExact
+                ? (substr($oldUsername, $cursor, strlen($oldToken)) === $oldToken ? $cursor : false)
+                : strpos($oldUsername, $oldToken, $cursor);
+            if ($pos === false) {
+                return null;
+            }
+
+            $result .= substr($oldUsername, $cursor, $pos - $cursor) . $newToken;
+            $cursor = $pos + strlen($oldToken);
+            $cursorExact = true;
+        }
+
+        $result .= substr($oldUsername, $cursor);
+
+        return $result === '' ? null : $result;
+    }
+
     public function isUsernameUnique(string $username, ?int $excludeJobOrderId = null): bool
     {
         $query = DB::table('job_orders')

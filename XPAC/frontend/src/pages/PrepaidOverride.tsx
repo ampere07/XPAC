@@ -98,9 +98,14 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
         return () => observer.disconnect();
     }, []);
 
+    // First visit loads the list once; coming back to the page only fetches what changed since.
     useEffect(() => {
-        fetchOverrideRequests();
-    }, [fetchOverrideRequests]);
+        if (usePrepaidOverrideStore.getState().overrideRequests.length > 0) {
+            fetchUpdates();
+        } else {
+            fetchOverrideRequests();
+        }
+    }, [fetchOverrideRequests, fetchUpdates]);
 
     // An approval writes to billing_accounts, which is what the 'transactions' channel already
     // announces — reusing it means a decision made elsewhere lands here without a second channel.
@@ -116,8 +121,9 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
         };
         channel.bind('transaction-updated', handleDataChange);
         return () => {
+            // Unbind only. The Sidebar's badge counts listen on this same channel, and
+            // unsubscribing here cut them off for the rest of the session after leaving this page.
             channel.unbind('transaction-updated', handleDataChange);
-            pusher.unsubscribe('transactions');
         };
     }, [fetchUpdates]);
 
@@ -133,9 +139,10 @@ const PrepaidOverride: React.FC<PrepaidOverrideProps> = ({ autoOpenOverrideId })
         return () => clearInterval(intervalId);
     }, [fetchUpdates]);
 
+    // Silent refresh: only the requests created or changed since the last fetch, merged in.
     const handleRefresh = async () => {
         setHasNewData(false);
-        await fetchOverrideRequests(true);
+        await fetchUpdates();
     };
 
     const handleRowClick = (row: PrepaidOverrideRequest) => {

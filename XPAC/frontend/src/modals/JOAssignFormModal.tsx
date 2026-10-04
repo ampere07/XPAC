@@ -6,8 +6,6 @@ import { updateApplication } from '../services/applicationService';
 import apiClient from '../config/api';
 import { UserData } from '../types/api';
 import { userService } from '../services/userService';
-import { getRegions, getCities, City } from '../services/cityService';
-import { barangayService, Barangay } from '../services/barangayService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import SearchableField, { GroupedOption } from '../components/common/SearchableField';
 import { agentService } from '../services/agentService';
@@ -146,11 +144,6 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     installationLandmark: ''
   });
 
-  interface Region {
-    id: number;
-    name: string;
-  }
-
   interface Plan {
     id: number;
     name: string;
@@ -183,10 +176,6 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     message: ''
   });
 
-
-  const [regions, setRegions] = useState<Region[]>([]);
-  const [allCities, setAllCities] = useState<City[]>([]);
-  const [allBarangays, setAllBarangays] = useState<Barangay[]>([]);
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [promos, setPromos] = useState<Promo[]>([]);
@@ -349,65 +338,6 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     loadPromos();
   }, [isOpen]);
 
-  useEffect(() => {
-    const fetchRegions = async () => {
-      if (isOpen) {
-        try {
-          const fetchedRegions = await getRegions();
-
-          if (Array.isArray(fetchedRegions)) {
-            setRegions(fetchedRegions);
-          } else {
-            setRegions([]);
-          }
-        } catch (error) {
-          setRegions([]);
-        }
-      }
-    };
-
-    fetchRegions();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllCities = async () => {
-      if (isOpen) {
-        try {
-          const fetchedCities = await getCities();
-
-          if (Array.isArray(fetchedCities)) {
-            setAllCities(fetchedCities);
-          } else {
-            setAllCities([]);
-          }
-        } catch (error) {
-          setAllCities([]);
-        }
-      }
-    };
-
-    fetchAllCities();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllBarangays = async () => {
-      if (isOpen) {
-        try {
-          const response = await barangayService.getAll();
-
-          if (response.success && Array.isArray(response.data)) {
-            setAllBarangays(response.data);
-          } else {
-            setAllBarangays([]);
-          }
-        } catch (error) {
-          setAllBarangays([]);
-        }
-      }
-    };
-
-    fetchAllBarangays();
-  }, [isOpen]);
 
 
 
@@ -639,40 +569,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
       newErrors.status = 'Status is required';
     }
 
-    if (!formData.firstName.trim()) {
-      newErrors.firstName = 'First Name is required';
-    }
-
-    if (!formData.lastName.trim()) {
-      newErrors.lastName = 'Last Name is required';
-    }
-
-    if (!formData.contactNumber.trim()) {
-      newErrors.contactNumber = 'Contact Number is required';
-    } else if (!/^[0-9+\-\s()]+$/.test(formData.contactNumber.trim())) {
-      newErrors.contactNumber = 'Please enter a valid contact number';
-    }
-
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      newErrors.email = 'Please enter a valid email address';
-    }
+    // First/middle/last name, contact number, email, region, city and barangay are not validated
+    // here: they are already stored on the application, the fields are hidden in this form, and
+    // the job order is created from the application record.
 
     if (!formData.address.trim()) {
       newErrors.address = 'Address is required';
-    }
-
-    if (!formData.region.trim()) {
-      newErrors.region = 'Region is required';
-    }
-
-    if (!formData.city.trim()) {
-      newErrors.city = 'City is required';
-    }
-
-    if (!formData.barangay.trim()) {
-      newErrors.barangay = 'Barangay is required';
     }
 
     if (!formData.choosePlan.trim()) {
@@ -864,16 +766,11 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
             { label: updatedFormData.referredBy, agentId: updatedFormData.referredById },
             agents
           ),
-          first_name: updatedFormData.firstName || null,
-          middle_initial: updatedFormData.middleInitial || null,
-          last_name: updatedFormData.lastName || null,
-          mobile_number: updatedFormData.contactNumber || null,
-          email_address: updatedFormData.email || null,
+          // Name, contact number, email, region, city and barangay are deliberately NOT sent:
+          // those fields are hidden in this form, so writing them back could only blank values
+          // the application already holds.
           installation_address: updatedFormData.address || null,
           landmark: updatedFormData.installationLandmark || null,
-          region: updatedFormData.region || null,
-          city: updatedFormData.city || null,
-          barangay: updatedFormData.barangay || null,
           desired_plan: updatedFormData.choosePlan || null,
           promo: updatedFormData.promo || null,
           status: 'Scheduled',
@@ -949,24 +846,8 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
     onClose();
   };
 
-  const getFilteredCities = () => {
-    if (!formData.region) return [];
-    const selectedRegion = regions.find(reg => reg.name === formData.region);
-    if (!selectedRegion) return [];
-    return allCities.filter(city => city.region_id === selectedRegion.id);
-  };
-
-  const getFilteredBarangays = () => {
-    if (!formData.city) return [];
-    const selectedCity = allCities.find(city => city.name === formData.city);
-    if (!selectedCity) return [];
-    return allBarangays.filter(brgy => brgy.city_id !== undefined && brgy.city_id === selectedCity.id);
-  };
-
   const getGroupedAgents = (): GroupedOption[] => buildAgentGroups(agents, teams);
 
-  const filteredCities = getFilteredCities();
-  const filteredBarangays = getFilteredBarangays();
   const groupedAgents = getGroupedAgents();
 
   if (!isOpen) return null;
@@ -1107,95 +988,8 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>
-                  First Name<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.firstName}
-                  onChange={(e) => handleInputChange('firstName', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
-                    ? 'bg-gray-800 text-white border-gray-700'
-                    : 'bg-white text-gray-900 border-gray-300'
-                    } ${errors.firstName ? 'border-red-500' : ''}`}
-                />
-                {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>Middle Initial</label>
-                <input
-                  type="text"
-                  value={formData.middleInitial}
-                  onChange={(e) => handleInputChange('middleInitial', e.target.value)}
-                  onKeyDown={(e) => {
-                    if (/[0-9]/.test(e.key)) {
-                      e.preventDefault();
-                    }
-                  }}
-                  maxLength={1}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
-                    ? 'bg-gray-800 text-white border-gray-700'
-                    : 'bg-white text-gray-900 border-gray-300'
-                    }`}
-                />
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>
-                  Last Name<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.lastName}
-                  onChange={(e) => handleInputChange('lastName', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
-                    ? 'bg-gray-800 text-white border-gray-700'
-                    : 'bg-white text-gray-900 border-gray-300'
-                    } ${errors.lastName ? 'border-red-500' : ''}`}
-                />
-                {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>
-                  Contact Number<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.contactNumber}
-                  onChange={(e) => handleInputChange('contactNumber', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
-                    ? 'bg-gray-800 text-white border-gray-700'
-                    : 'bg-white text-gray-900 border-gray-300'
-                    } ${errors.contactNumber ? 'border-red-500' : ''}`}
-                />
-                {errors.contactNumber && <p className="text-red-500 text-xs mt-1">{errors.contactNumber}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                  }`}>
-                  Applicant Email Address<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => handleInputChange('email', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode
-                    ? 'bg-gray-800 text-white border-gray-700'
-                    : 'bg-white text-gray-900 border-gray-300'
-                    } ${errors.email ? 'border-red-500' : ''}`}
-                />
-                {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
-              </div>
-            </div>
+            {/* First/middle/last name, contact number and applicant email are not shown here:
+                they are already stored on the application this job order is created from. */}
 
             <div className="space-y-4">
               <div>
@@ -1215,43 +1009,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
               </div>
 
-              <SearchableField
-                label="Region"
-                value={formData.region}
-                onSelect={(val) => handleInputChange('region', val)}
-                options={regions}
-                optionLabelKey="name"
-                isDarkMode={isDarkMode}
-                error={errors.region}
-                required
-                placeholder="Select Region"
-              />
-
-              <SearchableField
-                label="City"
-                value={formData.city}
-                onSelect={(val) => handleInputChange('city', val)}
-                options={filteredCities}
-                optionLabelKey="name"
-                isDarkMode={isDarkMode}
-                error={errors.city}
-                required
-                placeholder={formData.region ? "Select City" : "Select Region First"}
-              />
-
-              <SearchableField
-                label="Barangay"
-                value={formData.barangay}
-                onSelect={(val) => handleInputChange('barangay', val)}
-                options={filteredBarangays}
-                optionLabelKey="barangay"
-                isDarkMode={isDarkMode}
-                error={errors.barangay}
-                required
-                placeholder={formData.city ? "Select Barangay" : "Select City First"}
-              />
-
-
+              {/* Region, city and barangay are not shown here either — already on the application. */}
             </div>
 
             <div className="space-y-4">

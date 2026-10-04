@@ -149,8 +149,10 @@ class ManualRadiusOperationsService
                 throw new Exception("Username is required for restrict operation");
             }
 
-            // Determine status 
-            $status = "Restricted";
+            // Billing status to write. 'Restricted' unless the caller names another: a prepaid
+            // lapse (Prepaid Override) parks the account in 'Inactive', and the param travels with
+            // a queued retry so the replay writes the same status.
+            $status = !empty($params['dbStatus']) ? (string) $params['dbStatus'] : "Restricted";
             $this->writeLog("Status Set: $status");
 
             // Get RADIUS configurations
@@ -439,16 +441,28 @@ class ManualRadiusOperationsService
             // Get RADIUS configurations
             $radiusEndpoints = $this->getRadiusEndpoints();
 
+            // Opt-in params, both default off so existing callers behave exactly as before:
+            //   preserveBillingStatus — leave billing_status_id alone instead of writing Active
+            //     (a plan change is not a reconnect).
+            //   failWhenNotApplied — report an error when RADIUS could not be reached or the
+            //     user was not found, so the caller can queue a retry instead of trusting success.
+            $preserveBillingStatus = (bool) ($params['preserveBillingStatus'] ?? false);
+            $failWhenNotApplied = (bool) ($params['failWhenNotApplied'] ?? false);
+
             // Perform RADIUS operations without forcing session disconnect
-            $this->radiusOps(
+            $applied = $this->radiusOps(
                 $radiusEndpoints,
                 $username,
                 $cleanPlan,
-                'Active',
+                $preserveBillingStatus ? null : 'Active',
                 false, // isDisconnectAction = false
                 $accountNo,
                 $updatedBy
             );
+
+            if (!$applied && $failWhenNotApplied) {
+                throw new Exception("RADIUS group for '{$username}' was not updated (server unreachable or user not found)");
+            }
 
             $this->writeLog("[SUCCESS] User group updated successfully");
             $this->writeLog("=== UPDATE GROUP END ===");

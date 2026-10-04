@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Loader2, Minus, Plus } from 'lucide-react';
 import { prepaidOverrideService } from '../services/prepaidOverrideService';
+import { notifyNavBadgesChanged } from '../services/navBadgeService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 /** Mirrors PrepaidOverrideRequest::MAX_DAYS_ADJUSTMENT — the server rejects anything beyond this. */
@@ -102,22 +103,57 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
     }, [daysInput]);
 
     /**
-     * The expiry this request would produce, computed the same way the server does at approval:
-     * days added to the CURRENT expiry, or to now when the prepaid clock has not started yet.
+     * The expiry this request would produce, by the rule the server applies at approval
+     * (PrepaidOverrideService::adjustedExpiry):
+     *   - adding to a running period puts the days on top of the current expiry;
+     *   - adding to a lapsed period (or one never started) counts from 0 days left, so +N leaves
+     *     exactly N days with today as day 1;
+     *   - deducting stops at 0 days left (restricted), never below.
      *
      * Labelled an estimate in the UI because it is one — if the customer pays before this is
      * approved, the real result is the same number of days on top of their renewed expiry.
      */
     const projectedExpiry = useMemo(() => {
         if (!days) return null;
-        const base = currentExpiration
+
+        const current = currentExpiration
             ? new Date(currentExpiration.includes('T') ? currentExpiration : currentExpiration.replace(' ', 'T'))
-            : new Date();
-        if (isNaN(base.getTime())) return null;
-        const projected = new Date(base.getTime());
-        projected.setDate(projected.getDate() + days);
-        return projected.toISOString();
+            : null;
+        if (current && isNaN(current.getTime())) return null;
+
+        const now = new Date();
+        const startOfToday = new Date(now);
+        startOfToday.setHours(0, 0, 0, 0);
+        // An expiry dated yesterday leaves 0 days left: restricted from today.
+        const zeroDaysLeft = new Date(now);
+        zeroDaysLeft.setDate(zeroDaysLeft.getDate() - 1);
+        const hasLapsed = !current || current < startOfToday;
+
+        const plusDays = (date: Date, n: number) => {
+            const result = new Date(date.getTime());
+            result.setDate(result.getDate() + n);
+            return result;
+        };
+
+        if (days > 0) {
+            return plusDays(hasLapsed || !current ? zeroDaysLeft : current, days).toISOString();
+        }
+        if (!current) return null;
+
+        const floor = hasLapsed ? current : zeroDaysLeft;
+        const deducted = plusDays(current, days);
+        return (deducted < floor ? floor : deducted).toISOString();
     }, [days, currentExpiration]);
+
+    /** Days left as the Customer page counts them: the expiry date itself is the last day. */
+    const projectedDaysLeft = useMemo(() => {
+        if (!projectedExpiry) return null;
+        const expiry = new Date(projectedExpiry);
+        expiry.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1;
+    }, [projectedExpiry]);
 
     // A deduction needs an existing period to come off; the server refuses this case too, but
     // catching it here saves the approver a pointless review.
@@ -167,6 +203,7 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
 
             if (result.success) {
                 setShowSuccess(true);
+                notifyNavBadgesChanged();
                 if (onSuccess) onSuccess();
             } else {
                 setError(result.message || 'Failed to submit prepaid override request.');
@@ -401,10 +438,18 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
                                                 <span className={`text-base font-bold ${days > 0 ? 'text-green-500' : 'text-red-500'}`}>
                                                     {formatDateTime(projectedExpiry)}
                                                 </span>
+                                                {projectedDaysLeft !== null && (
+                                                    <span className={`text-sm font-medium ${projectedDaysLeft > 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        {projectedDaysLeft > 0
+                                                            ? `(${projectedDaysLeft} ${projectedDaysLeft === 1 ? 'day' : 'days'} left — online)`
+                                                            : '(0 days left — restricted)'}
+                                                    </span>
+                                                )}
                                             </div>
                                             <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                                                 Estimate only. The adjustment is applied to the expiration as it stands when the request is
-                                                approved, so a payment in the meantime shifts this forward by the same number of days.
+                                                approved, so a payment in the meantime shifts this forward by the same number of days. An
+                                                expired account is counted from 0 days left, and a deduction never goes below 0 days.
                                             </p>
                                         </div>
                                     )}

@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowRight, Maximize2, X, Phone, MessageSquare, Info,
   ExternalLink, Mail, ChevronDown, ChevronRight as ChevronRightIcon,
   Ban, XCircle, RotateCw, CheckCircle, Loader, Square, Settings, ArrowRightCircle, Paperclip,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Trash2
 } from 'lucide-react';
 import { getApplication, updateApplication, getApplications, getRelatedDetailsUpdateLogs } from '../services/applicationService';
 import { Application } from '../types/application';
@@ -18,6 +18,8 @@ import { planService, Plan } from '../services/planService';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { usePermissions } from '../hooks/usePermissions';
+import { isSuperAdminUser } from '../utils/agentAccess';
+import apiClient from '../config/api';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const NotFoundModal = React.lazy(() => import('../modals/NotFoundModal'));
@@ -46,6 +48,13 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
   const [showVisitExistsConfirmation, setShowVisitExistsConfirmation] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
+  // Delete application + its job orders: Super Admin only (the backend checks the role too).
+  const canDeleteApplication = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeletingApplication, setIsDeletingApplication] = useState(false);
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
+  // Set after a delete, so OK on the success modal also closes this (now deleted) record.
+  const [closeOnSuccess, setCloseOnSuccess] = useState(false);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
@@ -1175,13 +1184,24 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </button>
             </div>
 
+            {canDeleteApplication && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                disabled={isDeletingApplication}
+                className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'} hover:text-red-500 disabled:opacity-50`}
+                title="Delete Application and Job Order"
+              >
+                {isDeletingApplication ? <Loader size={20} className="animate-spin" /> : <Trash2 size={20} />}
+              </button>
+            )}
+
             <div className="relative">
               <button
                 onClick={() => setShowFieldSettings(!showFieldSettings)}
                 className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}
                 title="Field Settings"
               >
-                <Settings size={16} />
+                <Settings size={20} />
               </button>
               {showFieldSettings && (
                 <div className={`absolute right-0 mt-2 w-80 rounded-lg shadow-lg border z-50 max-h-96 overflow-y-auto ${isDarkMode
@@ -1263,7 +1283,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
                 }`}
               title="Attachments"
             >
-              <Paperclip size={18} />
+              <Paperclip size={20} />
             </button>
 
             <button
@@ -1271,7 +1291,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}
               aria-label="Close"
             >
-              <X size={18} />
+              <X size={20} />
             </button>
           </div>
         </div>
@@ -1424,6 +1444,41 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
 
       </div>
 
+      {/* Delete Application + its Job Order (Super Admin) — same flow as JobOrderDetails */}
+      <ConfirmationModal
+        isOpen={showDeleteModal}
+        title="Delete Application"
+        message={`Are you sure you want to permanently delete Application #${application.id} and its job order? This cannot be undone.`}
+        confirmText="Yes, Delete"
+        cancelText="Cancel"
+        onConfirm={async () => {
+          setShowDeleteModal(false);
+          setIsDeletingApplication(true);
+          try {
+            const res = await apiClient.delete<{ success: boolean; message: string }>(`/applications/${application.id}/with-job-orders`);
+            setSuccessMessage(res.data?.message || 'Application and job order deleted.');
+            setCloseOnSuccess(true);
+            setShowSuccessModal(true);
+            onApplicationUpdate?.();
+          } catch (err: any) {
+            setDeleteErrorMessage(err?.response?.data?.message || 'Failed to delete the application and its job order.');
+          } finally {
+            setIsDeletingApplication(false);
+          }
+        }}
+        onCancel={() => setShowDeleteModal(false)}
+      />
+
+      <ConfirmationModal
+        isOpen={!!deleteErrorMessage}
+        title="Error"
+        message={deleteErrorMessage || ''}
+        confirmText="OK"
+        cancelText="Close"
+        onConfirm={() => setDeleteErrorMessage(null)}
+        onCancel={() => setDeleteErrorMessage(null)}
+      />
+
       <ConfirmationModal
         isOpen={showMoveConfirmation}
         title="Confirm"
@@ -1493,7 +1548,13 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
             </div>
             <div className={`px-6 py-4 bg-gray-50 dark:bg-gray-800/50 flex justify-center border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <button
-                onClick={() => setShowSuccessModal(false)}
+                onClick={() => {
+                  setShowSuccessModal(false);
+                  if (closeOnSuccess) {
+                    setCloseOnSuccess(false);
+                    onClose();
+                  }
+                }}
                 className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium transition-colors"
                 style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
               >

@@ -60,6 +60,9 @@ export interface BillingRecord {
   usageType?: string;
   lcpnapport?: string;
   referredBy?: string;
+  // The referring agent's user id when the referral was made through the picker (referredBy is
+  // then just their display name); null for older free-text referrals.
+  referredByAgentId?: number | null;
   sessionIP?: string;
   houseFrontPicture?: string;
   housingStatus?: string;

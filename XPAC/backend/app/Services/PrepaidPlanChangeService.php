@@ -101,13 +101,17 @@ class PrepaidPlanChangeService
      *   the one in force — see isGenuineSwitch(). A same-plan top-up with the box ticked would
      *   otherwise destroy the customer's remaining days and buy them nothing.
      *
+     * @param int $periods Advance payment: how many prepaid periods this payment buys. Passed
+     *   straight to the renewal; 1 for every ordinary top-up.
+     *
      * @return array{renewal:array, plan_change:array}
      */
     public function settlePayment(
         string $accountNo,
         $selectedPlanId,
         bool $activateNow = false,
-        ?Carbon $paymentDate = null
+        ?Carbon $paymentDate = null,
+        int $periods = 1
     ): array {
         $effectiveActivateNow = $activateNow && $this->isGenuineSwitch($accountNo, $selectedPlanId);
 
@@ -119,12 +123,97 @@ class PrepaidPlanChangeService
         }
 
         $renewal = app(PrepaidRenewalService::class)
-            ->renewByAccountNo($accountNo, $paymentDate, $effectiveActivateNow);
+            ->renewByAccountNo($accountNo, $paymentDate, $effectiveActivateNow, $periods);
 
         return [
             'renewal' => $renewal,
             'plan_change' => $this->handleSettledPayment($accountNo, $selectedPlanId, $renewal, $effectiveActivateNow),
         ];
+    }
+
+    /**
+     * Does a settled prepaid payment buy a service period? The one rule every payment path uses
+     * (cashier approval, portal worker, and the receipt re-deriving it).
+     *
+     *   1. It paid at least one period of the plan — renews, even if a balance is still owed.
+     *      A ₱1,000 top-up against a ₱1,120 first bill (plan + VAT) leaves ₱120 owing but buys
+     *      its 34 days; withholding them over the ₱120 gave the customer no days at all.
+     *   2. It cleared the balance while the customer had NO active period — renews. This is a
+     *      bill paid in parts (₱600 + ₱520 of a ₱1,120 first bill): the part that settles it
+     *      starts the period.
+     *   Anything else does not renew. In particular, the ₱120 that later clears the remainder of
+     *   rule 1's bill does NOT renew again: the period was already granted, and doing it twice
+     *   gave 68 days for ₱1,120.
+     *
+     * A plan that cannot be priced falls back to "cleared the balance".
+     */
+    public static function paymentBuysPeriod(float $amountPaid, float $balanceAfter, float $planPrice, bool $periodActive): bool
+    {
+        if ($planPrice <= 0) {
+            return $balanceAfter <= 0;
+        }
+
+        if (round($amountPaid, 2) >= round($planPrice, 2)) {
+            return true;
+        }
+
+        return $balanceAfter <= 0 && !$periodActive;
+    }
+
+    /**
+     * Should this settled payment renew the prepaid period? See paymentBuysPeriod() for the rule.
+     *
+     * Must be called BEFORE the renewal, so "is a period active" reads the expiry as it stood when
+     * the money came in. Non-prepaid accounts answer the historical "balance cleared" — renewing
+     * is a no-op for them, and the settlement flow around it keys off the same answer.
+     *
+     * @param float $amountPaid      the value credited by this payment (cash plus any discount)
+     * @param float $balanceAfter    the account balance once the payment was applied
+     * @param mixed $selectedPlanId  the plan bought with this payment, if any — priced instead of
+     *                               the current plan, because that is what the customer paid for
+     * @param Carbon|null $paidAt    when the payment was made; now when omitted
+     */
+    public function qualifiesForRenewal(string $accountNo, float $amountPaid, float $balanceAfter, $selectedPlanId = null, ?Carbon $paidAt = null): bool
+    {
+        try {
+            $account = BillingAccount::with('customer')->where('account_no', $accountNo)->first();
+
+            if (!$account || !BillingAccount::isPrepaidType($account->generation_type)) {
+                return $balanceAfter <= 0;
+            }
+
+            $plan = $this->renewalPlanFor($account, $selectedPlanId);
+            $planPrice = (float) ($plan->price ?? 0);
+            $periodActive = !empty($account->prepaid_expires_at)
+                && Carbon::parse($account->prepaid_expires_at)->greaterThan($paidAt ?? Carbon::now());
+
+            $qualifies = self::paymentBuysPeriod($amountPaid, $balanceAfter, $planPrice, $periodActive);
+
+            Log::info('[PREPAID RENEWAL] Renewal decision: ' . ($qualifies ? 'renew' : 'no renewal'), [
+                'account_no' => $accountNo,
+                'amount_paid' => $amountPaid,
+                'balance_after' => $balanceAfter,
+                'plan' => $plan->plan_name ?? null,
+                'plan_price' => $planPrice,
+                'period_active' => $periodActive,
+            ]);
+
+            return $qualifies;
+        } catch (\Throwable $e) {
+            Log::error('[PREPAID RENEWAL] Could not decide renewal for ' . $accountNo . ': ' . $e->getMessage());
+            // Fail toward the historical rule rather than withholding days that were paid for.
+            return $balanceAfter <= 0;
+        }
+    }
+
+    /**
+     * The plan a payment is priced against for renewal: the one bought with it, else the plan in
+     * force. Read-only and silent — the receipt uses it to re-derive past coverage on every print.
+     */
+    public function renewalPlanFor(BillingAccount $account, $selectedPlanId = null): ?AppPlan
+    {
+        return (!empty($selectedPlanId) ? AppPlan::find($selectedPlanId) : null)
+            ?? $this->currentPlanFor($account);
     }
 
     /**
@@ -655,6 +744,17 @@ class PrepaidPlanChangeService
                 'pending_plan_effective_at' => null,
                 'updated_at' => Carbon::now(),
             ]);
+    }
+
+    /**
+     * The plan currently in force, resolved exactly as the biller resolves it. Public for checkout,
+     * which prices a postpaid -> prepaid switch at one period of this plan.
+     */
+    public function currentPlanFor(BillingAccount $account): ?AppPlan
+    {
+        $account->loadMissing('customer');
+
+        return $this->resolveCurrentPlan($account);
     }
 
     /** The plan the account is on right now, resolved the same way billing resolves it. */

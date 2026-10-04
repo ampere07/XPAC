@@ -49,6 +49,23 @@ class BillingController extends Controller
                 });
             }
 
+            // An agent sees only the accounts of customers they referred (AgentScope). Narrowed in
+            // SQL here (a superset: the name LIKEs can catch a namesake) and settled exactly below,
+            // after the page is loaded.
+            //
+            // scope=all lifts that for an agent: the web transaction form records a payment either
+            // "Under My Account" (their own referrals) or "Under XPACS" (any customer, collected
+            // for the company), so it loads every account and narrows to the agent's own on the
+            // client. What an agent may claim as their own collection is enforced where it is
+            // recorded — TransactionController refuses an Agent Collected split on any account
+            // the agent did not refer.
+            $limitToReferrals = \App\Support\AgentScope::isAgent($authUser) && $request->get('scope') !== 'all';
+            if ($limitToReferrals) {
+                $query->whereHas('customer', function ($q) use ($authUser) {
+                    \App\Support\AgentScope::narrowReferrals($q, 'referred_by', $authUser);
+                });
+            }
+
             // Support incremental refresh: only return records updated since a given timestamp
             $updatedSince = $request->get('updated_since');
             if ($updatedSince) {
@@ -77,6 +94,13 @@ class BillingController extends Controller
                 if ($hasMore) {
                     $billingAccounts = $billingAccounts->slice(0, $perPage);
                 }
+            }
+
+            // Agent: the exact ownership decision on the narrowed rows.
+            if ($limitToReferrals) {
+                $billingAccounts = $billingAccounts
+                    ->filter(fn ($ba) => \App\Support\AgentScope::ownsReferral($authUser, optional($ba->customer)->referred_by))
+                    ->values();
             }
 
             // One query for every agent-id referral on the page.

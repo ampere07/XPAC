@@ -30,7 +30,9 @@ class Invoice extends Model
         'transaction_id',
         'created_by',
         'updated_by',
-        'organization_id'
+        'organization_id',
+        // Google Drive link of the paid invoice PDF (PaidInvoicePdfService).
+        'pdf_url'
     ];
 
     protected $casts = [

@@ -170,8 +170,8 @@ const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertI
         };
         channel.bind('transaction-updated', handleDataChange);
         return () => {
+            // No unsubscribe: the Sidebar badges share this channel.
             channel.unbind('transaction-updated', handleDataChange);
-            pusher.unsubscribe('transactions');
         };
     }, [fetchUpdates]);
 

@@ -80,6 +80,8 @@ const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({
     const [cities, setCities] = useState<string[]>([]);
     const [regions, setRegions] = useState<string[]>([]);
     const [statusOptions] = useState(['Done', 'Failed', 'Pending', 'Approved']);
+    // Search suggestions for text columns: every distinct value on record, keyed by column.
+    const [textSuggestions, setTextSuggestions] = useState<Record<string, string[]>>({});
 
     useEffect(() => {
         if (isOpen) {
@@ -142,6 +144,15 @@ const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({
                 }
             };
             fetchChecklistData();
+
+            // Separate from the checklist fetch so a failure here only loses the suggestions.
+            apiClient.get<{ success: boolean; data: string[] }>('/lookup/transaction-processors')
+                .then(res => {
+                    if (res.data.success) {
+                        setTextSuggestions(prev => ({ ...prev, processed_by_user: res.data.data }));
+                    }
+                })
+                .catch(err => console.error('Failed to fetch processed-by suggestions:', err));
         }
     }, [isOpen]);
 
@@ -450,6 +461,12 @@ const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({
             );
         }
 
+        // Unique values matching what is typed (all of them while the box is empty). Picking one
+        // fills the box; typing a partial value still filters by "contains" as before.
+        const typedValue = String((currentValue?.value as string) || '').trim().toLowerCase();
+        const suggestions = (textSuggestions[selectedColumn.key] || [])
+            .filter(s => s.toLowerCase().includes(typedValue));
+
         return (
             <div>
                 <label className={`text-sm font-medium mb-2 block ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -475,6 +492,41 @@ const TransactionFunnelFilter: React.FC<TransactionFunnelFilterProps> = ({
                         e.currentTarget.style.borderColor = 'transparent';
                     }}
                 />
+                {textSuggestions[selectedColumn.key] && (
+                    <div className="mt-4">
+                        <p className={`text-xs font-medium mb-2 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                            Suggestions
+                        </p>
+                        {suggestions.length > 0 ? (
+                            <div className="space-y-1">
+                                {suggestions.map(suggestion => {
+                                    const isSelected = suggestion.toLowerCase() === typedValue;
+                                    return (
+                                        <button
+                                            key={suggestion}
+                                            onClick={() => handleTextChange(selectedColumn.key, suggestion)}
+                                            className={`w-full flex items-center justify-between p-3 rounded-xl text-left transition-all ${isSelected
+                                                ? ''
+                                                : (isDarkMode ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-50 text-gray-700')
+                                                }`}
+                                            style={isSelected ? {
+                                                backgroundColor: hexToRgba(colorPalette?.primary || '#7c3aed', 0.1),
+                                                color: colorPalette?.primary || '#7c3aed'
+                                            } : {}}
+                                        >
+                                            <span className="text-sm font-medium break-all">{suggestion}</span>
+                                            {isSelected && <Check className="h-4 w-4 flex-shrink-0" />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <p className={`text-sm text-center py-4 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                                No matching values
+                            </p>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };

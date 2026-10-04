@@ -26,6 +26,9 @@ interface Transaction {
   account_no: string;
   transaction_type: string;
   received_payment: number;
+  // Agent-recorded payments only: the two parts received_payment is made of. NULL otherwise.
+  collected_payment?: number | string | null;
+  agent_collected?: number | string | null;
   payment_date: string;
   date_processed: string;
   processed_by_user: string;
@@ -308,6 +311,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             {renderField('Full Name', transaction.account?.customer?.full_name || '-')}
             {renderField('Contact No.', transaction.account?.customer?.contact_number_primary || '-')}
             {renderField('Transaction Type', transaction.transaction_type || '-')}
+            {/* Only on agent-recorded payments, where Received Payment is these two added together. */}
+            {transaction.collected_payment != null && renderField('Collected Payment', formatCurrency(transaction.collected_payment))}
+            {transaction.agent_collected != null && renderField('Agent Collected', formatCurrency(transaction.agent_collected))}
             {renderField(
               'Received Payment',
               formatCurrency(transaction.received_payment),

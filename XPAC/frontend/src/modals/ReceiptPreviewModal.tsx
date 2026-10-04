@@ -54,7 +54,7 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
 
   // Normalised once, here, rather than at each use. The toolbar reads receiptNo and
   // customerName directly, and a legacy transaction can arrive without either — rendering
-  // "OR # undefined" above a slip that prints correctly would be worse than the gap itself.
+  // "AR # undefined" above a slip that prints correctly would be worse than the gap itself.
   const receipt = useMemo(() => (data ? normalizeReceiptData(data) : null), [data]);
 
   const html = useMemo(
@@ -238,9 +238,9 @@ const ReceiptPreviewModal: React.FC<ReceiptPreviewModalProps> = ({
       <div className={`flex-shrink-0 border-b px-4 py-3 ${barSurface}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <h2 className={`text-lg font-bold leading-tight ${titleText}`}>Receipt</h2>
+            <h2 className={`text-lg font-bold leading-tight ${titleText}`}>Acknowledgement Receipt</h2>
             <p className={`text-xs truncate ${subText}`}>
-              OR # {receipt.receiptNo} — {receipt.customerName}
+              AR # {receipt.receiptNo} — {receipt.customerName}
             </p>
           </div>
 

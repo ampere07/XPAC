@@ -11,7 +11,9 @@
 //  - the Users group lists Roles (Role Management) for whoever holds `roles`:
 //    SuperAdmin, and a custom role granted Roles Management (the entry was
 //    commented out for everyone before). Administrator does not get it: the web
-//    withholds the Users pages from role 1.
+//    withholds the Users pages from role 1;
+//  - For Approval, added after the port, is listed for Administrator and
+//    SuperAdmin, who hold 'for-approval'.
 import React from 'react';
 import { render, fireEvent, cleanup } from '@testing-library/react';
 import Sidebar from './Sidebar';
@@ -26,8 +28,8 @@ jest.mock('../services/monthlyPayableService', () => ({
   getPayableAlertCount: () => Promise.resolve({ count: 0 }),
 }));
 jest.mock('../services/navBadgeService', () => ({
-  EMPTY_NAV_BADGE_COUNTS: { application: 0, job_order: 0, service_order: 0, work_order: 0, transaction: 0, total: 0 },
-  getNavBadgeCounts: () => Promise.resolve({ application: 0, job_order: 0, service_order: 0, work_order: 0, transaction: 0, total: 0 }),
+  EMPTY_NAV_BADGE_COUNTS: { application: 0, job_order: 0, service_order: 0, work_order: 0, transaction: 0, total: 0, for_approval: 0 },
+  getNavBadgeCounts: () => Promise.resolve({ application: 0, job_order: 0, service_order: 0, work_order: 0, transaction: 0, prepaid_override: 0, total: 0, for_approval: 0 }),
 }));
 jest.mock('../services/pusherService', () => ({
   __esModule: true,
@@ -139,7 +141,8 @@ const EXPECTED: Record<string, { landing: string; menu: string[] }> = {
     'menu': [
       'dashboard  [Dashboard]',
       'live-monitor  [Monitoring]',
-      'GROUP Billing: customer [Customer], transaction-list [Transaction List], transactions-revert [Revert Requests], prepaid-override [Prepaid Override], payment-portal [Payment Portal], soa [Statements], invoice [Invoice], overdue [Overdue], so-charge [SO Charge], dc-notice [DC Notice], mass-rebate [Rebates], discounts [Discounts]',
+      'for-approval  [For Approval]',
+      'GROUP Billing: customer [Customer], transaction-list [Transaction List], transactions-revert [Revert Requests], prepaid-override [Prepaid Override], customer-images [Customer Images], payment-portal [Payment Portal], soa [Statements], invoice [Invoice], overdue [Overdue], so-charge [SO Charge], dc-notice [DC Notice], mass-rebate [Rebates], discounts [Discounts]',
       'application-management  [Application]',
       'job-order  [Job Order]',
       'service-order  [Service Order]',
@@ -195,7 +198,8 @@ const EXPECTED: Record<string, { landing: string; menu: string[] }> = {
     'menu': [
       'dashboard  [Dashboard]',
       'live-monitor  [Monitoring]',
-      'GROUP Billing: customer [Customer], transaction-list [Transaction List], transactions-revert [Revert Requests], prepaid-override [Prepaid Override], payment-portal [Payment Portal], soa [Statements], invoice [Invoice], overdue [Overdue], so-charge [SO Charge], dc-notice [DC Notice], mass-rebate [Rebates], discounts [Discounts]',
+      'for-approval  [For Approval]',
+      'GROUP Billing: customer [Customer], transaction-list [Transaction List], transactions-revert [Revert Requests], prepaid-override [Prepaid Override], customer-images [Customer Images], payment-portal [Payment Portal], finance [Finance], soa [Statements], invoice [Invoice], overdue [Overdue], so-charge [SO Charge], dc-notice [DC Notice], mass-rebate [Rebates], discounts [Discounts]',
       'application-management  [Application]',
       'job-order  [Job Order]',
       'service-order  [Service Order]',

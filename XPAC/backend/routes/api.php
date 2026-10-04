@@ -426,6 +426,20 @@ Route::prefix('statement-of-accounts')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/by-account/{accountNo}', [RelatedDataController::class , 'getInvoicesByAccount']);
     Route::get('/{id}', [RelatedDataController::class , 'getInvoiceById']);
+    // The paid invoice PDF: returns invoices.pdf_url, making the PDF first if the invoice has none
+    // (one paid before PDFs existed, or whose generation failed at payment time).
+    Route::post('/{id}/generate-pdf', function ($id) {
+        $result = app(\App\Services\PaidInvoicePdfService::class)->generate((int) $id);
+
+        if (!empty($result['url'])) {
+            return response()->json(['success' => true, 'pdf_url' => $result['url']]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => $result['message'] ?? 'Failed to generate the invoice PDF',
+        ], !empty($result['skipped']) ? 422 : 500);
+    });
 });
 
 // Payment Portal Logs Routes
@@ -1687,6 +1701,8 @@ Route::prefix('applications')->middleware('auth:sanctum')->group(function () {
     Route::put('/{id}', [ApplicationController::class , 'update']);
     Route::post('/{id}/upload-images', [ApplicationController::class, 'uploadImages']);
     Route::delete('/{id}', [ApplicationController::class , 'destroy']);
+    // Super Admin only (checked in the controller): deletes the application and its job orders.
+    Route::delete('/{id}/with-job-orders', [ApplicationController::class , 'destroyWithJobOrders']);
 });
 
 // Job Orders Management Routes
@@ -2871,6 +2887,24 @@ Route::prefix('transaction-reverts')->group(function () {
  * endpoints are the only way it moves outside of a payment. Requests are raised from the clock
  * icon on Customer Details and decided in Billing -> Prepaid Override.
  */
+// Customer Images (Billing): every image stored against a customer, from every module.
+Route::prefix('customer-images')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [\App\Http\Controllers\Api\CustomerImageController::class, 'index']);
+    Route::get('/{accountNo}', [\App\Http\Controllers\Api\CustomerImageController::class, 'show']);
+});
+
+// Finance (Billing): money collected from transactions and the payment portal, by period.
+Route::prefix('finance')->middleware('auth:sanctum')->group(function () {
+    Route::get('/summary', [\App\Http\Controllers\Api\FinanceController::class, 'summary']);
+});
+
+// For Approval: pending transactions and done job orders awaiting an approver. Read-only —
+// approving goes through transactions/{id}/approve and job-orders/{id}/approve as everywhere else.
+Route::prefix('for-approval')->middleware('auth:sanctum')->group(function () {
+    Route::get('/transactions', [\App\Http\Controllers\Api\ForApprovalController::class, 'transactions']);
+    Route::get('/job-orders', [\App\Http\Controllers\Api\ForApprovalController::class, 'jobOrders']);
+});
+
 Route::prefix('prepaid-overrides')->middleware('auth:sanctum')->group(function () {
     Route::get('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'index']);
     Route::post('/', [\App\Http\Controllers\PrepaidOverrideRequestController::class , 'store']);
@@ -3598,6 +3632,8 @@ Route::prefix('payments')->group(function () {
     // Read-only: amount a prepaid onboarding bill would come to under a different plan.
     Route::post('/quote-plan-change', [\App\Http\Controllers\Api\XenditPaymentController::class , 'quotePlanChange']);
     Route::post('/account-balance', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAccountBalance']);
+    // Read-only: discount a prepaid plan purchase would get, so the pay screen can show the net price.
+    Route::post('/available-discount', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getAvailableDiscount']);
     Route::post('/cancel', [\App\Http\Controllers\Api\XenditPaymentController::class , 'cancelPayment']);
     // Read-only: the convenience fee rate, so a payment screen can disclose it before checkout.
     Route::get('/convenience-fee', [\App\Http\Controllers\Api\XenditPaymentController::class , 'getConvenienceFee']);
@@ -3820,6 +3856,9 @@ Route::get('/invoices/{id}', [RelatedDataController::class , 'getInvoiceById']);
 Route::get('/payment-portal-logs/{id}', [RelatedDataController::class , 'getPaymentPortalLogById']);
 Route::get('/lookup/payment-methods', [RelatedDataController::class , 'getPaymentMethods']);
 Route::get('/lookup/transaction-types', [RelatedDataController::class , 'getDistinctTransactionTypes']);
+Route::get('/lookup/transaction-processors', [RelatedDataController::class , 'getDistinctTransactionProcessors']);
+// Agents and technicians who processed transactions, with their role — the collector filter.
+Route::get('/lookup/transaction-collectors', [RelatedDataController::class , 'getTransactionCollectors']);
 Route::get('/lookup/customer-locations', [RelatedDataController::class , 'getDistinctCustomerLocations']);
 Route::get('/lookup/payment-portal', [RelatedDataController::class , 'getPaymentPortalLookupData']);
 Route::get('/lookup/job-orders', [RelatedDataController::class , 'getJobOrderLookupData']);

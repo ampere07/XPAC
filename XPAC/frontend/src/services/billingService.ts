@@ -19,7 +19,10 @@ const getFallbackBillingStatus = (id: string | number): string => {
 
 export const getBillingRecords = async (page: number = 1, perPage: number = 50, updatedSince?: string): Promise<{ data: BillingRecord[], total: number, hasMore: boolean, serverTime?: string }> => {
   try {
-    const params: any = { page, per_page: perPage };
+    // scope=all: an agent gets every account rather than only their referrals, so the transaction
+    // form can offer "Under XPACS" (any customer) as well as "Under My Account" (narrowed on the
+    // client). Ignored for every other role, which already sees every account.
+    const params: any = { page, per_page: perPage, scope: 'all' };
     if (updatedSince) {
       params.updated_since = updatedSince;
     }
@@ -87,6 +90,7 @@ export const getBillingRecords = async (page: number = 1, perPage: number = 50, 
         usageType: item.Usage_Type || item.usage_type || '',
         lcpnapport: item.LCP_NAP_PORT || item.LCPNAPPORT || '',
         referredBy: item.referred_by || item.Referred_By || '',
+        referredByAgentId: item.Referred_By_Agent_ID ?? null,
         sessionIP: item.session_ip || item.ip_address || item.IP_Address || '',
         houseFrontPicture: item.house_front_picture_url || item.House_Front_Picture || '',
         housingStatus: item.housing_status || item.Housing_Status || '',

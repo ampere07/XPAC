@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, ChevronDown, Calendar, Camera, Search } from 'lucide-react';
 import { getRegions, getCities, City } from '../services/cityService';
 import { barangayService, Barangay } from '../services/barangayService';
@@ -23,6 +23,7 @@ import {
   selectionFromOption,
 } from '../utils/referredByField';
 import { userService } from '../services/userService';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface CustomerDetailsEditModalProps {
   isOpen: boolean;
@@ -87,7 +88,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [editType, setEditType] = useState<'customer_details' | 'billing_details' | 'technical_details'>(initialEditType);
-
+  // Account Balance, Prepaid Expiration and PPPoE Password are shown and saved for SuperAdmin
+  // only; the backend ignores them from anyone else.
+  const { isSuperAdmin, isAdministrator } = usePermissions();
 
   const [formData, setFormData] = useState<any>({});
 
@@ -110,6 +113,10 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [agents, setAgents] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
 
+  const originalNameRef = useRef<{ firstName: string; lastName: string } | null>(null);
+  // The plan the form opened with. Sent only when changed, so an old plan name that is no longer
+  // in the plan list never blocks an unrelated customer-details save.
+  const originalPlanRef = useRef<string>('');
   const [modal, setModal] = useState<ModalConfig>({
     isOpen: false,
     type: 'success',
@@ -188,6 +195,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           }
         }
 
+        // Remembered so a save can tell whether the name changed — that renames the PPPoE
+        // username on the server, which needs a confirmation (see handleSave).
+        originalNameRef.current = { firstName: firstName.trim(), lastName: lastName.trim() };
+        originalPlanRef.current = String(recordData.desiredPlan || recordData.desired_plan || recordData.plan || '').split(' - ')[0].trim();
+
         let houseFrontPictureUrl = recordData.houseFrontPicture || recordData.house_front_picture_url || recordData.house_front_picture || '';
         
         // Handle legacy Access/PowerApps JSON image format
@@ -219,6 +231,8 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           // agent list would then reset every field the user had already typed.
           ...referredByFields(recordData, []),
           groupName: recordData.groupName || recordData.group_name || recordData.group || '',
+          // The bare plan_list name; a stored "50Mbps - P799" keeps only the name part.
+          plan: String(recordData.desiredPlan || recordData.desired_plan || recordData.plan || '').split(' - ')[0].trim(),
           houseFrontPicture: houseFrontPictureUrl
         };
 
@@ -279,7 +293,12 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           // Only meaningful for prepaid accounts; the field is hidden for postpaid.
           prepaid_expires_at: formatDateTimeForInput(
             recordData.prepaid_expires_at || recordData.prepaidExpiration || recordData.billingAccount?.prepaid_expires_at || ''
-          )
+          ),
+          // Kept as a string for the text input. SuperAdmin only.
+          account_balance: (() => {
+            const stored = recordData.account_balance ?? recordData.accountBalance ?? recordData.balance ?? recordData.billingAccount?.account_balance;
+            return stored === undefined || stored === null || stored === '' ? '' : Number(stored).toFixed(2);
+          })()
         });
       } else if (editType === 'technical_details') {
         let lcpnapValue = recordData.lcpnap || recordData.LCPNAP || '';
@@ -295,6 +314,8 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
         setFormData({
           username: recordData.pppoe_username || recordData.username || recordData.PPPOE_USERNAME || '',
+          // SuperAdmin only.
+          pppoe_password: recordData.pppoe_password || recordData.pppoePassword || '',
           connection_type: recordData.connectionType ? capitalize(recordData.connectionType) : (recordData.connection_type ? capitalize(recordData.connection_type) : ''),
           router_model: recordData.routerModel || recordData.router_model || '',
           router_modem_sn: recordData.routerModemSn || recordData.router_modem_sn || recordData.routerModemSN || '',
@@ -324,12 +345,14 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
 
       try {
         if (editType === 'customer_details') {
-          const [fetchedRegions, fetchedCities, barangaysRes] = await Promise.all([
+          const [fetchedRegions, fetchedCities, barangaysRes, fetchedPlans] = await Promise.all([
             getRegions(),
             getCities(),
-            barangayService.getAll()
+            barangayService.getAll(),
+            planService.getAllPlans()
           ]);
 
+          setPlans(Array.isArray(fetchedPlans) ? fetchedPlans : []);
           setRegions(Array.isArray(fetchedRegions) ? fetchedRegions : []);
           setAllCities(Array.isArray(fetchedCities) ? fetchedCities : []);
           setAllBarangays(barangaysRes.success && Array.isArray(barangaysRes.data) ? barangaysRes.data : []);
@@ -800,6 +823,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         }
       }
 
+      if (isSuperAdmin && String(formData.account_balance ?? '').trim() !== ''
+        && isNaN(Number(formData.account_balance))) {
+        newErrors.account_balance = 'Account Balance must be a number';
+      }
+
       const isVipStatus = billingStatuses.find(s => s.id.toString() === formData.billing_status_id?.toString())?.status_name.toUpperCase() === 'VIP' || formData.billing_status_id?.toString() === '7';
       if (isVipStatus) {
         if (!formData.vip_expiration) {
@@ -829,7 +857,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSave = async () => {
+  const handleSave = async (nameChangeConfirmed = false) => {
     const isValid = validateForm();
 
     if (!isValid) {
@@ -838,6 +866,28 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         type: 'warning',
         title: 'Validation Error',
         message: 'Please fill in all required fields before saving.'
+      });
+      return;
+    }
+
+    // A first/last name change renames the PPPoE username in RADIUS (the username is built from
+    // the name). That drops the customer's session, and they stay offline until their router is
+    // given the new username — so it is confirmed first rather than happening as a side effect.
+    const original = originalNameRef.current;
+    const nameChanged = editType === 'customer_details' && !!original && (
+      (formData.firstName || '').trim() !== original.firstName
+      || (formData.lastName || '').trim() !== original.lastName
+    );
+    const currentUsername = recordData?.username || recordData?.Username || recordData?.pppoe_username;
+    if (nameChanged && currentUsername && !nameChangeConfirmed) {
+      setModal({
+        isOpen: true,
+        type: 'confirm',
+        title: 'Rename PPPoE Username?',
+        message: `Changing the name also renames this customer's PPPoE username (${currentUsername}) in RADIUS to match.\n\n`
+          + 'Their current session will be disconnected, and they stay offline until their router is updated with the new username. The password does not change.',
+        onConfirm: () => { setModal(prev => ({ ...prev, isOpen: false })); handleSave(true); },
+        onCancel: () => setModal(prev => ({ ...prev, isOpen: false })),
       });
       return;
     }
@@ -883,13 +933,22 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId };
 
       /*
-       * prepaid_expires_at is loaded into the form purely to be DISPLAYED — the input is
-       * read-only and the field now moves only through the Prepaid Override approval workflow.
-       * Stripped before the request so an ordinary billing-details save does not post a value it
-       * has no authority over. The backend drops it as well, but it logs a warning when it does,
-       * and every save of a prepaid account would otherwise raise one for a change nobody made.
+       * Account Balance, Prepaid Expiration and PPPoE Password are SuperAdmin-only. For anyone
+       * else they are stripped before the request: the fields are not on screen for them, and the
+       * backend would drop them anyway but log a warning for a change nobody made. Prepaid
+       * Expiration is only sent for a prepaid account, the only kind that shows it.
        */
-      delete dataWithUpdatedBy.prepaid_expires_at;
+      if (!isSuperAdmin) {
+        delete dataWithUpdatedBy.account_balance;
+        delete dataWithUpdatedBy.pppoe_password;
+      }
+      if (!isSuperAdmin || !isPrepaidBillingType) {
+        delete dataWithUpdatedBy.prepaid_expires_at;
+      }
+      if (editType === 'customer_details'
+        && (!isAdministrator || (formData.plan || '') === originalPlanRef.current)) {
+        delete dataWithUpdatedBy.plan;
+      }
       // referredBy is the name the field showed; the column takes the agent's
       // id. Only touched when this form carries the field at all — the billing
       // and technical tabs share this handler and have no referral on them.
@@ -918,6 +977,11 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         successMessage += '\n\nWarning: The RADIUS update could not be queued. Please notify an administrator to retry it manually.';
       } else if (saveResult?.radius_message) {
         successMessage += `\n\n${saveResult.radius_message}`;
+      }
+      // Customer details: what the name change did to the PPPoE username (renamed / queued for
+      // RADIUS retry / unchanged / skipped). The server writes the message.
+      if (saveResult?.pppoe_rename?.message) {
+        successMessage += `\n\n${saveResult.pppoe_rename.message}`;
       }
 
       setModal({
@@ -980,7 +1044,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
               Cancel
             </button>
             <button
-              onClick={handleSave}
+              onClick={() => handleSave()}
               disabled={loading}
               className="px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm flex items-center"
               style={{
@@ -1349,6 +1413,52 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </div>
                 </div>
 
+                {/* Plan — saved to customers.desired_plan (what billing prices from) and
+                    billing_accounts.plan_id together. A stored plan that is not in the plan list
+                    stays shown so it is never silently replaced. Administrator and SuperAdmin
+                    only; a change also moves the RADIUS user onto the new plan's group. */}
+                {isAdministrator && (
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Plan
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={formData.plan || ''}
+                      onChange={(e) => handleInputChange('plan', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = errors.plan ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db');
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors appearance-none ${errors.plan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                        } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+                    >
+                      <option value="">Select Plan</option>
+                      {formData.plan && !plans.some(p => p.name === formData.plan) && (
+                        <option value={formData.plan}>{formData.plan} (not in plan list)</option>
+                      )}
+                      {plans.map((p) => (
+                        <option key={p.id} value={p.name}>
+                          {p.price != null ? `${p.name} - ₱${Number(p.price).toFixed(2)}` : p.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={20} />
+                  </div>
+                  {errors.plan && <p className="text-red-500 text-xs mt-1">{errors.plan}</p>}
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    The next bill uses the new plan's price, and the RADIUS group changes to the new
+                    plan on save. A restricted or inactive account keeps its group until reconnected.
+                  </p>
+                </div>
+                )}
+
                 {/*
                   Team names are group headings here, not choices. A referral has
                   to name one agent: referred_by is what the commission is settled
@@ -1547,18 +1657,42 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   )}
                 </div>
 
+                {/* Account Balance — SuperAdmin only. Written straight to the billing account; the
+                    change is recorded in the account's details update log. */}
+                {isSuperAdmin && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Account Balance
+                    </label>
+                    <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
+                      } ${errors.account_balance ? 'border-red-500' : ''}`}>
+                      <span className={`px-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>₱</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={formData.account_balance ?? ''}
+                        onChange={(e) => handleInputChange('account_balance', e.target.value)}
+                        placeholder="0.00"
+                        className={`flex-1 px-3 py-2 bg-transparent focus:outline-none [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield] ${isDarkMode ? 'text-white' : 'text-gray-900'
+                          }`}
+                      />
+                    </div>
+                    {errors.account_balance && <p className="text-red-500 text-xs mt-1">{errors.account_balance}</p>}
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      A negative amount is a credit. SuperAdmin only.
+                    </p>
+                  </div>
+                )}
+
                 {/* Prepaid Expiration — only meaningful for prepaid accounts, so it is shown only
                     when Billing Type is Prepaid. This is the end of the paid-for service period:
                     it gates access (AutoDisconnectService restricts once it lapses) and is what a
                     queued plan change waits for.
 
-                    READ-ONLY for every role. A mistyped date here could hand out — or take away —
-                    months of service with nothing recording who did it or why, so adjustments go
-                    through the Prepaid Override approval queue instead: raise one from the clock
-                    icon on Customer Details, and a second person approves it in Billing ->
-                    Prepaid Override. The backend drops this field on this endpoint too, so a stale
-                    client cannot write it either. */}
-                {isPrepaidBillingType && (
+                    SuperAdmin only, and editable for them. Everyone else adjusts it through the
+                    Prepaid Override approval queue (the clock icon on Customer Details); the
+                    backend ignores this field from any other role. */}
+                {isSuperAdmin && isPrepaidBillingType && (
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                       Prepaid Expiration
@@ -1566,12 +1700,18 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     <input
                       type="datetime-local"
                       value={formData.prepaid_expires_at || ''}
-                      readOnly
-                      disabled
-                      tabIndex={-1}
-                      aria-readonly="true"
-                      title="Prepaid expiration is adjusted through the Prepaid Override approval workflow"
-                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors cursor-not-allowed opacity-70 ${isDarkMode ? 'border-gray-700 bg-gray-800 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'
+                      onChange={(e) => handleInputChange('prepaid_expires_at', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
                         }`}
                     />
                     <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -1579,9 +1719,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                         ? 'End of the current paid period. Service is restricted once this passes (0 days left, no grace); a payment extends it by 34 days.'
                         : 'Empty means the prepaid clock has not started — it begins on their first payment.'}
                     </p>
-                    <p className={`text-xs mt-1 font-medium ${isDarkMode ? 'text-yellow-500' : 'text-yellow-700'}`}>
-                      Not editable here. Use the Prepaid Override action on Customer Details to
-                      request a change — it takes effect once approved.
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Can be set without a payment. A future date on an account cut off for an expired
+                      period sets it back to Active and reconnects it.
                     </p>
                   </div>
                 )}
@@ -1696,6 +1836,37 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   />
                   {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username}</p>}
                 </div>
+
+                {/* PPPoE Password — SuperAdmin only. Saves the billing record only; the password on
+                    the RADIUS router (what the modem logs in with) is not changed. */}
+                {isSuperAdmin && (
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      PPPOE Password
+                    </label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={formData.pppoe_password || ''}
+                      onChange={(e) => handleInputChange('pppoe_password', e.target.value)}
+                      onFocus={(e) => {
+                        if (colorPalette?.primary) {
+                          e.currentTarget.style.borderColor = colorPalette.primary;
+                          e.currentTarget.style.boxShadow = `0 0 0 1px ${colorPalette.primary}`;
+                        }
+                      }}
+                      onBlur={(e) => {
+                        e.currentTarget.style.borderColor = isDarkMode ? '#374151' : '#d1d5db';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                      className={`w-full px-3 py-2 border rounded focus:outline-none transition-colors ${isDarkMode ? 'border-gray-700 bg-gray-800 text-white' : 'border-gray-300 bg-white text-gray-900'
+                        }`}
+                    />
+                    <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Updates the billing record only — the password on the RADIUS router is not changed.
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>

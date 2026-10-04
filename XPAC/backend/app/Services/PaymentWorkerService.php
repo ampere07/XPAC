@@ -214,8 +214,60 @@ class PaymentWorkerService
                 }
             }
 
+            // A discount priced in at checkout (CheckoutDiscountService) is credited alongside the
+            // cash, so the purchase counts as the full plan price: ₱900 paid + ₱100 discount clears
+            // a ₱1,000 balance. Without it a customer who owed the plan price would be left ₱100
+            // short and never renewed. $amount stays the cash for every log and notification.
+            $quotedDiscount = isset($payment->discount_amount) ? max(0.0, floatval($payment->discount_amount)) : 0.0;
+            $discountIds = isset($payment->discount_ids) ? (json_decode((string) $payment->discount_ids, true) ?: []) : [];
+
+            // Spend the discount BEFORE crediting it, and credit only what was actually spent: if
+            // the same one-off discount was quoted to two open checkouts, the second finds it gone
+            // and credits nothing, leaving that payment's discount owing instead of granting it
+            // twice. Same transaction as the billing update below, so a payment that fails or rolls
+            // back leaves its discount unspent.
+            $discountAmount = 0.0;
+            if ($quotedDiscount > 0) {
+                $discountAmount = app(\App\Services\CheckoutDiscountService::class)
+                    ->consume(array_map('intval', $discountIds), $ref, $quotedDiscount);
+
+                $this->workerLog("Ref $ref: ₱" . number_format($discountAmount, 2) . " discount credited"
+                    . ($discountAmount < $quotedDiscount
+                        ? " (₱" . number_format($quotedDiscount, 2) . " quoted — the rest was no longer available)"
+                        : ''));
+            }
+
+            // The rebate priced in at checkout (CheckoutRebateService), spent and credited exactly as
+            // the discount above: only what is still unused at settlement is credited.
+            $quotedRebate = isset($payment->rebate_amount) ? max(0.0, floatval($payment->rebate_amount)) : 0.0;
+            $rebateUsages = isset($payment->rebate_usage_ids) ? (json_decode((string) $payment->rebate_usage_ids, true) ?: []) : [];
+
+            $rebateAmount = 0.0;
+            if ($quotedRebate > 0) {
+                $rebateAmount = app(\App\Services\CheckoutRebateService::class)
+                    ->consume($rebateUsages, $ref, $quotedRebate);
+
+                $this->workerLog("Ref $ref: ₱" . number_format($rebateAmount, 2) . " rebate credited"
+                    . ($rebateAmount < $quotedRebate
+                        ? " (₱" . number_format($quotedRebate, 2) . " quoted — the rest was no longer available)"
+                        : ''));
+            }
+
             // Update billing - distribute payment to invoices
-            $result = $this->updateBilling($account, $amount, $ref);
+            $result = $this->updateBilling($account, round($amount + $discountAmount + $rebateAmount, 2), $ref);
+
+            // Checkout choices carried in the invoice metadata (XenditPaymentController::createPayment).
+            $checkoutMetadata = json_decode((string) ($payment->json_payload ?? ''), true)['metadata'] ?? [];
+            $migrateTo = $checkoutMetadata['migrate_to'] ?? null;
+
+            // Postpaid -> prepaid switch: inside this transaction, BEFORE the balance is read for
+            // the settlement decision below — the plan part of the payment is credit on a postpaid
+            // account and becomes the prepaid period once switched, so the balance reads 0 and the
+            // fresh 34-day period is granted further down.
+            if ($result['success'] && $migrateTo === \App\Services\BillingTypeMigrationService::TO_PREPAID) {
+                app(\App\Services\BillingTypeMigrationService::class)->toPrepaid($accountNo, $ref);
+                $this->workerLog("Ref $ref: account switched to prepaid");
+            }
 
             if ($result['success']) {
                 // Mark payment as PAID
@@ -306,20 +358,74 @@ class PaymentWorkerService
                         ->update(['reconnect_status' => $reconnectStatus]);
 
                     $this->workerLog("Reconnect attempt for $ref: $reconnectStatus");
+                }
 
-                    // Prepaid: a settling payment extends (if still active) or restarts (if
-                    // expired) the prepaid service period, and acts on any plan the customer
-                    // picked at checkout — queued for when their current period lapses, or
-                    // applied immediately if they ticked "Activate Now" (or the period had
-                    // already expired). No-op for postpaid accounts.
-                    //
-                    // settlePayment() owns the ordering between the two: activate_now decides
-                    // whether the period is RESET or EXTENDED, so the renewal cannot be decided
-                    // independently of the plan change. Mirrors TransactionController.
-                    $settled = app(\App\Services\PrepaidPlanChangeService::class)->settlePayment(
+                // Prepaid: a settling payment extends (if still active) or restarts (if
+                // expired) the prepaid service period, and acts on any plan the customer
+                // picked at checkout — queued for when their current period lapses, or
+                // applied immediately if they ticked "Activate Now" (or the period had
+                // already expired). No-op for postpaid accounts.
+                //
+                // Outside the $balanceSettled gate on purpose: a payment worth at least the plan
+                // price renews even if something is still owed (reconnecting above still waits
+                // for a cleared balance). The value counted includes any checkout discount, since
+                // that is credited alongside the cash. See qualifiesForRenewal().
+                //
+                // settlePayment() owns the ordering between the two: activate_now decides
+                // whether the period is RESET or EXTENDED, so the renewal cannot be decided
+                // independently of the plan change. Mirrors TransactionController.
+                $planChangeService = app(\App\Services\PrepaidPlanChangeService::class);
+                // The same decision as cashier approval (paymentBuysPeriod): at least one plan price,
+                // or clearing the balance while no period is active. Not "balance settled" on its
+                // own: the payment that clears the remainder of an already-renewed bill must not
+                // renew a second time.
+                if ($planChangeService->qualifiesForRenewal(
+                    $accountNo,
+                    round($amount + $discountAmount + $rebateAmount, 2),
+                    $currentBalance,
+                    $payment->selected_plan_id ?? null
+                )) {
+                    if (!$balanceSettled) {
+                        $this->workerLog("Ref $ref covers the plan price but leaves ₱" . number_format($currentBalance, 2)
+                            . " owing — renewing the prepaid period, reconnect still waits for a cleared balance");
+                    }
+
+                    // Advance payment: periods bought at checkout, carried in the invoice metadata
+                    // (see XenditPaymentController::createPayment). Absent = one period.
+                    $advanceMonths = max(1, (int) ($checkoutMetadata['advance_months'] ?? 1));
+
+                    // Only the months the money covers AFTER any debt it paid off. Judged from the
+                    // balance BEFORE the payment: a prepaid balance floors at 0, so the balance
+                    // after can read "settled" even when part of the payment went to old debt
+                    // (₱120 owed + 3 months for ₱3,000 must not grant 3 months). At least one
+                    // period — qualifiesForRenewal() already decided this payment buys one.
+                    if ($advanceMonths > 1) {
+                        $billingAccountModel = \App\Models\BillingAccount::with('customer')->where('account_no', $accountNo)->first();
+                        $periodPrice = $billingAccountModel
+                            ? (float) ($planChangeService->renewalPlanFor($billingAccountModel, $payment->selected_plan_id ?? null)->price ?? 0)
+                            : 0.0;
+                        $debtBefore = max(0.0, (float) $account->account_balance);
+                        $affordable = $periodPrice > 0
+                            ? (int) floor(round($amount + $discountAmount + $rebateAmount - $debtBefore, 2) / $periodPrice)
+                            : 1;
+
+                        if ($affordable < $advanceMonths) {
+                            $this->workerLog("Ref $ref: {$advanceMonths}-month advance, but ₱" . number_format($debtBefore, 2)
+                                . " of it paid off old debt — granting " . max(1, $affordable) . " period(s)");
+                            $advanceMonths = max(1, $affordable);
+                        }
+                    }
+
+                    if ($advanceMonths > 1) {
+                        $this->workerLog("Ref $ref is a {$advanceMonths}-month advance payment");
+                    }
+
+                    $settled = $planChangeService->settlePayment(
                         $accountNo,
                         $payment->selected_plan_id ?? null,
-                        (bool) ($payment->activate_now ?? false)
+                        (bool) ($payment->activate_now ?? false),
+                        null,
+                        $advanceMonths
                     );
 
                     $prepaidRenewal = $settled['renewal'];
@@ -333,6 +439,41 @@ class PaymentWorkerService
                     if (($planChange['action'] ?? 'none') !== 'none') {
                         $this->workerLog("Prepaid plan {$planChange['action']} for $ref — plan: {$planChange['plan']}"
                             . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
+                    }
+                }
+
+                // Prepaid only: email the Statement of Account PDF — payment date to the expiry the
+                // renewal above just set. Before the postpaid switch below, which would otherwise
+                // make the account postpaid first and skip it. PrepaidSoaService never throws.
+                app(\App\Services\PrepaidSoaService::class)->sendForPayment($accountNo, [
+                    'amount' => $amount,
+                    'paid_at' => now(),
+                    'reference' => $ref,
+                    'method' => $ewalletType ?: ($paymentChannel ?: 'Online (Xendit)'),
+                    'discount' => $discountAmount,
+                    'rebate' => $rebateAmount,
+                    // The months actually granted (capped above when part of the payment paid debt).
+                    'months' => max(1, (int) ($advanceMonths ?? ($checkoutMetadata['advance_months'] ?? 1))),
+                    // Read before the payment was applied (the same value logged to payment_portal_logs).
+                    'balance_before' => $account->account_balance,
+                    'source' => 'portal payment',
+                ]);
+
+                // Prepaid -> postpaid switch: AFTER the renewal above, so the billing day is taken
+                // from an expiry that already includes the days this payment bought. Own try/catch:
+                // the payment is committed, and an exception reaching the outer handler would mark
+                // it for retry and post it twice.
+                if ($migrateTo === \App\Services\BillingTypeMigrationService::TO_POSTPAID) {
+                    try {
+                        app(\App\Services\BillingTypeMigrationService::class)->toPostpaid($accountNo, $ref);
+                        $this->workerLog("Ref $ref: account switched to postpaid");
+                    } catch (\Throwable $migrationError) {
+                        $this->workerLog("ERROR: Ref $ref was paid but the switch to postpaid failed: " . $migrationError->getMessage());
+                        Log::error('Billing type switch to postpaid failed after payment', [
+                            'reference_no' => $ref,
+                            'account_no' => $accountNo,
+                            'error' => $migrationError->getMessage(),
+                        ]);
                     }
                 }
 
@@ -529,6 +670,9 @@ class PaymentWorkerService
                 $distributionSummary .= " | Credit: ₱" . number_format($remainingAmount, 2);
             }
 
+            // A PDF for each invoice this payment settled, made once the payment commits.
+            \App\Services\PaidInvoicePdfService::generateAfterCommit(array_column($paidInvoices, 'invoice_id'));
+
             return [
                 'success' => true,
                 'distribution_summary' => $distributionSummary,
@@ -591,6 +735,9 @@ class PaymentWorkerService
 
             // Step 2: Check current billing status.
             $isAlreadyActive = ($billingAccount->billing_status_id == 1);
+            // Read before the reconnect flips it to Active: an Inactive postpaid account restarts
+            // its billing cycle on the day it pays (PostpaidBillingDayService, Step 7 below).
+            $wasInactive = \App\Services\PostpaidBillingDayService::isInactiveStatus($billingAccount->billing_status_id);
 
             // Step 2b: If the account is already active in billing AND the customer is
             // genuinely Online in RADIUS, there is nothing to fix — the payment's balance
@@ -703,6 +850,16 @@ class PaymentWorkerService
                             'updated_by' => 'Payment Worker'
                         ]);
                     $this->workerLog("[RECONNECT DB] Updated billing_status_id to 1 for Account: {$accountNo}");
+
+                    // Postpaid and was Inactive: the billing day moves to the payment's day (the
+                    // payment settles now). An account that was still Active never reaches here.
+                    if ($wasInactive) {
+                        $newDay = app(\App\Services\PostpaidBillingDayService::class)
+                            ->resetToPaymentDay($accountNo, now(), 'portal payment ' . ($paymentReference ?? ''));
+                        if ($newDay !== null) {
+                            $this->workerLog("[RECONNECT DB] Billing day reset to " . ($newDay === 0 ? 'end of month' : $newDay) . " for Account: {$accountNo}");
+                        }
+                    }
                 } else {
                     $this->workerLog("[RECONNECT DB SKIP] Account already 1, skipping status update");
                 }

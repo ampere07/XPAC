@@ -22,6 +22,7 @@ import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
+import { isAdministratorUser } from '../utils/agentAccess';
 import TransactionFormModal from '../modals/TransactionFormModal';
 
 const hexToRgba = (hex: string, opacity: number) => {
@@ -232,8 +233,54 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     return {};
   });
 
+  // Sidebar payment method dropdown. '' = all methods.
+  const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('');
   const [processedDateFrom, setProcessedDateFrom] = useState<string>('');
   const [processedDateTo, setProcessedDateTo] = useState<string>('');
+
+  // Collector filter: one agent or technician (by what processed_by_user holds — an agent's email,
+  // a technician's name) and optionally a payment date range ("YYYY-MM-DD", either end may be
+  // empty, both inclusive). Applied with the other
+  // sidebar filters, and totals what that collector took in: Collected Payment for an agent,
+  // Received Payment for a technician. Administrators and SuperAdmins only.
+  const canUseCollectorFilter = isAdministratorUser();
+  type Collector = { value: string; label: string; role: 'agent' | 'technician' };
+  const [collectorFilter, setCollectorFilter] = useState<{ collector: Collector; dateFrom: string; dateTo: string } | null>(null);
+  const [isCollectorModalOpen, setIsCollectorModalOpen] = useState(false);
+  const [collectors, setCollectors] = useState<Collector[]>([]);
+  const [isLoadingCollectors, setIsLoadingCollectors] = useState(false);
+  const [collectorsError, setCollectorsError] = useState<string | null>(null);
+  const [draftCollector, setDraftCollector] = useState<Collector | null>(null);
+  const [draftDateFrom, setDraftDateFrom] = useState('');
+  const [draftDateTo, setDraftDateTo] = useState('');
+  const [collectorQuery, setCollectorQuery] = useState('');
+  const [isCollectorListOpen, setIsCollectorListOpen] = useState(false);
+
+  const openCollectorModal = async () => {
+    setDraftCollector(collectorFilter?.collector ?? null);
+    setDraftDateFrom(collectorFilter?.dateFrom ?? '');
+    setDraftDateTo(collectorFilter?.dateTo ?? '');
+    setCollectorQuery('');
+    setIsCollectorListOpen(false);
+    setIsCollectorModalOpen(true);
+    setIsLoadingCollectors(true);
+    setCollectorsError(null);
+    try {
+      const res = await apiClient.get<{ success: boolean; data: Collector[]; message?: string; error?: string }>('/lookup/transaction-collectors');
+      if (res.data.success) {
+        setCollectors(Array.isArray(res.data.data) ? res.data.data : []);
+      } else {
+        setCollectorsError(res.data.error || res.data.message || 'The server could not list the collectors.');
+      }
+    } catch (err: any) {
+      // Shown in the list: an empty result and a failed request must not look the same.
+      console.error('Failed to load collectors:', err);
+      setCollectorsError(err?.response?.data?.error || err?.response?.data?.message
+        || (err?.response?.status ? `Request failed (HTTP ${err.response.status})` : (err?.message || 'Request failed')));
+    } finally {
+      setIsLoadingCollectors(false);
+    }
+  };
 
   const removeFilter = (key: string) => {
     const newFilters = { ...activeFilters };
@@ -367,11 +414,13 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     fetchThemeData();
   }, []);
 
-  // Technicians record a payment from here; the modal lets them pick the account.
+  // Technicians and agents record a payment from here; the modal lets them pick the account.
+  // Agents get the technician view exactly: view and add, never approve.
   const isTechnicianUser = (() => {
     try {
       const u = JSON.parse(localStorage.getItem('authData') || '{}');
-      return String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician';
+      const role = String(u.role || '').toLowerCase().trim();
+      return ['2', '4'].includes(String(u.role_id)) || role === 'technician' || role === 'agent';
     } catch {
       return false;
     }
@@ -416,14 +465,15 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   useEffect(() => {
     const channel = pusher.subscribe('transactions');
 
-    channel.bind('transaction-updated', async (data: any) => {
+    const handleTransactionUpdate = async () => {
       setHasNewData(true);
       try {
         await fetchUpdates();
       } catch (err) {
         console.error('[TransactionList Soketi] Failed to refresh data:', err);
       }
-    });
+    };
+    channel.bind('transaction-updated', handleTransactionUpdate);
 
     // Log connection state for debugging
     const stateHandler = (states: { previous: string; current: string }) => {
@@ -436,9 +486,9 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     return () => {
       channel.unbind('pusher:subscription_succeeded');
       channel.unbind('pusher:subscription_error');
-      channel.unbind('transaction-updated');
+      // Only this page's handler, and no unsubscribe: the Sidebar badges share this channel.
+      channel.unbind('transaction-updated', handleTransactionUpdate);
       pusher.connection.unbind('state_change', stateHandler);
-      pusher.unsubscribe('transactions');
     };
   }, [fetchUpdates]);
 
@@ -643,6 +693,26 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     }
   }, []);
 
+  // The payment method a transaction shows, as the table and funnel filter read it.
+  const paymentMethodLabel = (t: Transaction): string =>
+    String(t.payment_method_info?.payment_method || getPaymentMethodName(t.payment_method) || '').trim();
+
+  // Options for the sidebar payment method dropdown: only methods that actually appear on this
+  // organisation's transactions, each once, alphabetical. Built from the unfiltered list so the
+  // options do not vanish as other filters narrow the table.
+  const paymentMethodOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    transactions.forEach(t => {
+      if (userOrgId ? t.organization_id !== userOrgId : !!t.organization_id) return;
+      const label = paymentMethodLabel(t);
+      if (!label || label === '-') return;
+      const key = label.toLowerCase();
+      if (!seen.has(key)) seen.set(key, label);
+    });
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactions, paymentMethods, userOrgId]);
+
   // 1. Initial search/funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredTransactions = useMemo(() => {
     const normalizedQuery = searchQuery.toLowerCase().replace(/\s+/g, '');
@@ -739,6 +809,12 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
       });
     }
 
+    // Sidebar payment method dropdown. Applied here so the location counts follow it.
+    if (paymentMethodFilter) {
+      const wanted = paymentMethodFilter.toLowerCase();
+      filtered = filtered.filter(transaction => paymentMethodLabel(transaction).toLowerCase() === wanted);
+    }
+
     // Apply sidebar date range filters for date_processed
     if (processedDateFrom || processedDateTo) {
       filtered = filtered.filter(transaction => {
@@ -763,8 +839,43 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
       });
     }
 
+    // Collector filter (sidebar button + modal).
+    if (collectorFilter && canUseCollectorFilter) {
+      const wanted = collectorFilter.collector.value.trim().toLowerCase();
+      filtered = filtered.filter(transaction => {
+        // The raw value: the API swaps processed_by_user for the processor's full name when it
+        // resolves a user, so the processor's email is checked first.
+        const who = [transaction.processor?.email_address, transaction.processed_by_user]
+          .filter(Boolean)
+          .map(v => String(v).trim().toLowerCase());
+        if (!who.includes(wanted)) return false;
+
+        if (collectorFilter.dateFrom || collectorFilter.dateTo) {
+          const raw = String(transaction.payment_date || transaction.date_processed || '');
+          // Read the date part as written, so a timezone can never move it into the next day.
+          // "YYYY-MM-DD" strings compare in date order.
+          const day = raw.slice(0, 10);
+          if (!day) return false;
+          if (collectorFilter.dateFrom && day < collectorFilter.dateFrom) return false;
+          if (collectorFilter.dateTo && day > collectorFilter.dateTo) return false;
+        }
+        return true;
+      });
+    }
+
     return filtered;
-  }, [transactions, searchQuery, activeFilters, processedDateFrom, processedDateTo, userOrgId]);
+  }, [transactions, searchQuery, activeFilters, processedDateFrom, processedDateTo, userOrgId, collectorFilter, paymentMethodFilter, paymentMethods]);
+
+  // What the filtered collector took in. Failed / cancelled payments were never collected, so
+  // they are listed but not counted.
+  const collectorTotal = useMemo(() => {
+    if (!collectorFilter) return null;
+    const uncollected = ['failed', 'cancelled', 'canceled', 'void', 'voided'];
+    const counted = globalFilteredTransactions.filter(t => !uncollected.includes(String(t.status || '').toLowerCase()));
+    const field = collectorFilter.collector.role === 'agent' ? 'collected_payment' : 'received_payment';
+    const total = counted.reduce((sum, t: any) => sum + (parseFloat(String(t[field] ?? 0)) || 0), 0);
+    return { total: Math.round(total * 100) / 100, count: counted.length, excluded: globalFilteredTransactions.length - counted.length };
+  }, [collectorFilter, globalFilteredTransactions]);
 
   // Generate hierarchical location items - Now using globalFilteredTransactions
   const locationItems = useMemo(() => {
@@ -893,7 +1004,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedLocation, searchQuery, activeFilters, itemsPerPage, processedDateFrom, processedDateTo]);
+  }, [selectedLocation, searchQuery, activeFilters, itemsPerPage, processedDateFrom, processedDateTo, collectorFilter]);
 
   // Scroll to top on page change
   useEffect(() => {
@@ -1448,6 +1559,95 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Collector filter: an agent or technician, optionally a date, with their total. Admins only. */}
+          {canUseCollectorFilter && (
+          <div className={`px-4 py-3 border-b space-y-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
+            <button
+              type="button"
+              onClick={openCollectorModal}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded text-xs font-medium border transition-colors ${collectorFilter
+                ? 'text-white'
+                : isDarkMode ? 'border-gray-700 text-gray-300 hover:bg-gray-800' : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                }`}
+              style={collectorFilter ? { backgroundColor: colorPalette?.primary || '#7c3aed', borderColor: colorPalette?.primary || '#7c3aed' } : {}}
+            >
+              <span className="flex items-center gap-2"><Filter size={14} /> Collector Filter</span>
+              {collectorFilter && <span className="text-[10px] uppercase tracking-wider">On</span>}
+            </button>
+
+            {collectorFilter && collectorTotal && (
+              <div className={`rounded border p-3 text-xs space-y-1 ${isDarkMode ? 'border-gray-700 bg-gray-800 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className={`font-medium break-all ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{collectorFilter.collector.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => setCollectorFilter(null)}
+                    className="text-[10px] font-bold uppercase tracking-wider hover:underline flex-shrink-0"
+                    style={{ color: colorPalette?.primary || '#7c3aed' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="capitalize">
+                  {collectorFilter.collector.role}
+                  {' · '}
+                  {(() => {
+                    const fmt = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const { dateFrom, dateTo } = collectorFilter;
+                    if (dateFrom && dateTo) return dateFrom === dateTo ? fmt(dateFrom) : `${fmt(dateFrom)} – ${fmt(dateTo)}`;
+                    if (dateFrom) return `From ${fmt(dateFrom)}`;
+                    if (dateTo) return `Until ${fmt(dateTo)}`;
+                    return 'All dates';
+                  })()}
+                </div>
+                <div className="pt-1">
+                  <span>{collectorFilter.collector.role === 'agent' ? 'Total Collected Payment' : 'Total Received Payment'}</span>
+                  <div className="text-base font-bold" style={{ color: colorPalette?.primary || '#7c3aed' }}>
+                    ₱{collectorTotal.total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                  <span className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>
+                    {collectorTotal.count} transaction{collectorTotal.count === 1 ? '' : 's'}
+                    {collectorTotal.excluded > 0 ? ` (${collectorTotal.excluded} failed/cancelled not counted)` : ''}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+          )}
+
+          {/* Payment method filter: only the methods present on the transactions, each once. */}
+          <div className={`px-4 py-3 border-b space-y-2 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
+            <div className="flex items-center justify-between">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                PAYMENT METHOD
+              </span>
+              {paymentMethodFilter && (
+                <button
+                  onClick={() => setPaymentMethodFilter('')}
+                  className="text-[10px] font-bold uppercase tracking-wider hover:underline"
+                  style={{ color: colorPalette?.primary || '#7c3aed' }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <select
+              value={paymentMethodFilter}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setPaymentMethodFilter(e.target.value)}
+              className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode
+                ? 'bg-gray-800 border-gray-700 text-white'
+                : 'bg-white border-gray-300 text-gray-900'
+                }`}
+              style={paymentMethodFilter ? { borderColor: colorPalette?.primary || '#7c3aed' } : {}}
+            >
+              <option value="">All Payment Methods</option>
+              {paymentMethodOptions.map(method => (
+                <option key={method} value={method}>{method}</option>
+              ))}
+            </select>
           </div>
 
           {/* All Level */}
@@ -2200,6 +2400,124 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           </div>
         </div>
       )}
+      {isCollectorModalOpen && canUseCollectorFilter && (
+        <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black bg-opacity-50 p-4" onClick={() => setIsCollectorModalOpen(false)}>
+          <div
+            className={`w-full max-w-md rounded-lg shadow-xl ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={`flex items-center justify-between px-5 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <h3 className="text-lg font-semibold">Collector Filter</h3>
+              <button type="button" onClick={() => setIsCollectorModalOpen(false)} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900'}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              {/* Processed By — agents and technicians only */}
+              <div className="relative">
+                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  Processed By<span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={isCollectorListOpen ? collectorQuery : (draftCollector?.label ?? collectorQuery)}
+                  onChange={(e) => { setCollectorQuery(e.target.value); setIsCollectorListOpen(true); }}
+                  onFocus={() => { setCollectorQuery(''); setIsCollectorListOpen(true); }}
+                  placeholder={isLoadingCollectors ? 'Loading…' : 'Search agent or technician…'}
+                  className={`w-full px-3 py-2 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+                />
+                {isCollectorListOpen && (
+                  <div className={`absolute z-10 mt-1 w-full max-h-60 overflow-y-auto rounded border shadow-lg ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
+                    {(() => {
+                      const q = collectorQuery.trim().toLowerCase();
+                      const shown = collectors.filter(c => !q || c.label.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
+                      if (isLoadingCollectors) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Loading…</p>;
+                      if (collectorsError) return <p className="px-3 py-2 text-sm text-red-500">Could not load collectors: {collectorsError}</p>;
+                      if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No agents or technicians found</p>;
+                      return shown.map(c => (
+                        <button
+                          key={`${c.role}:${c.value}`}
+                          type="button"
+                          onClick={() => { setDraftCollector(c); setIsCollectorListOpen(false); setCollectorQuery(''); }}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-sm ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draftCollector?.value === c.value ? (isDarkMode ? 'bg-gray-700' : 'bg-gray-100') : ''}`}
+                        >
+                          <span className="break-all">{c.label}</span>
+                          <span className={`ml-2 flex-shrink-0 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${c.role === 'agent'
+                            ? (isDarkMode ? 'bg-blue-900 text-blue-200' : 'bg-blue-100 text-blue-700')
+                            : (isDarkMode ? 'bg-green-900 text-green-200' : 'bg-green-100 text-green-700')}`}>
+                            {c.role}
+                          </span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* Date range (optional) */}
+              <div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date From</label>
+                    <input
+                      type="date"
+                      value={draftDateFrom}
+                      max={draftDateTo || undefined}
+                      onChange={(e) => setDraftDateFrom(e.target.value)}
+                      className={`w-full px-3 py-2 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+                    />
+                  </div>
+                  <div>
+                    <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date To</label>
+                    <input
+                      type="date"
+                      value={draftDateTo}
+                      min={draftDateFrom || undefined}
+                      onChange={(e) => setDraftDateTo(e.target.value)}
+                      className={`w-full px-3 py-2 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+                    />
+                  </div>
+                </div>
+                <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>By payment date. Leave empty for all dates.</p>
+                {draftDateFrom && draftDateTo && draftDateFrom > draftDateTo && (
+                  <p className="text-xs mt-1 text-red-500">Date From must be on or before Date To.</p>
+                )}
+              </div>
+
+              {draftCollector && (
+                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  The total will be the {draftCollector.role === 'agent' ? 'Collected Payment' : 'Received Payment'} of the matching transactions.
+                </p>
+              )}
+            </div>
+
+            <div className={`flex justify-end gap-2 px-5 py-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <button
+                type="button"
+                onClick={() => setIsCollectorModalOpen(false)}
+                className={`px-4 py-2 rounded text-sm ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-900'}`}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!draftCollector || (!!draftDateFrom && !!draftDateTo && draftDateFrom > draftDateTo)}
+                onClick={() => {
+                  if (!draftCollector) return;
+                  setCollectorFilter({ collector: draftCollector, dateFrom: draftDateFrom, dateTo: draftDateTo });
+                  setIsCollectorModalOpen(false);
+                }}
+                className="px-4 py-2 rounded text-sm text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <TransactionFunnelFilter
         isOpen={isFunnelFilterOpen}
         onClose={() => setIsFunnelFilterOpen(false)}

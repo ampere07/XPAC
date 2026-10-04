@@ -66,6 +66,9 @@ export interface TransactionReceipt {
   amount: number;
   payment_method: string;
   processed_by: string | null;
+  /** Y-m-d service span this payment covers; null when it buys no identifiable span. */
+  coverage_from?: string | null;
+  coverage_to?: string | null;
   remarks: string | null;
   status: string | null;
   is_printable: boolean;
@@ -245,8 +248,11 @@ export const transactionService = {
       };
     } catch (error: any) {
       console.error('Error uploading transaction images:', error);
+      // Carry the reason through so the form can say WHY the proof was not saved instead of
+      // silently saving the transaction without it.
       return {
         success: false,
+        message: error.response?.data?.message || error.message || 'Failed to upload the payment proof image',
       };
     }
   },

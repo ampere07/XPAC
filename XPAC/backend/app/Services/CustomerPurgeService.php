@@ -16,8 +16,10 @@ use Throwable;
  *
  * 1. The customer's PPPoE username is deleted from RADIUS. The configured servers
  *    back each other up, so one server answering is enough; an unreachable one is
- *    skipped and named in the log. If no server answers, or one refuses the delete,
- *    nothing in the database is touched and the next save retries.
+ *    skipped and named in the log. A username already gone from RADIUS is fine. If
+ *    RADIUS cannot confirm the delete (no server answers, or one refuses), the purge
+ *    still goes ahead and the RADIUS delete is queued (operation delete_user) for
+ *    cron:process-radius-queue to finish.
  * 2. Rows are then HARD deleted from exactly these tables: customers,
  *    billing_accounts, technical_details, service_orders and the customer's
  *    portal login in users (see plan()).
@@ -101,6 +103,8 @@ final class CustomerPurgeService
 
             // What happened to each username, for the disconnected_logs entry.
             $radiusSummary = [];
+            // Usernames RADIUS could not confirm as deleted => their error, queued below.
+            $unconfirmed = [];
             foreach ($usernames as $username) {
                 $outcome = $radius->deleteUserFromAllServers($username, $organizationId);
                 // A server that could not be reached is named, so staff can remove the
@@ -115,11 +119,34 @@ final class CustomerPurgeService
                     . ($outcome['errors'] ? ', errors: ' . implode(' | ', $outcome['errors']) : ''));
 
                 if (!$outcome['success']) {
-                    // Keep every record: they are the only trace of a username still on RADIUS.
-                    $result['status'] = 'failed';
-                    $result['error'] = "RADIUS delete failed for '{$username}', so no customer data was deleted: " . implode(' | ', $outcome['errors']);
-                    $this->log('[ABORT] ' . $result['error']);
-                    return $result;
+                    // The purge goes ahead regardless: a username that is already gone from
+                    // RADIUS (or a device that answers in a way we cannot read) must not keep a
+                    // pulled-out customer's records alive. In case it IS still there, the delete
+                    // is handed to the RADIUS retry queue, which finishes it once a server answers.
+                    $unconfirmed[$username] = implode(' | ', $outcome['errors']);
+                    $radiusSummary[count($radiusSummary) - 1] = "{$username} (RADIUS not confirmed — queued for retry)";
+                    $this->log("[RADIUS] '{$username}' not confirmed ({$unconfirmed[$username]}) — continuing purge");
+                }
+            }
+
+            // One queue entry for the account (the queue keeps one pending entry per account and
+            // operation), carrying every username that still needs removing.
+            if ($unconfirmed !== []) {
+                $queueId = RadiusQueueService::queue([
+                    'organization_id' => $organizationId,
+                    'source_type' => 'customer_purge',
+                    'source_id' => $serviceOrderId ?? 0,
+                    'account_no' => $accountNo,
+                    'operation' => 'delete_user',
+                    'params' => ['usernames' => array_keys($unconfirmed), 'organization_id' => $organizationId],
+                    'last_error' => 'RADIUS delete not confirmed during pullout purge: ' . implode(' | ', $unconfirmed),
+                    'created_by' => $triggeredBy,
+                ]);
+                $this->log($queueId
+                    ? "[RADIUS] Queued delete_user #{$queueId} for: " . implode(', ', array_keys($unconfirmed))
+                    : '[RADIUS] Queue insert FAILED — remove by hand: ' . implode(', ', array_keys($unconfirmed)));
+                if (!$queueId) {
+                    $radiusSummary[] = 'RADIUS retry could not be queued — remove ' . implode(', ', array_keys($unconfirmed)) . ' by hand';
                 }
             }
 
