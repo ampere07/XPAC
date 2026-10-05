@@ -97,21 +97,6 @@ export const soaService = {
     }
   },
 
-  async getStatementsByAccount(accountId: number, fast: boolean = true): Promise<SOARecord[]> {
-    try {
-      const response = await apiClient.get<SOAResponse>('/billing-generation/statements', {
-        params: { account_id: accountId, fast: fast ? '1' : '0' }
-      });
-      if (response.data.success) {
-        return response.data.data;
-      }
-      throw new Error(response.data.message || 'Failed to fetch statements');
-    } catch (error) {
-      console.error('Error fetching SOA records by account:', error);
-      throw error;
-    }
-  },
-
   async getStatementsByAccountNo(accountNo: string, fast: boolean = true): Promise<SOARecord[]> {
     try {
       const response = await apiClient.get<SOAResponse>('/billing-generation/statements', {

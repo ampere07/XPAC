@@ -35,7 +35,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const [user, setUser] = useState<any>(null);
     const [error, setError] = useState('');
 
-    const { customerDetail, paymentRecords, invoiceRecords, isLoading, fetchCustomerData } = useCustomerDashboardStore();
+    const { customerDetail, paymentRecords, invoiceRecords, isLoading, fetchCustomerData, refreshCustomerData } = useCustomerDashboardStore();
     const payments = paymentRecords.slice(0, 4);
     const [referrals, setReferrals] = useState<Referral[]>([]);
 
@@ -95,7 +95,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                     setUser(parsedUser);
 
                     if (parsedUser.username) {
-                        await fetchCustomerData(parsedUser.username, true);
+                        await fetchCustomerData(parsedUser.username);
 
                         // Need the current updated customer details for account number to get pending payment
                         const updatedDetail = useCustomerDashboardStore.getState().customerDetail;
@@ -146,13 +146,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     useEffect(() => {
         const handleUpdate = async (data: any) => {
             try {
-                const storedUser = localStorage.getItem('authData');
-                if (storedUser) {
-                    const parsedUser = JSON.parse(storedUser);
-                    if (parsedUser.username) {
-                        await fetchCustomerData(parsedUser.username, true);
-                    }
-                }
+                await refreshCustomerData();
             } catch (err) {
                 console.error('[DashboardCustomer Soketi] Failed to refresh data:', err);
             }
@@ -192,7 +186,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             pusher.unsubscribe('soa');
             pusher.unsubscribe('payments');
         };
-    }, [fetchCustomerData, customerDetail?.billingAccount?.accountNo]);
+    }, [refreshCustomerData, customerDetail?.billingAccount?.accountNo]);
 
     // Load the plan list once, only for prepaid customers — postpaid never sees the picker.
     // Lives above the early return because it is a hook; isPrepaid is re-derived from the store

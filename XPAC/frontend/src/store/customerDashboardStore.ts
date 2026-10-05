@@ -24,10 +24,19 @@ interface CustomerDashboardState {
     isLoading: boolean;
     error: string | null;
     fetchedAccountNo: string | null;
+    refreshQueued: boolean;
 
-    fetchCustomerData: (usernameOrAccountNo: string, isCustomerRole?: boolean) => Promise<void>;
+    fetchCustomerData: (usernameOrAccountNo: string) => Promise<void>;
     refreshCustomerData: () => Promise<void>;
 }
+
+const invoiceTime = (invoice: any): number => {
+    const time = new Date(invoice?.invoice_date ?? '').getTime();
+    return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+};
+
+const newestInvoiceFirst = (invoices: any[]): any[] =>
+    [...invoices].sort((a, b) => invoiceTime(b) - invoiceTime(a) || Number(b?.id ?? 0) - Number(a?.id ?? 0));
 
 export const useCustomerDashboardStore = create<CustomerDashboardState>((set, get) => ({
     customerDetail: null,
@@ -38,8 +47,9 @@ export const useCustomerDashboardStore = create<CustomerDashboardState>((set, ge
     isLoading: false,
     error: null,
     fetchedAccountNo: null,
+    refreshQueued: false,
 
-    fetchCustomerData: async (usernameOrAccountNo: string, isCustomerRole = true) => {
+    fetchCustomerData: async (usernameOrAccountNo: string) => {
         const { fetchedAccountNo, isLoading } = get();
 
         // Prevent refetching for the same user if already loaded
@@ -52,11 +62,10 @@ export const useCustomerDashboardStore = create<CustomerDashboardState>((set, ge
 
             if (detail && detail.billingAccount) {
                 const accNo = detail.billingAccount.accountNo;
-                const billingId = detail.billingAccount.id;
 
                 const [soaRes, invoiceRes, logsRes, txRes, serviceChargeLogsRes, serviceOrdersRes] = await Promise.all([
-                    (isCustomerRole ? soaService.getStatementsByAccountNo(accNo) : soaService.getStatementsByAccount(billingId)).catch(() => []),
-                    (isCustomerRole ? invoiceService.getInvoicesByAccountNo(accNo) : invoiceService.getInvoicesByAccount(billingId)).catch(() => []),
+                    soaService.getStatementsByAccountNo(accNo).catch(() => []),
+                    invoiceService.getInvoicesByAccountNo(accNo).catch(() => []),
                     paymentPortalLogsService.getLogsByAccountNo(accNo).catch(() => []),
                     transactionService.getTransactionsByAccountNo(accNo).catch(() => ({ success: false, data: [] })),
                     serviceChargeService.getServiceChargeLogsByAccountNo(accNo).catch(() => []),
@@ -120,7 +129,7 @@ export const useCustomerDashboardStore = create<CustomerDashboardState>((set, ge
                 set({
                     customerDetail: detail,
                     soaRecords: soaRes || [],
-                    invoiceRecords: invoiceRes || [],
+                    invoiceRecords: newestInvoiceFirst(invoiceRes || []),
                     paymentRecords: allPayments,
                     serviceChargeRecords: allServiceCharges,
                     fetchedAccountNo: usernameOrAccountNo,
@@ -133,10 +142,18 @@ export const useCustomerDashboardStore = create<CustomerDashboardState>((set, ge
             console.error('Failed to fetch customer dashboard data:', err);
             set({ error: err.message || 'Error loading dashboard data', isLoading: false });
         }
+        if (get().refreshQueued) {
+            set({ refreshQueued: false });
+            await get().refreshCustomerData();
+        }
     },
 
     refreshCustomerData: async () => {
-        const { fetchedAccountNo } = get();
+        const { fetchedAccountNo, isLoading } = get();
+        if (isLoading) {
+            set({ refreshQueued: true });
+            return;
+        }
         if (fetchedAccountNo) {
             set({ fetchedAccountNo: null }); // Clear cached ID to force refresh
             await get().fetchCustomerData(fetchedAccountNo);
