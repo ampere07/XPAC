@@ -74,6 +74,7 @@ export const resetAllStores = () => {
     isLoading: false,
     error: null,
     fetchedAccountNo: null,
+    refreshQueued: false,
   });
 
   useDataLogsStore.setState({

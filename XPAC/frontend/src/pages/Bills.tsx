@@ -47,7 +47,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
     const [displayName, setDisplayName] = useState('');
     const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
-    const { soaRecords, invoiceRecords, paymentRecords, serviceChargeRecords, customerDetail, isLoading, fetchCustomerData } = useCustomerDashboardStore();
+    const { soaRecords, invoiceRecords, paymentRecords, serviceChargeRecords, customerDetail, isLoading, fetchCustomerData, refreshCustomerData } = useCustomerDashboardStore();
 
     const accountNo = customerDetail?.billingAccount?.accountNo || '';
     const balance = customerDetail?.billingAccount?.accountBalance || 0;
@@ -88,7 +88,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
                     setDisplayName(parsedUser.full_name || 'Customer');
 
                     if (parsedUser.username) {
-                        await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
+                        await fetchCustomerData(parsedUser.username);
 
                         const updatedDetail = useCustomerDashboardStore.getState().customerDetail;
                         if (updatedDetail && updatedDetail.billingAccount) {
@@ -127,14 +127,8 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
         const handleUpdate = async (data: any) => {
             console.log('[Bills Soketi] Update received, refreshing:', data);
             try {
-                const storedUser = localStorage.getItem('authData');
-                if (storedUser) {
-                    const parsedUser = JSON.parse(storedUser);
-                    if (parsedUser.username) {
-                        await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
-                        console.log('[Bills Soketi] Data refreshed successfully');
-                    }
-                }
+                await refreshCustomerData();
+                console.log('[Bills Soketi] Data refreshed successfully');
             } catch (err) {
                 console.error('[Bills Soketi] Failed to refresh data:', err);
             }
@@ -160,7 +154,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
             pusher.unsubscribe('soa');
             pusher.unsubscribe('payments');
         };
-    }, [fetchCustomerData]);
+    }, [refreshCustomerData]);
 
     // Restriction logic removed as requested
 
@@ -198,13 +192,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
 
             if (response.data.success && response.data.print_link) {
                 try {
-                    const storedUser = localStorage.getItem('authData');
-                    if (storedUser) {
-                        const parsedUser = JSON.parse(storedUser);
-                        if (parsedUser.username) {
-                            await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
-                        }
-                    }
+                    await refreshCustomerData();
                 } catch (refreshErr) {
                     console.error('Failed to refresh data after PDF generation:', refreshErr);
                 }
