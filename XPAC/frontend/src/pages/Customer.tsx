@@ -12,6 +12,8 @@ import { barangayService, Barangay } from '../services/barangayService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import CustomerFunnelFilter, { allColumns as filterColumns, Column as FilterColumn } from '../filter/CustomerFunnelFilter';
 import SessionExpiredModal from '../components/SessionExpiredModal';
+import AddCustomerModal from '../modals/AddCustomerModal';
+import { usePermissions } from '../hooks/usePermissions';
 import { useBillingStore } from '../store/billingStore';
 import { billingStatusService, BillingStatus } from '../services/billingStatusService';
 import { userService } from '../services/userService';
@@ -253,6 +255,9 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>(initialSearchQuery || '');
   const { billingRecords, totalCount, isLoading: isTableLoading, error: contextError, fetchBillingRecords, refreshLatestData } = useBillingStore();
+  // "+ Add Customer" (direct add, no application or job order) is SuperAdmin only.
+  const { isSuperAdmin } = usePermissions();
+  const [showAddCustomer, setShowAddCustomer] = useState(false);
   const isFullyLoaded = totalCount === 0 || billingRecords.length >= totalCount;
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerDetailData | null>(null);
   const selectedCustomerRef = useRef<CustomerDetailData | null>(null);
@@ -1874,6 +1879,22 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
           <div className="flex items-center justify-between mb-1">
             <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}>Customers</h2>
+            {/* SuperAdmin only — POST /customers/direct refuses everyone else too. */}
+            {isSuperAdmin && (
+              <button
+                onClick={() => setShowAddCustomer(true)}
+                className="px-3 py-1.5 text-xs font-medium text-white rounded transition-colors"
+                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                onMouseEnter={(e) => {
+                  if (colorPalette?.accent) e.currentTarget.style.backgroundColor = colorPalette.accent;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
+                }}
+              >
+                + Add Customer
+              </button>
+            )}
           </div>
           <div className="mt-1">
             {/* Redundant dropdowns removed as requested */}
@@ -2794,8 +2815,17 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         currentFilters={activeFilters}
       />
 
-      <SessionExpiredModal 
-        isOpen={showSessionExpired} 
+      {isSuperAdmin && (
+        <AddCustomerModal
+          isOpen={showAddCustomer}
+          onClose={() => setShowAddCustomer(false)}
+          // Merges the new row into the list without a full reload.
+          onCreated={() => { refreshLatestData(); }}
+        />
+      )}
+
+      <SessionExpiredModal
+        isOpen={showSessionExpired}
         isDarkMode={isDarkMode}
         colorPalette={colorPalette}
         onConfirm={() => {

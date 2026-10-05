@@ -611,11 +611,16 @@ class CustomerDetailUpdateController extends Controller
                 // below. Kept in the validator so a stale client posting the field gets the same
                 // 422 for a malformed date as it always did.
                 'prepaid_expires_at' => 'nullable|date',
-                // SuperAdmin only, like prepaid_expires_at.
+                // Administrator and SuperAdmin only — see the write block below.
                 'account_balance' => 'nullable|numeric',
             ]);
 
             $isSuperAdmin = \App\Support\AgentAccess::isSuperAdmin(auth()->user());
+            $canEditBalance = in_array(
+                (int) (auth()->user()->role_id ?? 0),
+                [\App\Models\Role::ADMINISTRATOR, \App\Models\Role::SUPER_ADMIN],
+                true
+            );
 
             DB::beginTransaction();
 
@@ -762,13 +767,14 @@ class CustomerDetailUpdateController extends Controller
             }
 
             /*
-             * prepaid_expires_at and account_balance are writable here by a SuperAdmin only.
+             * prepaid_expires_at is writable here by a SuperAdmin only; account_balance by an
+             * Administrator or SuperAdmin.
              *
              * A single mistyped value on this form could hand out — or take away — months of service
              * or money owed. Everyone else adjusts them through their own workflows: the Prepaid
              * Override approval queue (Billing -> Prepaid Override, {@see \App\Services\PrepaidOverrideService})
-             * and transactions. A SuperAdmin edit is still recorded in details_update_logs below,
-             * which is what keeps it from being an unaudited change.
+             * and transactions. An edit is still recorded in details_update_logs below, which is
+             * what keeps it from being an unaudited change.
              *
              * From anyone else the fields are dropped rather than rejected: the rest of the billing
              * details in the same submission are legitimate and must still save. The warning is
@@ -779,8 +785,10 @@ class CustomerDetailUpdateController extends Controller
                     continue;
                 }
 
-                if (!$isSuperAdmin) {
-                    \Log::warning("Ignored {$superAdminField} on billing details update — SuperAdmin only", [
+                $allowed = $superAdminField === 'account_balance' ? $canEditBalance : $isSuperAdmin;
+                if (!$allowed) {
+                    $allowedRoles = $superAdminField === 'account_balance' ? 'Administrator/SuperAdmin' : 'SuperAdmin';
+                    \Log::warning("Ignored {$superAdminField} on billing details update — {$allowedRoles} only", [
                         'account_no'       => $accountNo,
                         'submitted_value'  => $request->input($superAdminField),
                         'user_id'          => auth()->id(),

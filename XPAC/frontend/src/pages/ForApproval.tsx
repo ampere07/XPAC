@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Receipt, Wrench } from 'lucide-react';
+import { RefreshCw, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight, Receipt, Wrench, CheckCheck, X, Check } from 'lucide-react';
 import GlobalSearch from './globalfunctions/GlobalSearch';
 import ForApprovalDetails, { ForApprovalRecord, forApprovalRecordKey } from '../components/ForApprovalDetails';
+import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
+import { transactionService } from '../services/transactionService';
+import { currentUserEmail } from '../hooks/useTransactionApproval';
+import { usePermissions } from '../hooks/usePermissions';
+import { useBillingStore } from '../store/billingStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import {
@@ -68,6 +73,9 @@ const toRecord = (list: ListState, index: number): ForApprovalRecord =>
     ? { category: 'transactions', transaction: list.rows[index] }
     : { category: 'job-orders', jobOrder: list.rows[index] };
 
+const isPendingTransaction = (transaction: ForApprovalTransaction): boolean =>
+  (transaction.status || '').toLowerCase() === 'pending';
+
 /**
  * For Approval: every pending transaction and every job order whose onsite work is Done, in one
  * queue, with a side panel to review and approve each one.
@@ -100,6 +108,20 @@ const ForApproval: React.FC = () => {
 
   const [selected, setSelected] = useState<ForApprovalRecord | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Batch approval of transactions, as on the Transaction List: same key, same endpoint. The
+  // selection is kept across pages and searches; the header checkbox covers the page on screen.
+  const { can } = usePermissions();
+  const canBatchApprove = can('transaction-list.batch-approve');
+  const refreshLatestData = useBillingStore(state => state.refreshLatestData);
+  const [isBatchApproveMode, setIsBatchApproveMode] = useState(false);
+  const [selectedTransactionIds, setSelectedTransactionIds] = useState<string[]>([]);
+  const [isApproving, setIsApproving] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showFailedModal, setShowFailedModal] = useState(false);
+  const [approvalMessage, setApprovalMessage] = useState('');
+  const [approvalDetails, setApprovalDetails] = useState<any>(null);
   // Only the newest request may write to the list: a slow page must not overwrite a newer one.
   const requestIdRef = useRef(0);
 
@@ -225,6 +247,7 @@ const ForApproval: React.FC = () => {
 
   const handleCategoryChange = (next: ForApprovalCategory) => {
     if (next === category) return;
+    handleCancelApprove();
     setSelected(null);
     setList(next === 'transactions' ? { category: 'transactions', rows: [] } : { category: 'job-orders', rows: [] });
     setPagination(null);
@@ -236,6 +259,92 @@ const ForApproval: React.FC = () => {
     // The approved record leaves the queue and every count moves; the sidebar follows at once.
     loadPage(true);
     notifyNavBadgesChanged();
+  };
+
+  const batchMode = isBatchApproveMode && list.category === 'transactions';
+  const pendingIdsOnPage = list.category === 'transactions'
+    ? list.rows.filter(isPendingTransaction).map(t => String(t.id))
+    : [];
+  const allPageSelected = pendingIdsOnPage.length > 0
+    && pendingIdsOnPage.every(id => selectedTransactionIds.includes(id));
+
+  const toggleTransactionSelection = (transaction: ForApprovalTransaction) => {
+    if (!isPendingTransaction(transaction)) return;
+    const id = String(transaction.id);
+    setSelectedTransactionIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedTransactionIds(prev => (allPageSelected
+      ? prev.filter(id => !pendingIdsOnPage.includes(id))
+      : Array.from(new Set([...prev, ...pendingIdsOnPage]))));
+  };
+
+  const handleCancelApprove = () => {
+    setIsBatchApproveMode(false);
+    setSelectedTransactionIds([]);
+  };
+
+  const handleBatchApprove = () => {
+    if (selectedTransactionIds.length === 0) return;
+    setShowConfirmModal(true);
+  };
+
+  const confirmBatchApproval = async () => {
+    setShowConfirmModal(false);
+
+    try {
+      setIsApproving(true);
+
+      const result = await transactionService.batchApproveTransactions(selectedTransactionIds, currentUserEmail());
+
+      if (result.success) {
+        const succeeded: string[] = (result.data?.success || []).map((s: any) => String(s.transaction_id));
+        const failedCount = result.data?.failed?.length || 0;
+
+        setApprovalDetails(result.data);
+
+        if (failedCount > 0) {
+          setApprovalMessage(
+            `Batch approval completed with some failures: ${succeeded.length} successful, ${failedCount} failed`
+          );
+          setShowFailedModal(true);
+        } else {
+          setApprovalMessage(`Successfully approved ${succeeded.length} transaction(s)`);
+          setShowSuccessModal(true);
+        }
+
+        handleCancelApprove();
+
+        // An open panel on a transaction that was just approved would still offer Approve.
+        setSelected(current => (
+          current?.category === 'transactions' && succeeded.includes(String(current.transaction.id)) ? null : current
+        ));
+
+        handleApproved();
+        try {
+          await refreshLatestData();
+        } catch (refreshErr) {
+          console.error('Failed to auto-refresh customer data:', refreshErr);
+        }
+      } else {
+        setApprovalMessage(result.message || 'Failed to approve transactions');
+        setShowFailedModal(true);
+      }
+    } catch (err: any) {
+      console.error('Batch approval error:', err);
+      setApprovalMessage(`Failed to approve transactions: ${err.message}`);
+      setShowFailedModal(true);
+    } finally {
+      setIsApproving(false);
+    }
+  };
+
+  /** Account No. of a transaction on the current page, for the failure list. */
+  const accountNoForTransaction = (transactionId: string | number): string | null => {
+    if (list.category !== 'transactions') return null;
+    const row = list.rows.find(t => String(t.id) === String(transactionId));
+    return row ? (row.account?.account_no || row.account_no || null) : null;
   };
 
   // Previous / Next walk the rows on this page. A record that has just been approved is no
@@ -303,12 +412,13 @@ const ForApproval: React.FC = () => {
   const columnCount = list.category === 'transactions' ? transactionColumns.length : jobOrderColumns.length;
   const selectedKey = selected ? forApprovalRecordKey(selected) : null;
   const categoryLabel = list.category === 'transactions' ? 'transactions' : 'job orders';
+  const primaryColor = colorPalette?.primary || '#7c3aed';
 
   const renderRows = () => {
     if (list.rows.length === 0) {
       return (
         <tr>
-          <td colSpan={columnCount} className={`px-4 py-12 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+          <td colSpan={columnCount + (batchMode ? 1 : 0)} className={`px-4 py-12 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             {debouncedSearch
               ? `No ${categoryLabel} awaiting approval match "${debouncedSearch}".`
               : `No ${categoryLabel} awaiting approval.`}
@@ -324,12 +434,30 @@ const ForApproval: React.FC = () => {
         ? transactionColumns.map(column => column.render(record.transaction))
         : jobOrderColumns.map(column => column.render(record.jobOrder));
 
+      // In batch mode a click selects the row instead of opening its panel, as on the Transaction List.
+      const transaction = record.category === 'transactions' ? record.transaction : null;
+      const isPending = transaction ? isPendingTransaction(transaction) : false;
+      const isChecked = batchMode && transaction ? selectedTransactionIds.includes(String(transaction.id)) : false;
+
       return (
         <tr
           key={key}
-          onClick={() => setSelected(record)}
-          className={`border-b transition-colors cursor-pointer ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'} ${selectedKey === key ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''}`}
+          onClick={() => (batchMode && transaction ? toggleTransactionSelection(transaction) : setSelected(record))}
+          className={`border-b transition-colors ${batchMode && !isPending ? 'cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'} ${!isChecked && selectedKey === key ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : !isChecked && batchMode && !isPending ? (isDarkMode ? 'bg-gray-800 opacity-50' : 'bg-gray-200 opacity-50') : ''}`}
+          style={isChecked ? { backgroundColor: `${primaryColor}33` } : undefined}
         >
+          {batchMode && transaction && (
+            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={() => toggleTransactionSelection(transaction)}
+                disabled={!isPending}
+                className={`w-4 h-4 rounded border-gray-300 ${isPending ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                style={{ accentColor: primaryColor }}
+              />
+            </td>
+          )}
           {cells.map((cell, cellIndex) => (
             <td key={cellIndex} className={bodyCellClass(cellIndex, cells.length)}>{cell}</td>
           ))}
@@ -416,6 +544,53 @@ const ForApproval: React.FC = () => {
             >
               <RefreshCw className={`h-5 w-5 ${isBusy ? 'animate-spin' : ''}`} />
             </button>
+            {canBatchApprove && category === 'transactions' && (
+              <button
+                onClick={() => (isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true))}
+                className="p-2 md:px-4 md:py-2 rounded flex items-center justify-center transition-colors text-white flex-shrink-0"
+                style={{ backgroundColor: isBatchApproveMode ? '#dc2626' : primaryColor }}
+                onMouseEnter={(e) => {
+                  if (isBatchApproveMode) {
+                    e.currentTarget.style.backgroundColor = '#b91c1c';
+                  } else if (colorPalette?.accent) {
+                    e.currentTarget.style.backgroundColor = colorPalette.accent;
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = isBatchApproveMode ? '#dc2626' : primaryColor;
+                }}
+                title={isBatchApproveMode ? 'Cancel Approve' : 'Batch Approve'}
+              >
+                {isBatchApproveMode ? (
+                  <>
+                    <X className="h-5 w-5 md:h-4 md:w-4 md:mr-2" />
+                    <span className="hidden md:inline">Cancel Approve</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCheck className="h-5 w-5 md:h-4 md:w-4 md:mr-2" />
+                    <span className="hidden md:inline">Batch Approve</span>
+                  </>
+                )}
+              </button>
+            )}
+            {canBatchApprove && batchMode && (
+              <button
+                onClick={handleBatchApprove}
+                disabled={selectedTransactionIds.length === 0 || isApproving}
+                className={`px-4 py-2 rounded flex items-center transition-colors flex-shrink-0 whitespace-nowrap ${selectedTransactionIds.length === 0 || isApproving
+                  ? isDarkMode
+                    ? 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
+                    : 'bg-gray-300 text-gray-500 border border-gray-400 cursor-not-allowed'
+                  : isDarkMode
+                    ? 'bg-green-600 text-white border border-green-700 hover:bg-green-700'
+                    : 'bg-green-500 text-white border border-green-600 hover:bg-green-600'
+                  }`}
+              >
+                <Check className="h-4 w-4 mr-2" />
+                <span>{isApproving ? 'Approving...' : `Approve (${selectedTransactionIds.length})`}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -449,6 +624,19 @@ const ForApproval: React.FC = () => {
               <table className="w-max min-w-full text-sm border-separate border-spacing-0">
                 <thead>
                   <tr className="sticky top-0 z-10">
+                    {batchMode && (
+                      <th className={`px-4 py-3 text-left ${isDarkMode ? 'text-gray-400 bg-gray-800' : 'text-gray-600 bg-gray-100'}`}>
+                        <input
+                          type="checkbox"
+                          checked={allPageSelected}
+                          onChange={toggleSelectAll}
+                          disabled={pendingIdsOnPage.length === 0}
+                          title="Select all on this page"
+                          className="w-4 h-4 rounded border-gray-300 cursor-pointer"
+                          style={{ accentColor: primaryColor }}
+                        />
+                      </th>
+                    )}
                     {(list.category === 'transactions' ? transactionColumns : jobOrderColumns).map((column, index) => (
                       <th key={column.label} className={headerCellClass(index, columnCount)}>{column.label}</th>
                     ))}
@@ -520,6 +708,101 @@ const ForApproval: React.FC = () => {
             colorPalette={colorPalette}
             paymentMethods={paymentMethods}
           />
+        </div>
+      )}
+
+      <LoadingModalGlobal
+        isOpen={isApproving}
+        type="loading"
+        title="Approving"
+        message="Approving transactions..."
+        loadingPercentage={50}
+        isDarkMode={isDarkMode}
+        colorPalette={colorPalette}
+      />
+
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className={`rounded-lg p-6 max-w-md w-full mx-4 border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+            <h3 className={`text-xl font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Confirm Batch Approval</h3>
+            <p className={`mb-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              Are you sure you want to approve {selectedTransactionIds.length} transaction(s)? This will update account balances and apply payments to invoices.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmBatchApproval}
+                className="text-white px-6 py-2 rounded transition-colors"
+                style={{ backgroundColor: colorPalette?.primary || '#22c55e' }}
+                onMouseEnter={(e) => {
+                  if (colorPalette?.accent) e.currentTarget.style.backgroundColor = colorPalette.accent;
+                }}
+                onMouseLeave={(e) => {
+                  if (colorPalette?.primary) e.currentTarget.style.backgroundColor = colorPalette.primary;
+                }}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSuccessModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className={`rounded-lg p-6 max-w-md w-full mx-4 border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+            <h3 className="text-xl font-semibold mb-4 text-green-500">Success</h3>
+            <p className={`mb-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{approvalMessage}</p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowSuccessModal(false)}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded transition-colors"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFailedModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className={`rounded-lg p-6 max-w-2xl w-full mx-4 border ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+            <h3 className="text-xl font-semibold mb-4 text-red-500">Batch Approval Results</h3>
+            <p className={`mb-4 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{approvalMessage}</p>
+
+            {approvalDetails?.failed?.length > 0 && (
+              <div className={`mb-6 p-4 rounded max-h-96 overflow-y-auto ${isDarkMode ? 'bg-gray-900' : 'bg-gray-100'}`}>
+                <h4 className={`font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Failed Transactions:</h4>
+                <ul className="space-y-2">
+                  {approvalDetails.failed.map((fail: any, index: number) => {
+                    const accountNo = accountNoForTransaction(fail.transaction_id);
+                    return (
+                      <li key={index} className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                        <span className="font-medium">
+                          {accountNo ? `${accountNo} (ID: ${fail.transaction_id})` : `ID: ${fail.transaction_id}`}
+                        </span> - {fail.reason}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowFailedModal(false)}
+                className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

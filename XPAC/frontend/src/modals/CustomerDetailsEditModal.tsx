@@ -111,8 +111,8 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [editType, setEditType] = useState<'customer_details' | 'billing_details' | 'technical_details'>(initialEditType);
-  // Account Balance, Prepaid Expiration and PPPoE Password are shown and saved for SuperAdmin
-  // only; the backend ignores them from anyone else.
+  // Prepaid Expiration and PPPoE Password are shown and saved for SuperAdmin only, Account
+  // Balance for Administrator and SuperAdmin; the backend ignores them from anyone else.
   const { isSuperAdmin, isAdministrator } = usePermissions();
 
   const [formData, setFormData] = useState<any>({});
@@ -319,7 +319,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
           prepaid_expires_at: formatDateTimeForInput(
             recordData.prepaid_expires_at || recordData.prepaidExpiration || recordData.billingAccount?.prepaid_expires_at || ''
           ),
-          // Kept as a string for the text input. SuperAdmin only.
+          // Kept as a string for the text input. Administrator and SuperAdmin only.
           account_balance: (() => {
             const stored = recordData.account_balance ?? recordData.accountBalance ?? recordData.balance ?? recordData.billingAccount?.account_balance;
             return stored === undefined || stored === null || stored === '' ? '' : Number(stored).toFixed(2);
@@ -942,7 +942,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         }
       }
 
-      if (isSuperAdmin && String(formData.account_balance ?? '').trim() !== ''
+      if (isAdministrator && String(formData.account_balance ?? '').trim() !== ''
         && isNaN(Number(formData.account_balance))) {
         newErrors.account_balance = 'Account Balance must be a number';
       }
@@ -1049,13 +1049,16 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
       const dataWithUpdatedBy: any = { ...formData, updatedBy: loggedInUserId, autoConnectionCheck: true };
 
       /*
-       * Account Balance, Prepaid Expiration and PPPoE Password are SuperAdmin-only. For anyone
-       * else they are stripped before the request: the fields are not on screen for them, and the
-       * backend would drop them anyway but log a warning for a change nobody made. Prepaid
-       * Expiration is only sent for a prepaid account, the only kind that shows it.
+       * Prepaid Expiration and PPPoE Password are SuperAdmin-only, Account Balance is
+       * Administrator/SuperAdmin-only. For anyone else they are stripped before the request: the
+       * fields are not on screen for them, and the backend would drop them anyway but log a
+       * warning for a change nobody made. Prepaid Expiration is only sent for a prepaid account,
+       * the only kind that shows it.
        */
-      if (!isSuperAdmin) {
+      if (!isAdministrator) {
         delete dataWithUpdatedBy.account_balance;
+      }
+      if (!isSuperAdmin) {
         delete dataWithUpdatedBy.pppoe_password;
       }
       if (!isSuperAdmin || !isPrepaidBillingType) {
@@ -1795,9 +1798,9 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   )}
                 </div>
 
-                {/* Account Balance — SuperAdmin only. Written straight to the billing account; the
-                    change is recorded in the account's details update log. */}
-                {isSuperAdmin && (
+                {/* Account Balance — Administrator and SuperAdmin only. Written straight to the
+                    billing account; the change is recorded in the account's details update log. */}
+                {isAdministrator && (
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                       Account Balance
@@ -1817,7 +1820,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     </div>
                     {errors.account_balance && <p className="text-red-500 text-xs mt-1">{errors.account_balance}</p>}
                     <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                      A negative amount is a credit. SuperAdmin only.
+                      A negative amount is a credit. Administrator and SuperAdmin only.
                     </p>
                   </div>
                 )}

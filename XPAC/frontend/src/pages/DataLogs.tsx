@@ -19,7 +19,7 @@ const hexToRgba = (hex: string, opacity: number) => {
 
 const allColumns = [
   { key: 'log_type', label: 'Log Type', width: 'min-w-44' },
-  { key: 'id', label: 'ID', width: 'min-w-16' },
+  { key: 'account_no', label: 'Account No.', width: 'min-w-32' },
   { key: 'old_details', label: 'Old Details', width: 'min-w-[340px]' },
   { key: 'new_details', label: 'New Details', width: 'min-w-[340px]' },
   { key: 'created_at', label: 'Created At', width: 'min-w-44' },
@@ -36,7 +36,7 @@ const allColumns = [
  */
 const funnelColumns: FunnelColumn[] = [
   { key: 'log_type', label: 'Log Type', dataType: 'checklist' },
-  { key: 'id', label: 'ID', dataType: 'varchar' },
+  { key: 'account_no', label: 'Account No.', dataType: 'varchar' },
   { key: 'old_details', label: 'Old Details', dataType: 'text' },
   { key: 'new_details', label: 'New Details', dataType: 'text' },
   { key: 'created_at', label: 'Created At', dataType: 'datetime' },
@@ -44,6 +44,38 @@ const funnelColumns: FunnelColumn[] = [
   { key: 'updated_at', label: 'Updated At', dataType: 'datetime' },
   { key: 'updated_by', label: 'Updated By', dataType: 'varchar' },
 ];
+
+/**
+ * The identifier column was 'id' before it showed the Account No. Saved column visibility and
+ * order are stored by key, so carry an existing 'id' over to 'account_no' — otherwise the column
+ * would silently disappear for everyone who has used the page before. A saved 'id' filter is
+ * dropped instead: its values are log ids, which mean nothing against an account number, and it
+ * would keep filtering on a column no longer shown. Runs once per load, before the hooks read
+ * the saved values, and is a no-op once nothing holds 'id'.
+ */
+const renameSavedIdColumn = () => {
+  for (const storageKey of ['dataLogsVisibleColumns', 'dataLogsColumnOrder']) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (Array.isArray(saved) && saved.includes('id')) {
+        localStorage.setItem(storageKey, JSON.stringify(saved.map(k => (k === 'id' ? 'account_no' : k))));
+      }
+    } catch {
+      // Unreadable or unavailable storage: useTableColumns falls back to the defaults.
+    }
+  }
+
+  try {
+    const filters = JSON.parse(localStorage.getItem('dataLogsFunnelFilters') || 'null');
+    if (filters && typeof filters === 'object' && 'id' in filters) {
+      delete filters.id;
+      localStorage.setItem('dataLogsFunnelFilters', JSON.stringify(filters));
+    }
+  } catch {
+    // Unreadable or unavailable storage: useFunnelFilter starts with no filters.
+  }
+};
+renameSavedIdColumn();
 
 const DataLogs: React.FC = () => {
   const { logRecords, isLoading, error, fetchLogRecords, refreshLogRecords } = useDataLogsStore();
@@ -88,7 +120,7 @@ const DataLogs: React.FC = () => {
   } = useTableColumns({
     storageKeyPrefix: 'dataLogs',
     allColumns,
-    defaultVisibleColumns: ['log_type', 'id', 'created_at', 'created_by', 'updated_at', 'updated_by'],
+    defaultVisibleColumns: ['log_type', 'account_no', 'created_at', 'created_by', 'updated_at', 'updated_by'],
   });
 
   // Pagination
@@ -176,12 +208,12 @@ const DataLogs: React.FC = () => {
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase();
         const matchType = row.log_type.toLowerCase().includes(q);
-        const matchId = row.id.toLowerCase().includes(q);
+        const matchAccountNo = (row.account_no || '').toLowerCase().includes(q);
         const matchCreatedBy = row.created_by.toLowerCase().includes(q);
         const matchUpdatedBy = row.updated_by.toLowerCase().includes(q);
         const matchOld = row.old_details ? row.old_details.toLowerCase().includes(q) : false;
         const matchNew = row.new_details ? row.new_details.toLowerCase().includes(q) : false;
-        return matchType || matchId || matchCreatedBy || matchUpdatedBy || matchOld || matchNew;
+        return matchType || matchAccountNo || matchCreatedBy || matchUpdatedBy || matchOld || matchNew;
       }
 
       return true;
@@ -192,7 +224,7 @@ const DataLogs: React.FC = () => {
         const getVal = (t: any) => {
           switch (sortColumn) {
             case 'log_type': return t.log_type || '';
-            case 'id': return t.id || '';
+            case 'account_no': return t.account_no || '';
             case 'old_details': return typeof t.old_details === 'string' ? t.old_details : JSON.stringify(t.old_details || '');
             case 'new_details': return typeof t.new_details === 'string' ? t.new_details : JSON.stringify(t.new_details || '');
             case 'created_at': return t.created_at || '';
@@ -345,10 +377,10 @@ const DataLogs: React.FC = () => {
             {row.log_type}
           </span>
         );
-      case 'id':
+      case 'account_no':
         return (
           <span className={`text-xs font-bold ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
-            {row.id}
+            {row.account_no || '-'}
           </span>
         );
       case 'old_details':
@@ -825,7 +857,7 @@ const DetailsCompareModal: React.FC<DetailsCompareModalProps> = ({
                 {row.log_type}
               </span>
               <span className={`text-xs font-semibold ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                ID: {row.id}
+                Account No.: {row.account_no || '-'}
               </span>
             </div>
             <h3 className={`text-lg font-bold mt-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>

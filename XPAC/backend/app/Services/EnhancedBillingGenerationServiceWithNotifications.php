@@ -1558,7 +1558,11 @@ class EnhancedBillingGenerationServiceWithNotifications
         return $result;
     }
 
-    public function generateInitialBillingForAccount(BillingAccount $account, int $userId): array
+    /**
+     * @param bool $notify false creates the bill without the email/SMS notice — the SuperAdmin
+     *                     direct add creates customers without messaging them.
+     */
+    public function generateInitialBillingForAccount(BillingAccount $account, int $userId, bool $notify = true): array
     {
         $generationDate = Carbon::now('Asia/Manila');
         $result = [
@@ -1603,7 +1607,9 @@ class EnhancedBillingGenerationServiceWithNotifications
 
             // 3. Notify ONCE — only when we actually created something new this run.
             if ($soa || $invoice) {
-                $this->queueNotification($account, $invoice, $soa);
+                if ($notify) {
+                    $this->queueNotification($account, $invoice, $soa);
+                }
             } else {
                 $result['skipped'] = true;
             }

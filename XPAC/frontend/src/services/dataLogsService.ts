@@ -2,6 +2,8 @@ import apiClient from '../config/api';
 
 export interface DataLogRecord {
     id: string;
+    /** The customer's account number, or null when the entry is not tied to an account. */
+    account_no: string | null;
     log_type: string;
     old_details: string | null;
     new_details: string | null;

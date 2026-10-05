@@ -2459,6 +2459,11 @@ Route::put('/customer-detail/{accountNo}/customer', [\App\Http\Controllers\Custo
 Route::put('/customer-detail/{accountNo}/billing', [\App\Http\Controllers\CustomerDetailUpdateController::class , 'updateBillingDetails']);
 Route::put('/customer-detail/{accountNo}/technical', [\App\Http\Controllers\CustomerDetailUpdateController::class , 'updateTechnicalDetails']);
 
+// SuperAdmin "+ Add Customer": a complete customer and its RADIUS account without an application
+// or job order. SuperAdmin only — enforced here and again in the controller, not just hidden in
+// the UI.
+Route::middleware('role:superadmin')->post('/customers/direct', [\App\Http\Controllers\DirectCustomerController::class, 'store']);
+
 // Customer Management Routes
 Route::prefix('customers')->group(function () {
     Route::get('/', [\App\Http\Controllers\CustomerController::class , 'index']);
