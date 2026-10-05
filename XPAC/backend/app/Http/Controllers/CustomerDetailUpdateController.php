@@ -95,8 +95,40 @@ class CustomerDetailUpdateController extends Controller
                 'housingStatus' => 'nullable|string|max:255',
                 'referredBy' => 'nullable|string|max:255',
                 'groupName' => 'nullable|string|max:255',
-                'houseFrontPicture' => 'nullable'
+                'houseFrontPicture' => 'nullable',
+                // A plan_list.plan_name. Optional: blank keeps the current plan.
+                'plan' => 'nullable|string|max:255',
             ]);
+
+            // Resolved before anything is written, so a plan that is not in plan_list fails the
+            // whole save instead of saving everything else and silently dropping the plan.
+            // Administrator and SuperAdmin only. From anyone else the plan is dropped (and logged)
+            // rather than rejected, so the rest of their customer-details edit still saves.
+            $canEditPlan = in_array(
+                (int) (auth()->user()->role_id ?? 0),
+                [\App\Models\Role::ADMINISTRATOR, \App\Models\Role::SUPER_ADMIN],
+                true
+            );
+            if (!empty($validated['plan']) && !$canEditPlan) {
+                Log::warning('Ignored plan on customer details update — Administrator/SuperAdmin only', [
+                    'account_no' => $accountNo,
+                    'submitted_value' => $validated['plan'],
+                    'user_id' => auth()->id(),
+                ]);
+                $validated['plan'] = null;
+            }
+
+            $selectedPlan = null;
+            if (!empty($validated['plan'])) {
+                $selectedPlan = Plan::where('plan_name', trim($validated['plan']))->first();
+                if (!$selectedPlan) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Validation failed',
+                        'errors' => ['plan' => ["The plan '{$validated['plan']}' is not in the plan list."]],
+                    ], 422);
+                }
+            }
 
             DB::beginTransaction();
 
@@ -121,6 +153,8 @@ class CustomerDetailUpdateController extends Controller
                 'referred_by' => $customer->referred_by,
                 'group_name' => $customer->group_name,
                 'house_front_picture_url' => $customer->house_front_picture_url,
+                'desired_plan' => $customer->desired_plan,
+                'plan_id' => $billingAccount->plan_id,
             ];
 
             $houseFrontPictureUrl = $customer->house_front_picture_url;
@@ -157,6 +191,15 @@ class CustomerDetailUpdateController extends Controller
                 'group_name' => $validated['groupName'] ?? $customer->group_name,
                 'house_front_picture_url' => $houseFrontPictureUrl,
             ]);
+
+            // The plan is held twice: customers.desired_plan is what billing prices from and
+            // RADIUS groups by, billing_accounts.plan_id is the plan_list link. Both move together.
+            // The RADIUS group follows after the commit (pushPlanGroupToRadius).
+            $planChanged = $selectedPlan && $selectedPlan->plan_name !== $customer->desired_plan;
+            if ($selectedPlan) {
+                $customer->update(['desired_plan' => $selectedPlan->plan_name]);
+                $billingAccount->update(['plan_id' => $selectedPlan->id]);
+            }
 
             if ($request->has('updatedBy')) {
                 $customer->update(['updated_by' => $request->input('updatedBy')]);
@@ -211,6 +254,8 @@ class CustomerDetailUpdateController extends Controller
                 'referred_by' => $customer->referred_by,
                 'group_name' => $customer->group_name,
                 'house_front_picture_url' => $customer->house_front_picture_url,
+                'desired_plan' => $customer->desired_plan,
+                'plan_id' => $billingAccount->fresh()->plan_id,
             ];
 
             $changedOldDetails = [];
@@ -269,12 +314,45 @@ class CustomerDetailUpdateController extends Controller
                 'customer_id' => $customer->id
             ]);
 
+            // After the commit, so a RADIUS problem can never roll back the name edit itself.
+            $pppoeRename = null;
+            if ($oldDetails['first_name'] !== $customer->first_name || $oldDetails['last_name'] !== $customer->last_name) {
+                $pppoeRename = $this->renamePppoeForNameChange(
+                    $billingAccount,
+                    $oldDetails,
+                    $customer,
+                    (string) ($request->input('updatedBy') ?: ($request->user()->email_address ?? 'System'))
+                );
+            }
+
+            // After the rename, so it runs against the username the account ends up with.
+            $planRadius = null;
+            if ($planChanged) {
+                $planRadius = $this->pushPlanGroupToRadius(
+                    $billingAccount->fresh(),
+                    $selectedPlan->plan_name,
+                    (string) ($request->input('updatedBy') ?: (auth()->user()->email_address ?? 'System'))
+                );
+            }
+
             $this->broadcastCustomerUpdated($accountNo, 'customer_details');
+
+            // Last, so a reconnect runs against the username and plan the account ends up with.
+            $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'customer_details');
 
             return response()->json([
                 'success' => true,
                 'message' => 'Customer details updated successfully',
-                'data' => $customer->fresh()
+                'data' => $customer->fresh(),
+                // null when the plan did not change. Otherwise what happened to the RADIUS group;
+                // radius_message / radius_queued are what the edit modal already shows.
+                'radius_message' => $planRadius['message'] ?? null,
+                'radius_queued' => $planRadius['queued'] ?? false,
+                // null when the name did not change. Otherwise what happened to the PPPoE username:
+                // renamed | queued (in the system, RADIUS will retry) | failed (nothing renamed) |
+                // unchanged | skipped.
+                'pppoe_rename' => $pppoeRename,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -297,6 +375,210 @@ class CustomerDetailUpdateController extends Controller
                 'message' => 'Failed to update customer details',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Move the account's RADIUS user onto the group of the plan it was just changed to.
+     *
+     * Only for an account that should have service (billing status Active or VIP) and is not
+     * restricted on the router: pushing a plan group onto a restricted user would reconnect a
+     * customer who was cut off. Those keep their group, and pick up the new plan when they are
+     * reconnected — the reconnect paths read customers.desired_plan.
+     *
+     * Never throws: the plan change is already committed. A RADIUS failure is queued for the
+     * ProcessRadiusQueue cron, like every other RADIUS change in this controller.
+     *
+     * @return array{message: string, queued: bool}
+     */
+    private function pushPlanGroupToRadius(BillingAccount $billingAccount, string $planName, string $updatedBy): array
+    {
+        $accountNo = $billingAccount->account_no;
+
+        try {
+            $username = trim((string) DB::table('technical_details')
+                ->where('account_id', $billingAccount->id)
+                ->value('username'));
+
+            if ($username === '') {
+                return ['message' => 'Plan saved. No PPPoE username on file, so the RADIUS group was not changed.', 'queued' => false];
+            }
+
+            $liveStatusIds = DB::table('billing_status')->whereIn('status_name', ['Active', 'VIP'])->pluck('id')
+                ->map(fn ($id) => (int) $id)->all();
+            if (!in_array((int) $billingAccount->billing_status_id, $liveStatusIds, true)) {
+                return ['message' => 'Plan saved. The account is not active, so its RADIUS group was left as is; it moves to the new plan when reconnected.', 'queued' => false];
+            }
+
+            $radiusService = app(\App\Services\ManualRadiusOperationsService::class);
+            $currentGroup = $radiusService->findUserGroup($username);
+            if ($currentGroup !== null && in_array(strtolower(trim($currentGroup)), ['restricted', 'disconnected'], true)) {
+                return ['message' => "Plan saved. The account is restricted in RADIUS ({$currentGroup}), so its group was left as is; it moves to the new plan when reconnected.", 'queued' => false];
+            }
+        } catch (\Throwable $e) {
+            Log::error('Plan RADIUS push aborted — could not read the account', ['account_no' => $accountNo, 'error' => $e->getMessage()]);
+            return ['message' => 'Plan saved, but the RADIUS group could not be checked. It will be corrected by the nightly RADIUS sync.', 'queued' => false];
+        }
+
+        $params = [
+            'accountNumber' => $accountNo,
+            'username' => $username,
+            'plan' => $planName,
+            'updatedBy' => $updatedBy,
+            // A plan change is not a reconnect: keep the billing status as it is.
+            'preserveBillingStatus' => true,
+            'failWhenNotApplied' => true,
+        ];
+
+        $error = null;
+        try {
+            $result = $radiusService->updateGroup($params);
+            if (($result['status'] ?? '') === 'success') {
+                Log::info('Plan change pushed to RADIUS', ['account_no' => $accountNo, 'username' => $username, 'plan' => $planName]);
+                return ['message' => "Plan saved and the RADIUS group changed to {$planName}.", 'queued' => false];
+            }
+            $error = $result['message'] ?? 'RADIUS group update returned failure';
+        } catch (\Throwable $e) {
+            $error = $e->getMessage();
+        }
+
+        Log::channel('radiusrelated')->error('[PLAN CHANGE RADIUS FAILED - QUEUED] Account: ' . $accountNo . ' - User: ' . $username . ' - Plan: ' . $planName . ' - Error: ' . $error);
+
+        $queuedId = \App\Services\RadiusQueueService::queue([
+            'organization_id' => $billingAccount->organization_id ?? null,
+            'source_type'     => 'customer_plan_change',
+            'source_id'       => $billingAccount->id,
+            'account_no'      => $accountNo,
+            'operation'       => 'update_group',
+            'params'          => $params,
+            'last_error'      => $error,
+            'created_by'      => $updatedBy,
+        ]);
+
+        return $queuedId
+            ? ['message' => 'Plan saved. The RADIUS group change has been queued and will be processed automatically.', 'queued' => true]
+            : ['message' => 'Plan saved, but the RADIUS group change failed and could not be queued. Please notify an administrator.', 'queued' => false];
+    }
+
+    /**
+     * Rename the account's PPPoE username after its customer's first/last name was edited.
+     *
+     * The username is built from the name (PppoeUsernameService), so it follows the name: only the
+     * name slice of the current username is replaced (renameForNameChange), then the rename goes
+     * through ManualRadiusOperationsService::updateCredentials() — technical_details, job_orders
+     * and the RADIUS user — exactly like a service-order migration, password unchanged. If RADIUS
+     * cannot be reached the rename is queued for automatic retry, as service orders do.
+     *
+     * Renaming kicks the live PPPoE session; the customer's router must be updated with the new
+     * username before they can reconnect. The edit modal warns about this.
+     *
+     * Never throws: the name edit has already been saved.
+     *
+     * @return array{status:string, old_username:?string, new_username:?string, message:string}
+     */
+    private function renamePppoeForNameChange(BillingAccount $billingAccount, array $oldDetails, Customer $customer, string $updatedBy): array
+    {
+        $outcome = fn (string $status, ?string $old, ?string $new, string $message) =>
+            ['status' => $status, 'old_username' => $old, 'new_username' => $new, 'message' => $message];
+
+        try {
+            $oldUsername = trim((string) DB::table('technical_details')
+                ->where('account_id', $billingAccount->id)
+                ->value('username'));
+
+            if ($oldUsername === '') {
+                return $outcome('skipped', null, null, 'This account has no PPPoE username yet, so there was nothing to rename.');
+            }
+
+            $pppoe = new \App\Services\PppoeUsernameService();
+            $newUsername = $pppoe->renameForNameChange(
+                $oldUsername,
+                ['first_name' => $oldDetails['first_name'] ?? '', 'middle_initial' => $oldDetails['middle_initial'] ?? '', 'last_name' => $oldDetails['last_name'] ?? ''],
+                ['first_name' => $customer->first_name ?? '', 'middle_initial' => $customer->middle_initial ?? '', 'last_name' => $customer->last_name ?? '']
+            );
+
+            if ($newUsername === null) {
+                Log::warning('PPPoE rename skipped: old name not found in username', [
+                    'account_no' => $billingAccount->account_no,
+                    'username' => $oldUsername,
+                ]);
+                return $outcome('skipped', $oldUsername, null,
+                    "The PPPoE username '{$oldUsername}' does not contain the old name in the expected form, so it was left unchanged. Rename it manually if needed.");
+            }
+
+            if ($newUsername === $oldUsername) {
+                return $outcome('unchanged', $oldUsername, $oldUsername, 'The PPPoE username does not use the part of the name that changed.');
+            }
+
+            // Another account may already hold this username; take the next free one, the same way
+            // generateUniqueUsername() suffixes a clash.
+            $isTaken = fn (string $candidate) =>
+                DB::table('technical_details')->where('username', $candidate)->where('account_id', '!=', $billingAccount->id)->exists()
+                || DB::table('job_orders')->where('pppoe_username', $candidate)->where(function ($q) use ($billingAccount) {
+                    $q->whereNull('account_id')->orWhere('account_id', '!=', $billingAccount->id);
+                })->exists();
+
+            $base = $newUsername;
+            for ($suffix = 1; $isTaken($newUsername) && $suffix <= 999; $suffix++) {
+                $newUsername = $base . $suffix;
+            }
+
+            $params = [
+                'accountNumber' => $billingAccount->account_no,
+                'username' => $oldUsername,
+                'newUsername' => $newUsername,
+                'newPassword' => null,
+                'updatedBy' => $updatedBy,
+            ];
+
+            $result = app(\App\Services\ManualRadiusOperationsService::class)->updateCredentials($params);
+
+            if (($result['status'] ?? '') === 'success') {
+                Log::info('PPPoE username renamed after customer name change', [
+                    'account_no' => $billingAccount->account_no, 'old' => $oldUsername, 'new' => $newUsername,
+                ]);
+                return $outcome('renamed', $oldUsername, $newUsername,
+                    "PPPoE username renamed from '{$oldUsername}' to '{$newUsername}'. The customer's router must be updated with the new username.");
+            }
+
+            // updateCredentials() normally writes the database before RADIUS, so a RADIUS failure
+            // leaves the new username in the system and only the RADIUS side needs a retry. But it
+            // can also fail BEFORE any write (no RADIUS servers configured, a database error) —
+            // then nothing was renamed, and saying otherwise would send staff to reconfigure the
+            // customer's router to a username that exists nowhere. Check what actually happened.
+            $dbRenamed = DB::table('technical_details')
+                ->where('account_id', $billingAccount->id)
+                ->value('username') === $newUsername;
+
+            if (!$dbRenamed) {
+                Log::warning('PPPoE rename after customer name change did not happen', [
+                    'account_no' => $billingAccount->account_no,
+                    'error' => $result['message'] ?? null,
+                ]);
+                return $outcome('failed', $oldUsername, null,
+                    "The PPPoE username was NOT renamed and is still '{$oldUsername}': " . ($result['message'] ?? 'unknown error')
+                    . '. The customer\'s router does not need changing.');
+            }
+
+            \App\Services\RadiusQueueService::queue([
+                'organization_id' => $billingAccount->organization_id ?? null,
+                'source_type' => 'customer_details',
+                'source_id' => $customer->id,
+                'account_no' => $billingAccount->account_no,
+                'operation' => 'update_credentials',
+                'params' => $params,
+                'last_error' => $result['message'] ?? 'RADIUS update failed',
+                'created_by' => $updatedBy,
+            ]);
+
+            return $outcome('queued', $oldUsername, $newUsername,
+                "PPPoE username changed to '{$newUsername}' in the system, but RADIUS could not be updated right now; it will retry automatically.");
+        } catch (\Throwable $e) {
+            Log::error('PPPoE rename after customer name change failed', [
+                'account_no' => $billingAccount->account_no,
+                'error' => $e->getMessage(),
+            ]);
+            return $outcome('skipped', null, null, 'The PPPoE username could not be renamed: ' . $e->getMessage());
         }
     }
 
@@ -325,12 +607,15 @@ class CustomerDetailUpdateController extends Controller
                 'withholding_enabled' => 'nullable|boolean',
                 // Percentage of the VAT-inclusive subtotal, e.g. 5 / 10 / 15.
                 'withholding_percentage' => 'nullable|numeric|min:0|max:100',
-                // ACCEPTED BUT IGNORED — see the write block below. Kept in the validator so a
-                // stale client posting the field gets the same 422 for a malformed date as it
-                // always did, rather than having its whole submission behave differently
-                // depending on which build it is running.
+                // Written for a SuperAdmin only, ignored for everyone else — see the write block
+                // below. Kept in the validator so a stale client posting the field gets the same
+                // 422 for a malformed date as it always did.
                 'prepaid_expires_at' => 'nullable|date',
+                // SuperAdmin only, like prepaid_expires_at.
+                'account_balance' => 'nullable|numeric',
             ]);
+
+            $isSuperAdmin = \App\Support\AgentAccess::isSuperAdmin(auth()->user());
 
             DB::beginTransaction();
 
@@ -356,6 +641,7 @@ class CustomerDetailUpdateController extends Controller
                 'withholding_enabled' => $billingAccount->withholding_enabled,
                 'withholding_percentage' => $billingAccount->withholding_percentage,
                 'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
+                'account_balance' => $billingAccount->account_balance,
             ];
 
             // Resolve billing_status_id
@@ -435,6 +721,13 @@ class CustomerDetailUpdateController extends Controller
                 $updateData['generation_type'] = $generationType;
             }
 
+            // Prepaid <-> Postpaid. Judged on what the type means, not its spelling, so a row moving
+            // from 'Pre Paid' to 'Prepaid' is not a change. After the commit this reconnects or
+            // disconnects the account to match its new type — see BillingTypeSwitchService.
+            $billingTypeChanged = !empty($updateData['generation_type'])
+                && BillingAccount::isPrepaidType($updateData['generation_type'])
+                    !== BillingAccount::isPrepaidType($billingAccount->generation_type);
+
             // Keep vat_type and vat_enabled in lockstep. Billing generation reads vat_enabled, so
             // editing only the legacy text here would otherwise silently change nothing.
             // 'Excluded Vat' is the only LEGACY value that still adds VAT — old vocabulary, not the
@@ -469,28 +762,73 @@ class CustomerDetailUpdateController extends Controller
             }
 
             /*
-             * prepaid_expires_at is NOT writable here, for any role.
+             * prepaid_expires_at and account_balance are writable here by a SuperAdmin only.
              *
-             * A single mistyped date on this form could hand out — or take away — months of service
-             * with no record of who did it or why. Adjustments now go through the Prepaid Override
-             * approval queue instead (Billing -> Prepaid Override), where they are reviewed by a
-             * second person, applied under a lock, and audited on both sides of the move. See
-             * {@see \App\Services\PrepaidOverrideService}.
+             * A single mistyped value on this form could hand out — or take away — months of service
+             * or money owed. Everyone else adjusts them through their own workflows: the Prepaid
+             * Override approval queue (Billing -> Prepaid Override, {@see \App\Services\PrepaidOverrideService})
+             * and transactions. A SuperAdmin edit is still recorded in details_update_logs below,
+             * which is what keeps it from being an unaudited change.
              *
-             * The field is read-only in the UI too, so anything arriving here is either a stale
-             * client or a direct API call. Both are dropped rather than rejected: the rest of the
-             * billing details in the same submission are legitimate and must still save, and
-             * failing the whole request would block ordinary edits on every prepaid account. The
-             * warning is what makes the drop visible instead of silent.
+             * From anyone else the fields are dropped rather than rejected: the rest of the billing
+             * details in the same submission are legitimate and must still save. The warning is
+             * what makes the drop visible instead of silent.
              */
-            if ($request->has('prepaid_expires_at')) {
-                \Log::warning('Ignored prepaid_expires_at on billing details update — use the Prepaid Override workflow', [
-                    'account_no'       => $accountNo,
-                    'submitted_value'  => $request->input('prepaid_expires_at'),
-                    'current_value'    => optional($billingAccount->prepaid_expires_at)->toDateTimeString(),
-                    'user_id'          => $request->user() ? $request->user()->id : null,
-                    'updated_by_input' => $request->input('updatedBy'),
-                ]);
+            foreach (['prepaid_expires_at', 'account_balance'] as $superAdminField) {
+                if (!$request->has($superAdminField)) {
+                    continue;
+                }
+
+                if (!$isSuperAdmin) {
+                    \Log::warning("Ignored {$superAdminField} on billing details update — SuperAdmin only", [
+                        'account_no'       => $accountNo,
+                        'submitted_value'  => $request->input($superAdminField),
+                        'user_id'          => auth()->id(),
+                        'updated_by_input' => $request->input('updatedBy'),
+                    ]);
+                    continue;
+                }
+
+                // Becoming VIP clears the prepaid expiry above; that wins over a date sent with it.
+                if ($superAdminField === 'prepaid_expires_at' && $willBecomeVip) {
+                    continue;
+                }
+
+                if ($superAdminField === 'account_balance') {
+                    // Blank means "leave it", not "zero it": a balance is never unset.
+                    if ($validated['account_balance'] === null || $validated['account_balance'] === '') {
+                        continue;
+                    }
+                    $updateData['account_balance'] = round((float) $validated['account_balance'], 2);
+                    $updateData['balance_update_date'] = now();
+                } else {
+                    $updateData['prepaid_expires_at'] = $validated['prepaid_expires_at'] ?: null;
+                }
+            }
+
+            /*
+             * A SuperAdmin override that gives a lapsed prepaid account a future expiry restores it,
+             * paid or not. The prepaid lapse (AutoDisconnectService::processPrepaidRestrictions) moves
+             * the account to Inactive and restricts it in RADIUS, so a new date alone would leave the
+             * customer cut off with time still on the clock. Only when the account is Inactive and
+             * the SuperAdmin left the status as it was, or picked Active themselves; any other status
+             * they chose is kept. The RADIUS reconnect runs after the commit, below.
+             *
+             * Not when the same save switches the billing type: that is BillingTypeSwitchService's to
+             * settle, and it weighs the balance as well as the days left.
+             */
+            $inactiveStatusId = (int) (DB::table('billing_status')->where('status_name', 'Inactive')->value('id') ?? 4);
+            $activeStatusId = (int) (DB::table('billing_status')->where('status_name', 'Active')->value('id') ?? 1);
+            $restoreLapsedPrepaid = $isSuperAdmin
+                && !$billingTypeChanged
+                && !empty($updateData['prepaid_expires_at'])
+                && \Carbon\Carbon::parse($updateData['prepaid_expires_at'])->isFuture()
+                && BillingAccount::isPrepaidType($updateData['generation_type'] ?? $billingAccount->generation_type)
+                && $oldBillingStatusId === $inactiveStatusId
+                && in_array((int) $billingStatusId, [$inactiveStatusId, $activeStatusId], true);
+
+            if ($restoreLapsedPrepaid) {
+                $updateData['billing_status_id'] = $activeStatusId;
             }
 
             $billingAccount->update($updateData);
@@ -511,6 +849,7 @@ class CustomerDetailUpdateController extends Controller
                 'withholding_enabled' => $billingAccount->withholding_enabled,
                 'withholding_percentage' => $billingAccount->withholding_percentage,
                 'prepaid_expires_at' => $billingAccount->prepaid_expires_at,
+                'account_balance' => $billingAccount->account_balance,
             ];
 
             $changedOldBillingDetails = [];
@@ -606,16 +945,57 @@ class CustomerDetailUpdateController extends Controller
 
                 $radiusMessage = $reconnectOutcome['message'];
                 $radiusQueued = $reconnectOutcome['queued'];
+            } elseif ($restoreLapsedPrepaid) {
+                Log::info('SuperAdmin set a future prepaid expiry on a lapsed account — restoring RADIUS service', [
+                    'account_no' => $accountNo,
+                    'billing_account_id' => $billingAccount->id,
+                    'prepaid_expires_at' => optional($billingAccount->prepaid_expires_at)->toDateTimeString(),
+                    'updated_by' => $request->input('updatedBy'),
+                ]);
+
+                $reconnectOutcome = $this->reconnectAccountForVip(
+                    $billingAccount,
+                    $oldBillingStatusId,
+                    $newBillingStatusId,
+                    $request->input('updatedBy') ?: 'System',
+                    'Prepaid expiry updated and account set to Active',
+                    'Prepaid Expiry Override (SuperAdmin) - Auto Reconnect',
+                    'prepaid_expiry_override'
+                );
+
+                $radiusMessage = $reconnectOutcome['message'];
+                $radiusQueued = $reconnectOutcome['queued'];
+            } elseif ($billingTypeChanged) {
+                // Prepaid <-> Postpaid: reconnect when nothing is owed and (for prepaid) days are
+                // left, disconnect when a balance is owed or (for prepaid) none are. Never throws.
+                $switchOutcome = app(\App\Services\BillingTypeSwitchService::class)->enforce(
+                    $billingAccount,
+                    (string) ($request->input('updatedBy') ?: 'System')
+                );
+
+                $radiusMessage = $switchOutcome['message'];
+                $radiusQueued = $switchOutcome['queued'];
+            }
+
+            // Any other save from the edit modal: reconnect or disconnect a prepaid account to match
+            // its balance and days left. Not when the same save set the billing status by hand —
+            // that choice stands.
+            $autoConnection = null;
+            if (!$becameVip && !$restoreLapsedPrepaid && !$billingTypeChanged
+                && $newBillingStatusId === $oldBillingStatusId) {
+                $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'billing_details');
             }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Billing status updated successfully',
                 'data' => $billingAccount->fresh(),
-                // Null on every non-VIP edit, so existing clients see the response they always
-                // did. Mirrors the shape updateTechnicalDetails() already returns.
+                // Null on an edit that touched neither VIP, the prepaid expiry nor the billing
+                // type, so existing clients see the response they always did. Mirrors the shape
+                // updateTechnicalDetails() already returns.
                 'radius_message' => $radiusMessage,
-                'radius_queued' => $radiusQueued
+                'radius_queued' => $radiusQueued,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -658,13 +1038,17 @@ class CustomerDetailUpdateController extends Controller
                 'lcpnap' => 'nullable|string|max:255',
                 'port' => 'nullable|string|max:255',
                 'vlan' => 'nullable|string|max:255',
-                'usage_type' => 'nullable|string|max:255'
+                'usage_type' => 'nullable|string|max:255',
+                // SuperAdmin only — see where it is written below.
+                'pppoe_password' => 'nullable|string|max:255',
             ]);
+
+            $isSuperAdmin = \App\Support\AgentAccess::isSuperAdmin(auth()->user());
 
             DB::beginTransaction();
 
             $billingAccount = BillingAccount::where('account_no', $accountNo)->firstOrFail();
-            
+
             // Get or create technical details
             $technicalDetail = TechnicalDetail::where('account_id', $billingAccount->id)->first();
             
@@ -725,17 +1109,43 @@ class CustomerDetailUpdateController extends Controller
                 $technicalDetail->username = $oldUsername;
             }
 
-            $technicalDetail->connection_type = (!empty($validated['connection_type'])) ? $validated['connection_type'] : $technicalDetail->connection_type;
+            /*
+             * Connection Type, LCP-NAP, Port and VLAN are optional. Sent empty, the field is cleared
+             * (switching a line off Fiber empties its LCP-NAP, Port and VLAN on the form, and that
+             * has to reach the record); left out of the request, it keeps its stored value, so a
+             * client posting only some fields changes only those. LCP-NAP is cleared as a whole,
+             * and only when lcpnap is sent with LCP and NAP all empty.
+             */
+            $lcpNapCleared = $request->has('lcpnap') && !$newLcpNapInput && !$newLcp && !$newNap;
+
+            $technicalDetail->connection_type = $request->has('connection_type')
+                ? ($validated['connection_type'] ?? null)
+                : $technicalDetail->connection_type;
             $technicalDetail->router_model = (!empty($validated['router_model'])) ? $validated['router_model'] : $technicalDetail->router_model;
             $technicalDetail->router_modem_sn = $validated['router_modem_sn'] ?? $technicalDetail->router_modem_sn;
             $technicalDetail->ip_address = $validated['ip_address'] ?? $technicalDetail->ip_address;
-            $technicalDetail->lcp = $newLcp ?? $technicalDetail->lcp;
-            $technicalDetail->nap = $newNap ?? $technicalDetail->nap;
-            $technicalDetail->port = $validated['port'] ?? $technicalDetail->port;
-            $technicalDetail->vlan = $validated['vlan'] ?? $technicalDetail->vlan;
-            $technicalDetail->lcpnap = $lcpnap;
+            $technicalDetail->lcp = $lcpNapCleared ? null : ($newLcp ?? $technicalDetail->lcp);
+            $technicalDetail->nap = $lcpNapCleared ? null : ($newNap ?? $technicalDetail->nap);
+            $technicalDetail->port = $request->has('port') ? ($validated['port'] ?? null) : $technicalDetail->port;
+            $technicalDetail->vlan = $request->has('vlan') ? ($validated['vlan'] ?? null) : $technicalDetail->vlan;
+            $technicalDetail->lcpnap = $lcpNapCleared ? null : $lcpnap;
             $technicalDetail->usage_type = $validated['usage_type'] ?? $technicalDetail->usage_type;
-            
+
+            // The billing record of the PPPoE password, SuperAdmin only. It is not pushed to RADIUS:
+            // the router holds the password the modem actually logs in with, and changing it there
+            // would take the customer offline until their modem is reconfigured.
+            $oldPppoePassword = $technicalDetail->pppoe_password;
+            if ($request->has('pppoe_password')) {
+                if ($isSuperAdmin) {
+                    $technicalDetail->pppoe_password = $validated['pppoe_password'] ?? null;
+                } else {
+                    Log::warning('Ignored pppoe_password on technical details update — SuperAdmin only', [
+                        'account_no' => $accountNo,
+                        'user_id'    => auth()->id(),
+                    ]);
+                }
+            }
+
             if ($request->has('updatedBy')) {
                 $technicalDetail->updated_by = $request->input('updatedBy');
             }
@@ -743,11 +1153,14 @@ class CustomerDetailUpdateController extends Controller
             $technicalDetail->save();
 
             // Sync username to online_status table if it changed
+            // Only reached when the account had no username before (a rename keeps the old one here
+            // for the RADIUS step), so the username just saved is the one to sync. This used an
+            // undefined $newUsername, which failed every first-time username save.
             if ($technicalDetail->username && $technicalDetail->username !== $oldUsername) {
                 $updatedRows = DB::table('online_status')
                     ->where('account_id', $billingAccount->id)
                     ->update([
-                        'username' => $newUsername,
+                        'username' => $technicalDetail->username,
                         'updated_at' => now(),
                     ]);
 
@@ -755,7 +1168,7 @@ class CustomerDetailUpdateController extends Controller
                     'account_no' => $accountNo,
                     'account_id' => $billingAccount->id,
                     'old_username' => $oldUsername,
-                    'new_username' => $newUsername,
+                    'new_username' => $technicalDetail->username,
                     'rows_updated' => $updatedRows,
                 ]);
             }
@@ -795,6 +1208,12 @@ class CustomerDetailUpdateController extends Controller
                 }
             }
 
+            // Recorded as changed without the values, so the change log never shows a password.
+            if ((string) ($oldPppoePassword ?? '') !== (string) ($technicalDetail->pppoe_password ?? '')) {
+                $changedOldTechnicalDetails['pppoe_password'] = '(hidden)';
+                $changedNewTechnicalDetails['pppoe_password'] = '(changed)';
+            }
+
             if (!empty($changedNewTechnicalDetails) || !empty($changedOldTechnicalDetails)) {
                 // Log to details_update_logs
                 $logUserId = $request->input('updatedBy') ?: ($request->user() ? $request->user()->id : null);
@@ -819,7 +1238,7 @@ class CustomerDetailUpdateController extends Controller
                     'resource_id' => $technicalDetail->id,
                     'additional_data' => [
                         'account_no' => $accountNo,
-                        'updated_fields' => $validated
+                        'updated_fields' => array_diff_key($validated, ['pppoe_password' => true])
                     ]
                 ]
             );
@@ -908,13 +1327,17 @@ class CustomerDetailUpdateController extends Controller
             // stays on it until the queue catches up.
             $this->syncSmartOltForTechnicalDetail($accountNo, $billingAccount, $technicalDetail, $oldTechnicalDetails);
 
+            // After the RADIUS rename, so a reconnect runs against the username that landed.
+            $autoConnection = $this->autoConnectionAfterSave($request, $billingAccount, 'technical_details');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Technical details updated successfully',
                 'data' => $technicalDetail->fresh(),
                 'radius_message' => $radiusMessage,
                 'radius_queued' => $radiusQueued,
-                'radius_queue_failed' => $radiusQueueFailed
+                'radius_queue_failed' => $radiusQueueFailed,
+                'auto_connection' => $autoConnection,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -941,6 +1364,49 @@ class CustomerDetailUpdateController extends Controller
     }
 
     /**
+     * After a save from the Customer Details edit modal, reconnect or disconnect a prepaid account
+     * to match its balance and days left — see BillingTypeSwitchService::decideAfterSave().
+     *
+     * Only for a request the modal flags with autoConnectionCheck, so every other caller of these
+     * endpoints keeps the behaviour it had. Runs after the commit and never throws: the save stands
+     * whatever RADIUS does. When the account's connection changed, the customer-updated event is
+     * sent again so open screens pick up the new status.
+     *
+     * @return array{action: string, message: string, queued: bool}|null null when nothing was done
+     */
+    private function autoConnectionAfterSave(Request $request, BillingAccount $billingAccount, string $editType): ?array
+    {
+        if (!$request->boolean('autoConnectionCheck')) {
+            return null;
+        }
+
+        try {
+            $account = $billingAccount->fresh();
+            if (!$account) {
+                return null;
+            }
+
+            $outcome = app(\App\Services\BillingTypeSwitchService::class)->enforceAfterSave(
+                $account,
+                (string) ($request->input('updatedBy') ?: 'System')
+            );
+        } catch (\Throwable $e) {
+            Log::error('Auto reconnect/disconnect after customer details save failed', [
+                'account_no' => $billingAccount->account_no,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if ($outcome !== null && $outcome['action'] !== 'skipped') {
+            $this->broadcastCustomerUpdated($billingAccount->account_no, $editType);
+        }
+
+        return $outcome;
+    }
+
+    /**
      * Restore RADIUS service for an account that was just moved onto the VIP billing status.
      *
      * Moves the RADIUS user back into its plan group and kills any stale session so the new
@@ -952,13 +1418,19 @@ class CustomerDetailUpdateController extends Controller
      * never undo a record of the customer being comped. Failures are queued for the
      * ProcessRadiusQueue cron to retry, matching how the rest of this controller handles RADIUS.
      *
+     * Also used when a SuperAdmin sets a future prepaid expiry on a lapsed prepaid account; the
+     * last three parameters carry the wording and queue source for that case.
+     *
      * @return array{message: string, queued: bool} Human-readable outcome for the API response.
      */
     private function reconnectAccountForVip(
         BillingAccount $billingAccount,
         int $oldStatusId,
         int $newStatusId,
-        string $updatedBy
+        string $updatedBy,
+        string $appliedLabel = 'Account set to VIP',
+        string $remarks = 'VIP Status Applied - Auto Reconnect',
+        string $sourceType = 'vip_billing_update'
     ): array {
         $accountNo = $billingAccount->account_no;
 
@@ -991,7 +1463,7 @@ class CustomerDetailUpdateController extends Controller
             ]));
 
             return [
-                'message' => 'Account set to VIP, but its technical details could not be read so no RADIUS reconnect was attempted.',
+                'message' => "{$appliedLabel}, but its technical details could not be read so no RADIUS reconnect was attempted.",
                 'queued' => false,
             ];
         }
@@ -1006,7 +1478,7 @@ class CustomerDetailUpdateController extends Controller
             Log::warning('VIP reconnect skipped — no PPPoE username on technical_details', $logContext);
 
             return [
-                'message' => 'Account set to VIP. No PPPoE username on file, so no RADIUS reconnect was attempted.',
+                'message' => "{$appliedLabel}. No PPPoE username on file, so no RADIUS reconnect was attempted.",
                 'queued' => false,
             ];
         }
@@ -1017,7 +1489,7 @@ class CustomerDetailUpdateController extends Controller
             ]));
 
             return [
-                'message' => 'Account set to VIP. No plan on file, so no RADIUS reconnect was attempted.',
+                'message' => "{$appliedLabel}. No plan on file, so no RADIUS reconnect was attempted.",
                 'queued' => false,
             ];
         }
@@ -1027,7 +1499,7 @@ class CustomerDetailUpdateController extends Controller
             'username' => $username,
             'plan' => $planTitle,
             'updatedBy' => $updatedBy,
-            'remarks' => 'VIP Status Applied - Auto Reconnect',
+            'remarks' => $remarks,
             // This controller committed the VIP status a moment ago; without this the reconnect
             // would write Active straight over it, un-comping the customer it was called to comp.
             // See ManualRadiusOperationsService::reconnectUser().
@@ -1046,7 +1518,7 @@ class CustomerDetailUpdateController extends Controller
                 ]));
 
                 return [
-                    'message' => 'Account set to VIP and RADIUS service restored.',
+                    'message' => "{$appliedLabel} and RADIUS service restored.",
                     'queued' => false,
                 ];
             }
@@ -1068,7 +1540,7 @@ class CustomerDetailUpdateController extends Controller
 
         $queuedId = \App\Services\RadiusQueueService::queue([
             'organization_id' => $billingAccount->organization_id ?? null,
-            'source_type'     => 'vip_billing_update',
+            'source_type'     => $sourceType,
             'source_id'       => $billingAccount->id,
             'account_no'      => $accountNo,
             'operation'       => 'reconnect_user',
@@ -1079,13 +1551,13 @@ class CustomerDetailUpdateController extends Controller
 
         if ($queuedId) {
             return [
-                'message' => 'Account set to VIP. RADIUS reconnect has been queued and will be processed automatically.',
+                'message' => "{$appliedLabel}. RADIUS reconnect has been queued and will be processed automatically.",
                 'queued' => true,
             ];
         }
 
         return [
-            'message' => 'Account set to VIP, but the RADIUS reconnect failed and could not be queued. Please notify an administrator to reconnect this account manually.',
+            'message' => "{$appliedLabel}, but the RADIUS reconnect failed and could not be queued. Please notify an administrator to reconnect this account manually.",
             'queued' => false,
         ];
     }

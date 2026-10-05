@@ -380,6 +380,30 @@ class EnhancedBillingGenerationServiceWithNotifications
         }
     }
 
+    /**
+     * Would the bill generated on $generationDate charge for days this account already prepaid?
+     *
+     * True for an account that switched prepaid -> postpaid (BillingTypeMigrationService) while
+     * its prepaid days are still running: the bill's cycle (it is dated at the END of the cycle,
+     * see calculateProrateAmount) starts before the prepaid expiry. Judged against the account's
+     * actual bill date, which calculateAdjustedBillingDate() can move into next month when bills
+     * are generated in advance. False for every account with no prepaid expiry.
+     *
+     * Public so every bulk path that bills postpaid accounts (the billing-day cron, force-generate
+     * all) skips the same accounts.
+     */
+    public function isCoveredByPrepaidDays(BillingAccount $account, Carbon $generationDate): bool
+    {
+        if (empty($account->prepaid_expires_at) || BillingAccount::isPrepaidType($account->generation_type)) {
+            return false;
+        }
+
+        $cycleStart = $this->calculateAdjustedBillingDate($account, $generationDate)
+            ->copy()->subMonthNoOverflow()->endOfDay();
+
+        return Carbon::parse($account->prepaid_expires_at)->greaterThan($cycleStart);
+    }
+
     protected function getActiveAccountsForBillingDay(int $billingDay, Carbon $generationDate)
     {
         $targetDay = $this->adjustBillingDayForMonth($billingDay, $generationDate);
@@ -416,7 +440,19 @@ class EnhancedBillingGenerationServiceWithNotifications
             $query->where('billing_day', $targetDay);
         }
 
-        $accounts = $query->get();
+        // An account that switched prepaid -> postpaid (BillingTypeMigrationService) keeps the
+        // prepaid days it already paid for; its billing_day is set to the expiry day. A bill is
+        // dated at the END of its cycle (see calculateProrateAmount), so a cycle starting before
+        // that expiry would charge for days the customer already prepaid. Skip it until the cycle
+        // starts on or after the expiry: expiry Nov 3 -> no Nov 3 bill, first bill Dec 3.
+        //
+        // Judged against each account's actual bill date, not $generationDate: the cron passes
+        // today and calculateAdjustedBillingDate() moves an advance-generated bill into next month,
+        // so the run date would put the cutoff a month early and skip a cycle that should bill.
+        // Never-prepaid accounts have no expiry and are unaffected.
+        $accounts = $query->get()
+            ->reject(fn (BillingAccount $account) => $this->isCoveredByPrepaidDays($account, $generationDate))
+            ->values();
 
         $this->log('info', 'Loaded accounts with complete data', [
             'billing_day' => $billingDay,

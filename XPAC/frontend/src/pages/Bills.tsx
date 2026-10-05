@@ -25,6 +25,8 @@ interface InvoiceRecord {
     invoice_balance?: number;
     print_link?: string; // Might not exist yet
     status?: string;
+    /** Google Drive link of the paid invoice PDF, made when the invoice is paid. */
+    pdf_url?: string | null;
 }
 
 interface PaymentRecord {
@@ -224,6 +226,51 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
             setPdfError(err?.response?.data?.message || err?.message || 'Failed to generate PDF. Please try again.');
         }
     };
+
+    // Same flow as the SOA download: open the stored Drive link, or have the server make the PDF
+    // first (an invoice paid before PDFs existed, or whose PDF failed at payment time).
+    const handleInvoiceDownloadPDF = async (record: InvoiceRecord) => {
+        if (isGoogleDriveLink(record.pdf_url)) {
+            window.open(record.pdf_url as string, '_blank', 'noopener,noreferrer');
+            return;
+        }
+
+        try {
+            setGeneratingPdfId(record.id);
+            setIsGeneratingPdf(true);
+            setPdfError(null);
+
+            const response = await apiClient.post<{ success: boolean; pdf_url?: string; message?: string }>(
+                `/invoices/${record.id}/generate-pdf`
+            );
+
+            if (response.data.success && response.data.pdf_url) {
+                try {
+                    const storedUser = localStorage.getItem('authData');
+                    if (storedUser) {
+                        const parsedUser = JSON.parse(storedUser);
+                        if (parsedUser.username) {
+                            await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
+                        }
+                    }
+                } catch (refreshErr) {
+                    console.error('Failed to refresh data after invoice PDF generation:', refreshErr);
+                }
+                window.open(response.data.pdf_url, '_blank', 'noopener,noreferrer');
+            } else {
+                setPdfError(response.data.message || 'Failed to generate PDF');
+            }
+        } catch (err: any) {
+            console.error('Error generating invoice PDF:', err);
+            setPdfError(err?.response?.data?.message || err?.message || 'Failed to generate PDF. Please try again.');
+        } finally {
+            setIsGeneratingPdf(false);
+            setGeneratingPdfId(null);
+        }
+    };
+
+    /** Only a paid invoice has a PDF. */
+    const isPaidInvoice = (record: InvoiceRecord) => String(record.status || '').toLowerCase() === 'paid';
 
     const formatDate = (dateStr?: string) => {
         if (!dateStr) return '-';
@@ -444,13 +491,25 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
                                         </div>
                                         <div className="flex justify-between items-center mt-3">
                                             <p className="text-sm font-medium text-gray-500">Ref: {record.id}</p>
-                                            <span className={`px-2 py-1 rounded text-xs font-bold ${
-                                                record.status === 'Paid' || record.status === 'Completed' ? 'bg-green-100 text-green-700' : 
-                                                record.status === 'Partial' ? 'bg-yellow-100 text-yellow-700' :
-                                                'bg-red-100 text-red-700'
-                                            }`}>
-                                                {record.status || 'Unpaid'}
-                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                                    record.status === 'Paid' || record.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                                                    record.status === 'Partial' ? 'bg-yellow-100 text-yellow-700' :
+                                                    'bg-red-100 text-red-700'
+                                                }`}>
+                                                    {record.status || 'Unpaid'}
+                                                </span>
+                                                {isPaidInvoice(record) && (
+                                                    <button
+                                                        onClick={() => handleInvoiceDownloadPDF(record)}
+                                                        disabled={generatingPdfId === record.id}
+                                                        className="inline-flex items-center space-x-2 px-4 py-2 border border-red-500 text-red-500 rounded-full text-xs font-bold hover:bg-red-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        {generatingPdfId === record.id ? <Loader className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                                                        <span>{generatingPdfId === record.id ? 'Wait...' : 'PDF'}</span>
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 ))
@@ -466,11 +525,12 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
                                         <th className="p-6 text-xs font-bold text-gray-500 uppercase">Invoice Ref</th>
                                         <th className="p-6 text-xs font-bold text-gray-500 uppercase">Amount</th>
                                         <th className="p-6 text-xs font-bold text-gray-500 uppercase text-right">Status</th>
+                                        <th className="p-6 text-xs font-bold text-gray-500 uppercase text-right">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {currentInvoiceRecords.length === 0 ? (
-                                        <tr><td colSpan={4} className="p-8 text-center text-gray-500">No invoices found.</td></tr>
+                                        <tr><td colSpan={5} className="p-8 text-center text-gray-500">No invoices found.</td></tr>
                                     ) : (
                                         currentInvoiceRecords.map((record) => (
                                             <tr key={record.id} className="border-b border-gray-50 hover:bg-gray-50 transition">
@@ -485,6 +545,20 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
                                                     }`}>
                                                         {record.status || 'Unpaid'}
                                                     </span>
+                                                </td>
+                                                <td className="p-6 text-right">
+                                                    {isPaidInvoice(record) ? (
+                                                        <button
+                                                            onClick={() => handleInvoiceDownloadPDF(record)}
+                                                            disabled={generatingPdfId === record.id}
+                                                            className="inline-flex items-center space-x-2 px-4 py-2 border border-red-500 text-red-500 rounded-full text-xs font-bold hover:bg-red-50 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-400"
+                                                        >
+                                                            {generatingPdfId === record.id ? <Loader className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                                                            <span>{generatingPdfId === record.id ? 'Generating...' : 'Download PDF'}</span>
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-sm text-gray-400">-</span>
+                                                    )}
                                                 </td>
                                             </tr>
                                         ))

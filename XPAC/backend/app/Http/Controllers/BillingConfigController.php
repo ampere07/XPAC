@@ -59,7 +59,7 @@ class BillingConfigController extends Controller
                 'overdue_day' => 'nullable|integer|min:0',
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
-                'pullout_day' => 'nullable|integer|min:0',
+                'pullout_day' => 'nullable|integer|min:0|max:60',
                 // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
                 'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
                 // Days ahead of prepaid_expires_at to warn a prepaid customer. 0 disables the
@@ -138,7 +138,7 @@ class BillingConfigController extends Controller
                 'overdue_day' => 'nullable|integer|min:0',
                 'disconnection_notice' => 'nullable|integer|min:0',
                 'disconnection_fee' => 'nullable|numeric|min:0',
-                'pullout_day' => 'nullable|integer|min:0',
+                'pullout_day' => 'nullable|integer|min:0|max:60',
                 // Stored as a percentage, not a decimal fraction: 2.5 means 2.5%.
                 'convenience_fee_percentage' => 'nullable|numeric|min:0|max:100',
                 // Days ahead of prepaid_expires_at to warn a prepaid customer. 0 disables the

@@ -72,3 +72,6 @@ proposals/CLIENT_NAME_proposal.md
 /XPAC/serviceorder/
 /XPAC/joborder/
 /XPAC/invoice/
+
+# Google service account keys — never commit these
+sync-*.json

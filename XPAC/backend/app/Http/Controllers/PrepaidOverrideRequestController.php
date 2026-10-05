@@ -44,7 +44,18 @@ class PrepaidOverrideRequestController extends Controller
             $query = PrepaidOverrideRequest::with(PrepaidOverrideService::EAGER_RELATIONS);
 
             if ($request->filled('updated_since')) {
-                $query->where('updated_at', '>', $request->input('updated_since'));
+                // The client sends back server_time (ISO, UTC). updated_at is stored in the app's
+                // timezone, so the value is converted first — compared raw, the 8-hour gap made
+                // every poll re-send everything touched in the last 8 hours. >= with the client
+                // merging by id: a row written in the same second is never missed.
+                try {
+                    $since = \Carbon\Carbon::parse($request->input('updated_since'))
+                        ->setTimezone(config('app.timezone'))
+                        ->toDateTimeString();
+                    $query->where('updated_at', '>=', $since);
+                } catch (\Throwable $e) {
+                    // Unreadable timestamp: answer with the full list rather than fail the poll.
+                }
             }
 
             if ($request->filled('status')) {
@@ -112,6 +123,9 @@ class PrepaidOverrideRequestController extends Controller
             $actor = $this->resolveActor($request->input('requested_by'));
 
             $result = $this->service->createRequest($validated, $actor);
+            if ($result['success']) {
+                $this->announce('created', $validated['account_no'] ?? null);
+            }
 
             return response()->json(array_filter([
                 'success' => $result['success'],
@@ -231,6 +245,9 @@ class PrepaidOverrideRequestController extends Controller
 
             if (PrepaidOverrideRequest::isApprovalStatus($validated['status'])) {
                 $result = $this->service->approve((int) $id, $actor);
+                if ($result['success']) {
+                    $this->announce('approved', $result['data']->account_no ?? null);
+                }
 
                 // Only an approval that actually moved the expiry has anything to enforce; a
                 // repeat approval returns no plan and therefore issues no RADIUS call.
@@ -244,11 +261,17 @@ class PrepaidOverrideRequestController extends Controller
                     'message' => $result['message'],
                     'data' => $result['data'] ?? null,
                     'enforcement' => $enforcement,
+                    // 'radius_user_missing' when the approval was refused because the PPPoE
+                    // user is not on RADIUS; the approve screen shows it in its own modal.
+                    'code' => $result['code'] ?? null,
                     'error' => $result['error'] ?? null,
                 ], static fn ($value) => $value !== null), $result['status']);
             }
 
             $result = $this->service->reject((int) $id, $actor, $validated['remarks'] ?? null);
+            if ($result['success']) {
+                $this->announce('rejected', $result['data']->account_no ?? null);
+            }
 
             return response()->json(array_filter([
                 'success' => $result['success'],
@@ -300,5 +323,23 @@ class PrepaidOverrideRequestController extends Controller
         }
 
         return null;
+    }
+
+    /**
+     * Tell open screens a request changed. On the 'transactions' channel, which the Prepaid
+     * Override page and the sidebar badges already listen to, so both refresh at once — the
+     * page with an incremental fetch, the badge with its count. Never fails the request.
+     */
+    private function announce(string $action, ?string $accountNo): void
+    {
+        try {
+            event(new \App\Events\TransactionUpdated([
+                'action' => $action,
+                'source' => 'prepaid_override',
+                'account_no' => $accountNo,
+            ]));
+        } catch (\Throwable $e) {
+            Log::warning('[PREPAID OVERRIDE] Broadcast failed: ' . $e->getMessage());
+        }
     }
 }

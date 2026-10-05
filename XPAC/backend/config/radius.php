@@ -249,4 +249,30 @@ return [
         'cooldown_seconds' => (int) env('RADIUS_CIRCUIT_BREAKER_COOLDOWN', 60),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Ping test (the Ping button on the RADIUS Configuration page)
+    |--------------------------------------------------------------------------
+    |
+    | TCP ping from this server to a RADIUS device's API port, run on demand by
+    | RadiusPingService: `count` connects, each closed as soon as it opens.
+    | Fills in the PING and LOSS figures on the page. With the defaults a test
+    | takes about 2 seconds, and up to about 12 when nothing answers.
+    |
+    | A RouterOS firewall rule that limits new connections to the API port (an
+    | anti-brute-force rule) counts these too; lower `count` if one trips.
+    |
+    */
+    'ping' => [
+
+        /* Connects per test. Loss is measured in steps of 100 / count percent. */
+        'count' => (int) env('RADIUS_PING_COUNT', 10),
+
+        /* How long one connect may take before it counts as lost, in milliseconds. */
+        'timeout_ms' => (int) env('RADIUS_PING_TIMEOUT_MS', 1000),
+
+        /* Pause between connects, in milliseconds. */
+        'interval_ms' => (int) env('RADIUS_PING_INTERVAL_MS', 200),
+    ],
+
 ];

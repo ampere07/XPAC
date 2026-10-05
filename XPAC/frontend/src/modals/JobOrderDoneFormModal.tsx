@@ -5,8 +5,6 @@ import { updateJobOrder, logBlockedTechnicianTransfer } from '../services/jobOrd
 import { updateApplication } from '../services/applicationService';
 import { userService } from '../services/userService';
 
-import { getRegions, getCities, City } from '../services/cityService';
-import { barangayService, Barangay } from '../services/barangayService';
 import apiClient from '../config/api';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import SearchableField, { GroupedOption } from '../components/common/SearchableField';
@@ -18,11 +16,6 @@ import {
   selectionFromOption,
 } from '../utils/referredByField';
 
-
-interface Region {
-  id: number;
-  name: string;
-}
 
 interface Plan {
   id: number;
@@ -176,9 +169,6 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
   const [promos, setPromos] = useState<Promo[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
-  const [regions, setRegions] = useState<Region[]>([]);
-  const [allCities, setAllCities] = useState<City[]>([]);
-  const [allBarangays, setAllBarangays] = useState<Barangay[]>([]);
 
 
   useEffect(() => {
@@ -288,39 +278,6 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
       } catch { setPromos([]); }
     };
     loadPromos();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchRegions = async () => {
-      if (!isOpen) return;
-      try {
-        const fetchedRegions = await getRegions();
-        setRegions(Array.isArray(fetchedRegions) ? fetchedRegions : []);
-      } catch { setRegions([]); }
-    };
-    fetchRegions();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllCities = async () => {
-      if (!isOpen) return;
-      try {
-        const fetchedCities = await getCities();
-        setAllCities(Array.isArray(fetchedCities) ? fetchedCities : []);
-      } catch { setAllCities([]); }
-    };
-    fetchAllCities();
-  }, [isOpen]);
-
-  useEffect(() => {
-    const fetchAllBarangays = async () => {
-      if (!isOpen) return;
-      try {
-        const response = await barangayService.getAll();
-        setAllBarangays(response.success && Array.isArray(response.data) ? response.data : []);
-      } catch { setAllBarangays([]); }
-    };
-    fetchAllBarangays();
   }, [isOpen]);
 
   useEffect(() => {
@@ -574,25 +531,8 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
     if (!formData.timestamp.trim()) newErrors.timestamp = 'Timestamp is required';
     if (!formData.status.trim()) newErrors.status = 'Status is required';
-    if (!formData.firstName.trim()) newErrors.firstName = 'First Name is required';
-    if (!formData.lastName.trim()) newErrors.lastName = 'Last Name is required';
-
-    if (!formData.contactNumber.trim()) {
-      newErrors.contactNumber = 'Contact Number is required';
-    } else if (!/^[0-9+\-\s()]+$/.test(formData.contactNumber.trim())) {
-      newErrors.contactNumber = 'Please enter a valid contact number';
-    }
-
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!formData.address.trim()) newErrors.address = 'Address is required';
-    if (!formData.region.trim()) newErrors.region = 'Region is required';
-    if (!formData.city.trim()) newErrors.city = 'City is required';
-    if (!formData.barangay.trim()) newErrors.barangay = 'Barangay is required';
+    // The customer section (name, contact number, email, address, region, city, barangay) is not
+    // validated: it is hidden in this form and already stored on the application.
     if (!formData.choosePlan.trim()) newErrors.choosePlan = 'Choose Plan is required';
     if (Number(formData.installationFee) < 0) newErrors.installationFee = 'Installation fee cannot be negative';
 
@@ -839,15 +779,9 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
       if (applicationId) {
         const applicationUpdateData: any = {
-          first_name: updatedFormData.firstName || null,
-          middle_initial: updatedFormData.middleInitial || null,
-          last_name: updatedFormData.lastName || null,
-          mobile_number: updatedFormData.contactNumber || null,
-          email_address: updatedFormData.email || null,
-          installation_address: updatedFormData.address || null,
-          barangay: updatedFormData.barangay || null,
-          city: updatedFormData.city || null,
-          region: updatedFormData.region || null,
+          // The customer section (name, contact number, email, address, region, city, barangay)
+          // is deliberately NOT sent: it is hidden in this form, so writing it back could only
+          // blank values the application already holds.
           desired_plan: updatedFormData.choosePlan || null,
           promo: updatedFormData.promo || null,
           landmark: updatedFormData.installationLandmark || null,
@@ -933,24 +867,8 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
     }
   };
 
-  const getFilteredCities = () => {
-    if (!formData.region) return [];
-    const selectedRegion = regions.find(reg => reg.name === formData.region);
-    if (!selectedRegion) return [];
-    return allCities.filter(city => city.region_id === selectedRegion.id);
-  };
-
-  const getFilteredBarangays = () => {
-    if (!formData.city) return [];
-    const selectedCity = allCities.find(city => city.name === formData.city);
-    if (!selectedCity) return [];
-    return allBarangays.filter(brgy => brgy.city_id !== undefined && brgy.city_id === selectedCity.id);
-  };
-
   const getGroupedAgents = (): GroupedOption[] => buildAgentGroups(agents, teams);
 
-  const filteredCities = getFilteredCities();
-  const filteredBarangays = getFilteredBarangays();
   const groupedAgents = getGroupedAgents();
 
   if (!isOpen) return null;
@@ -1140,123 +1058,9 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
 
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  First Name<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.firstName}
-                  onChange={(e) => handleInputChange('firstName', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.firstName ? 'border-red-500' : ''}`}
-                />
-                {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Middle Initial</label>
-                <input
-                  type="text"
-                  value={formData.middleInitial}
-                  onChange={(e) => handleInputChange('middleInitial', e.target.value)}
-                  onKeyDown={(e) => { if (/[0-9]/.test(e.key)) e.preventDefault(); }}
-                  maxLength={1}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'}`}
-                />
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  Last Name<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.lastName}
-                  onChange={(e) => handleInputChange('lastName', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.lastName ? 'border-red-500' : ''}`}
-                />
-                {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  Contact Number<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.contactNumber}
-                  onChange={(e) => handleInputChange('contactNumber', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.contactNumber ? 'border-red-500' : ''}`}
-                />
-                {errors.contactNumber && <p className="text-red-500 text-xs mt-1">{errors.contactNumber}</p>}
-              </div>
-
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  Applicant Email Address<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => handleInputChange('email', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.email ? 'border-red-500' : ''}`}
-                />
-                {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  Address<span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.address}
-                  onChange={(e) => handleInputChange('address', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.address ? 'border-red-500' : ''}`}
-                />
-                {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
-              </div>
-
-                <SearchableField
-                  label="Region"
-                  value={formData.region}
-                  onSelect={(val) => handleInputChange('region', val)}
-                  options={regions}
-                  optionLabelKey="name"
-                  isDarkMode={isDarkMode}
-                  error={errors.region}
-                  required
-                  placeholder="Select Region"
-                />
-
-                <SearchableField
-                  label="City"
-                  value={formData.city}
-                  onSelect={(val) => handleInputChange('city', val)}
-                  options={filteredCities}
-                  optionLabelKey="name"
-                  isDarkMode={isDarkMode}
-                  error={errors.city}
-                  required
-                  placeholder={formData.region ? "Select City" : "Select Region First"}
-                />
-
-                <SearchableField
-                  label="Barangay"
-                  value={formData.barangay}
-                  onSelect={(val) => handleInputChange('barangay', val)}
-                  options={filteredBarangays}
-                  optionLabelKey="barangay"
-                  isDarkMode={isDarkMode}
-                  error={errors.barangay}
-                  required
-                  placeholder={formData.city ? "Select Barangay" : "Select City First"}
-                />
-
-            </div>
+            {/* Customer section (first/middle/last name, contact number, email, address, region, city,
+                barangay) is not shown here: it is already stored on the application this job order
+                belongs to, and is edited there. */}
 
             <div className="space-y-4">
               <div>

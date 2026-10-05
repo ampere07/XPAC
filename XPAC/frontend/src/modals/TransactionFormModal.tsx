@@ -8,7 +8,14 @@ import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import { planService, Plan } from '../services/planService';
+import { paymentService } from '../services/paymentService';
 import { API_BASE_URL } from '../config/api';
+import { useBillingStore } from '../store/billingStore';
+import { createAgentReferralMatcher, getStoredAgentIdentity } from '../utils/agentReferral';
+import { stampTextTopRight } from '../utils/imageWatermark';
+import { getBillingRecordDetails } from '../services/billingService';
+import { technicianService } from '../services/technicianService';
+import { Technician } from '../types/api';
 
 interface ModalConfig {
   isOpen: boolean;
@@ -35,6 +42,9 @@ interface TransactionFormData {
   accountBalance: string;
   paymentDate: string;
   receivedPayment: string;
+  // Agent, Under My Account only: the two parts Received Payment is made of (see isAgentSplit).
+  collectedPayment: string;
+  agentCollected: string;
   processedBy: string;
   paymentMethod: string;
   referenceNo: string;
@@ -60,6 +70,29 @@ interface TransactionFormData {
  *
  * First entry is the type-specific one and is what a fresh form defaults to.
  */
+/**
+ * How an agent records a payment, chosen above Account No.:
+ *   mine   Under My Account — a customer they referred, entered as Collected Payment + Agent
+ *          Collected, with Received Payment their sum.
+ *   xpacs  Under XPACS — any customer, collected for the company: Received Payment only.
+ * The server refuses the split on an account the agent did not refer
+ * (TransactionController::denyAgentSplitOnForeignAccount).
+ */
+type CollectionScope = 'mine' | 'xpacs';
+
+const COLLECTION_SCOPES: Array<{ id: CollectionScope; label: string; hint: string }> = [
+  {
+    id: 'mine',
+    label: 'Under My Account',
+    hint: 'Your referred customers only. Enter Collected Payment and Agent Collected.',
+  },
+  {
+    id: 'xpacs',
+    label: 'Under XPACS',
+    hint: 'Any customer, collected for XPACS. Enter the Received Payment.',
+  },
+];
+
 const SHARED_TRANSACTION_TYPES = ['Service Charge', 'Installation Fee'];
 const PREPAID_TRANSACTION_TYPES = ['Top Up', ...SHARED_TRANSACTION_TYPES];
 const POSTPAID_TRANSACTION_TYPES = ['Recurring Fee', ...SHARED_TRANSACTION_TYPES];
@@ -68,9 +101,54 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   isOpen,
   onClose,
   onSave,
-  billingRecord,
+  billingRecord: billingRecordProp,
   initialTransactionData
 }) => {
+  // Opened from a customer, the account is given. Opened from the Transaction List (the
+  // technician's "+"), there is none yet: the account picker below fills this in, and the rest
+  // of the form then works exactly as it does for a given account.
+  const [pickedRecord, setPickedRecord] = useState<any>(null);
+  const [isPickingAccount, setIsPickingAccount] = useState(false);
+  const billingRecord = billingRecordProp ?? pickedRecord;
+  const accountRecords = useBillingStore(s => s.billingRecords);
+  const fetchAccountRecords = useBillingStore(s => s.fetchBillingRecords);
+
+  // A technician records who collected the payment by picking from the technicians table;
+  // everyone else is recorded as themselves, as before.
+  const isTechnicianUser = (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('authData') || '{}');
+      return String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician';
+    } catch {
+      return false;
+    }
+  })();
+  // Agents enter what they collected in two parts — Collected Payment and Agent Collected — and
+  // Received Payment is their sum, read-only. That sum is what is applied to the account; both
+  // parts are stored too (transactions.collected_payment / agent_collected).
+  const isAgentUser = (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('authData') || '{}');
+      return String(u.role_id) === '4' || String(u.role || '').toLowerCase().trim() === 'agent';
+    } catch {
+      return false;
+    }
+  })();
+  // Under My Account or Under XPACS (see CollectionScope). An edit keeps the way the row was
+  // recorded — a row carrying the split was recorded Under My Account — and cannot switch it.
+  const [chosenCollectionScope, setChosenCollectionScope] = useState<CollectionScope>('mine');
+  const collectionScope: CollectionScope = initialTransactionData
+    ? (initialTransactionData.collected_payment != null || initialTransactionData.agent_collected != null ? 'mine' : 'xpacs')
+    : chosenCollectionScope;
+  // The split — Collected Payment + Agent Collected, Received Payment derived — is Under My
+  // Account only. Under XPACS an agent enters Received Payment like everyone else.
+  const isAgentSplit = isAgentUser && collectionScope === 'mine';
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+
+  // The account picker is for the "+" on the Transaction List, which technicians and agents get.
+  // Every other caller passes the account in, and keeps the fixed account field.
+  const showAccountPicker = !billingRecordProp && (isTechnicianUser || isAgentUser);
+
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [processors, setProcessors] = useState<User[]>([]);
@@ -102,6 +180,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       accountBalance: billingRecord?.accountBalance?.toString() || '0.00',
       paymentDate: getCurrentDate(),
       receivedPayment: '',
+      collectedPayment: '',
+      agentCollected: '',
       processedBy: userEmail,
       paymentMethod: '',
       referenceNo: '',
@@ -181,6 +261,41 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // stops it. Postpaid never gets a picker at all; its plan field stays read-only.
   const showPlanPicker = isPrepaid && formData.transactionType === 'Top Up';
   const showActivateNow = showPlanPicker && isPlanSwitch;
+
+  // ── Prepaid discount / rebate, as Pay Now on the customer dashboard ─────────
+  // The account's unused discounts and rebates come off the plan price: ₱1,000 plan with ₱100 on
+  // file -> ₱900 collected. At least ₱1.00 is always charged (CheckoutDiscountService::
+  // applicableAmount). This is the preview; approval spends them and credits the account the full
+  // plan price (TransactionController::creditPrepaidCheckoutDiscounts).
+  const [availableDiscount, setAvailableDiscount] = useState<number>(0);
+  useEffect(() => {
+    setAvailableDiscount(0);
+    if (!isOpen || !isPrepaid || !formData.accountNo) return;
+    let cancelled = false;
+    paymentService.getAvailableDiscount(formData.accountNo).then(amount => {
+      if (!cancelled) setAvailableDiscount(amount);
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, isPrepaid, formData.accountNo]);
+
+  const selectedPlanPrice = Number(plans.find(p => p.id === formData.selectedPlanId)?.price ?? 0);
+  const discountAmount = showPlanPicker && selectedPlanPrice > 1 && availableDiscount > 0
+    ? Math.round(Math.min(availableDiscount, selectedPlanPrice - 1) * 100) / 100
+    : 0;
+  const netPlanAmount = Math.round((selectedPlanPrice - discountAmount) * 100) / 100;
+
+  // Take the discount off the amount the plan price was filled in with. Only while the field
+  // still holds the full price (prefilled, untouched), and never on an edit, so a typed amount or
+  // a recorded transaction is not changed behind the cashier's back.
+  useEffect(() => {
+    if (!isOpen || initialTransactionData || discountAmount <= 0) return;
+    const field = isAgentSplit ? 'collectedPayment' : 'receivedPayment';
+    const fullPrice = selectedPlanPrice.toFixed(2);
+    setFormData(prev => (prev[field] === fullPrice
+      ? { ...prev, [field]: netPlanAmount.toFixed(2) }
+      : prev));
+  }, [isOpen, initialTransactionData, discountAmount, netPlanAmount, selectedPlanPrice, isAgentSplit,
+    formData.receivedPayment, formData.collectedPayment]);
 
   // Keep the flag honest when the selection stops being a switch — otherwise a box ticked while
   // plan B was selected would still be sent after the user reverted to their current plan.
@@ -295,13 +410,16 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           // transaction loads its real received_payment, and that must not be overwritten
           // by the plan price.
           const shouldPrefillAmount = !prev.receivedPayment.trim();
+          const planPrice = Number(preselect.price ?? 0).toFixed(2);
 
           return {
             ...prev,
             selectedPlanId: preselect.id,
             plan: preselect.name,
+            // Under My Account an agent's Received Payment is derived, so the price goes into
+            // Collected Payment.
             ...(shouldPrefillAmount
-              ? { receivedPayment: Number(preselect.price ?? 0).toFixed(2) }
+              ? (isAgentSplit ? { collectedPayment: planPrice } : { receivedPayment: planPrice })
               : {}),
           };
         });
@@ -311,7 +429,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     })();
 
     return () => { cancelled = true; };
-  }, [isOpen, isPrepaid]);
+  }, [isOpen, isPrepaid, isAgentSplit]);
 
   useEffect(() => {
     const fetchImageSizeSettings = async () => {
@@ -327,8 +445,11 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     fetchImageSizeSettings();
 
-    // Refresh processedBy from authData when modal opens
-    if (isOpen) {
+    // Refresh processedBy from authData when modal opens. A technician picks it from the
+    // technicians list instead, so theirs starts empty (or keeps an edited row's value).
+    if (isOpen && isTechnicianUser) {
+      setFormData(prev => ({ ...prev, processedBy: initialTransactionData?.processed_by_user || '' }));
+    } else if (isOpen) {
       const authData = localStorage.getItem('authData');
       if (authData) {
         try {
@@ -343,6 +464,85 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       }
     }
   }, [isOpen]);
+
+  // Technicians table, for the technician's Processed By dropdown.
+  useEffect(() => {
+    if (!isOpen || !isTechnicianUser) return;
+    technicianService.getAllTechnicians()
+      .then(res => setTechnicians(Array.isArray(res?.data) ? res.data : []))
+      .catch(() => setTechnicians([]));
+  }, [isOpen, isTechnicianUser]);
+
+  // No account given (opened from the Transaction List): load the accounts to pick from.
+  // fetchBillingRecords() is a no-op when the list is already loaded.
+  useEffect(() => {
+    if (isOpen && showAccountPicker) fetchAccountRecords();
+    if (!isOpen) {
+      setPickedRecord(null);
+      setChosenCollectionScope('mine');
+    }
+  }, [isOpen, showAccountPicker, fetchAccountRecords]);
+
+  const technicianName = (t: Technician) =>
+    [t.first_name, t.middle_initial ? `${t.middle_initial}.` : '', t.last_name].filter(Boolean).join(' ').trim();
+
+  // Account picker: the first 10 accounts until something is typed, then every account whose
+  // number or name matches (capped, so a short query never renders thousands of rows).
+  const ACCOUNTS_SHOWN_BY_DEFAULT = 10;
+  const ACCOUNTS_SHOWN_WHEN_SEARCHING = 50;
+  const [accountQuery, setAccountQuery] = useState('');
+  const [isAccountListOpen, setIsAccountListOpen] = useState(false);
+  // Is this account one the signed-in agent referred? Matched with the same rule the Job Order
+  // list uses (and the server settles commissions by). An agent nobody can identify owns none.
+  const isOwnReferral = useMemo(() => {
+    const agent = getStoredAgentIdentity();
+    if (!agent.fullName && !agent.email && agent.id === null) return () => false;
+    const ownsReferral = createAgentReferralMatcher(agent.fullName, agent.email, agent.id);
+    // An id-form referral is matched by id; older free-text referrals by the text.
+    return (r: { referredByAgentId?: string | number | null; referredBy?: string }) => ownsReferral(
+      r.referredByAgentId !== null && r.referredByAgentId !== undefined
+        ? String(r.referredByAgentId)
+        : (r.referredBy || '')
+    );
+  }, []);
+
+  // Under My Account an agent picks only from the customers they referred; Under XPACS, from every
+  // customer. The billing list sends an agent every account (scope=all), so the narrowing is here.
+  const accountOptions = useMemo(() => {
+    let records = accountRecords.filter(r => !!r.accountNo);
+
+    if (isAgentSplit) {
+      records = records.filter(isOwnReferral);
+    }
+
+    return records.map(r => ({
+      accountNo: String(r.accountNo),
+      label: [r.accountNo, r.customerName, r.address].filter(Boolean).join(' | '),
+    }));
+  }, [accountRecords, isAgentSplit, isOwnReferral]);
+  const visibleAccounts = useMemo(() => {
+    const q = accountQuery.trim().toLowerCase();
+    if (!q) return accountOptions.slice(0, ACCOUNTS_SHOWN_BY_DEFAULT);
+    return accountOptions
+      .filter(o => o.label.toLowerCase().includes(q))
+      .slice(0, ACCOUNTS_SHOWN_WHEN_SEARCHING);
+  }, [accountOptions, accountQuery]);
+
+  const handlePickAccount = async (accountNo: string) => {
+    if (!accountNo) return;
+    setIsAccountListOpen(false);
+    setAccountQuery('');
+    setIsPickingAccount(true);
+    try {
+      // The same detail record Customer Details passes in, so plan, balance and prepaid
+      // handling all behave as they do when the form is opened from a customer.
+      const detail = await getBillingRecordDetails(accountNo);
+      setPickedRecord(detail);
+      setErrors(prev => ({ ...prev, accountNo: '' }));
+    } finally {
+      setIsPickingAccount(false);
+    }
+  };
 
   const getProxiedImageUrl = (url: string) => {
     if (!url) return '';
@@ -382,6 +582,12 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           ...(initialTransactionData ? {
             paymentDate: initialTransactionData.payment_date ? initialTransactionData.payment_date.split(' ')[0] : prev.paymentDate,
             receivedPayment: initialTransactionData.received_payment ? initialTransactionData.received_payment.toString() : prev.receivedPayment,
+            // A row recorded without the split opens Under XPACS (see collectionScope), where
+            // Received Payment is entered directly, so there is nothing to carry over.
+            collectedPayment: initialTransactionData.collected_payment != null
+              ? String(initialTransactionData.collected_payment)
+              : prev.collectedPayment,
+            agentCollected: initialTransactionData.agent_collected != null ? String(initialTransactionData.agent_collected) : prev.agentCollected,
             paymentMethod: initialTransactionData.payment_method_info?.payment_method || initialTransactionData.payment_method || prev.paymentMethod,
             referenceNo: initialTransactionData.reference_no || prev.referenceNo,
             orNo: initialTransactionData.or_no || prev.orNo,
@@ -404,6 +610,53 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       lastAccountIdRef.current = null;
     }
   }, [isOpen, billingRecord, initialTransactionData]);
+
+  // Agent, Under My Account: Received Payment is always Collected Payment + Agent Collected — never
+  // typed, so the two can never disagree. Blank when both parts are blank, so the required check
+  // still fires.
+  useEffect(() => {
+    if (!isAgentSplit) return;
+    const collected = parseFloat(formData.collectedPayment) || 0;
+    const agent = parseFloat(formData.agentCollected) || 0;
+    const bothBlank = !formData.collectedPayment.trim() && !formData.agentCollected.trim();
+    const derived = bothBlank ? '' : (Math.round((collected + agent) * 100) / 100).toFixed(2);
+    setFormData(prev => (prev.receivedPayment === derived ? prev : { ...prev, receivedPayment: derived }));
+  }, [isAgentSplit, formData.collectedPayment, formData.agentCollected]);
+
+  // Drop the picked account and everything the form filled in from it.
+  const clearPickedAccount = () => {
+    setPickedRecord(null);
+    lastAccountIdRef.current = null;
+    setFormData(prev => ({
+      ...prev,
+      accountNo: '',
+      fullName: '',
+      contactNo: '',
+      plan: '',
+      accountBalance: '0.00',
+      selectedPlanId: null,
+      activateNow: false,
+    }));
+  };
+
+  const handleCollectionScopeChange = (scope: CollectionScope) => {
+    if (scope === collectionScope || initialTransactionData) return;
+
+    setChosenCollectionScope(scope);
+    setFormData(prev => (scope === 'mine'
+      // The amount entered so far carries over as Collected Payment; Received Payment is derived
+      // from it again.
+      ? { ...prev, collectedPayment: prev.receivedPayment, agentCollected: '' }
+      // Received Payment keeps the total and becomes the field to edit.
+      : { ...prev, collectedPayment: '', agentCollected: '' }));
+    setErrors(prev => ({ ...prev, accountNo: '', collectedPayment: '', receivedPayment: '' }));
+
+    // Under My Account only the agent's own customers may be picked.
+    if (scope === 'mine' && pickedRecord) {
+      const picked = accountRecords.find(r => String(r.accountNo) === String(pickedRecord.applicationId));
+      if (!picked || !isOwnReferral(picked)) clearPickedAccount();
+    }
+  };
 
   const handleInputChange = (field: keyof TransactionFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -491,12 +744,15 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (showPlanPicker && !formData.selectedPlanId) newErrors.plan = 'Select the plan this payment is for';
     if (!formData.accountBalance.trim()) newErrors.accountBalance = 'Account Balance is required';
     if (!formData.paymentDate.trim()) newErrors.paymentDate = 'Payment Date is required';
+    if (isAgentSplit && !formData.collectedPayment.trim()) newErrors.collectedPayment = 'Collected Payment is required';
     if (!formData.receivedPayment.trim()) newErrors.receivedPayment = 'Received Payment is required';
     if (!formData.processedBy.trim()) newErrors.processedBy = 'Processed By is required';
     if (!formData.paymentMethod.trim()) newErrors.paymentMethod = 'Payment Method is required';
     if (!formData.referenceNo.trim()) newErrors.referenceNo = 'Reference No. is required';
     if (!formData.orNo.trim()) newErrors.orNo = 'OR No. is required';
     if (!formData.transactionType.trim()) newErrors.transactionType = 'Transaction Type is required';
+    // An edit may keep the proof already on file; anything else needs a new image chosen.
+    if (!formData.image && !initialTransactionData?.image_url) newErrors.image = 'Payment Proof Image is required';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -525,14 +781,21 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           const imageFormData = new FormData();
           const folderName = `transactionform - ${formData.fullName}`;
           imageFormData.append('folder_name', folderName);
-          imageFormData.append('payment_proof_image', formData.image, formData.image.name);
+          // Stamped with the customer's full name (upper right, orange) so the proof always shows
+          // whose payment it is. Falls back to the original image if stamping is not possible.
+          const proofImage = await stampTextTopRight(formData.image, formData.fullName);
+          imageFormData.append('payment_proof_image', proofImage, proofImage.name);
 
           const uploadResponse = await transactionService.uploadTransactionImage(imageFormData);
 
-          if (uploadResponse.success && uploadResponse.data?.payment_proof_image_url) {
-            imageUrl = uploadResponse.data.payment_proof_image_url;
-            setUploadProgress(60);
+          // A chosen image that did not upload must stop the save. Carrying on used to store the
+          // transaction with no image_url and no warning, so the proof was silently lost.
+          if (!uploadResponse.success || !uploadResponse.data?.payment_proof_image_url) {
+            throw new Error(uploadResponse.message || 'The server did not return a URL for the image');
           }
+
+          imageUrl = uploadResponse.data.payment_proof_image_url;
+          setUploadProgress(60);
         } catch (uploadError: any) {
           setModal({
             isOpen: true,
@@ -552,6 +815,12 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         account_no: formData.accountNo || undefined,
         transaction_type: formData.transactionType,
         received_payment: parseFloat(formData.receivedPayment) || 0,
+        // Agent, Under My Account only. The server re-derives received_payment from these two,
+        // so the stored total always equals its parts. Under XPACS neither is sent.
+        ...(isAgentSplit ? {
+          collected_payment: parseFloat(formData.collectedPayment) || 0,
+          agent_collected: parseFloat(formData.agentCollected) || 0,
+        } : {}),
         payment_date: formData.paymentDate,
         date_processed: new Date().toISOString(),
         processed_by_user: formData.processedBy,
@@ -569,13 +838,42 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
+      // The proof URL this save must leave on the transaction: the new upload, or on an edit
+      // without a new image, the one already on file.
+      const expectedImageUrl = imageUrl || initialTransactionData?.image_url;
+      if (!expectedImageUrl) {
+        setErrors(prev => ({ ...prev, image: 'Payment Proof Image is required' }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Payment Proof Missing',
+          message: 'There is no payment proof URL to save. Upload the payment proof image and try again.'
+        });
+        return;
+      }
+
       setUploadProgress(80);
-      const result = isEdit 
+      const result = isEdit
         ? await transactionService.updateTransaction(initialTransactionData.id, payload)
         : await transactionService.createTransaction(payload);
       setUploadProgress(100);
 
-      if (result.success) {
+      if (result.success && !result.data?.image_url) {
+        // Saved, but the server did not store the proof URL — say so instead of reporting success.
+        setErrors(prev => ({ ...prev, image: 'The payment proof was not saved' }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Payment Proof Not Saved',
+          message: `The transaction was ${isEdit ? 'updated' : 'created'} but its payment proof URL was not saved.`
+            + ' Open the transaction, upload the payment proof again and save.',
+          onConfirm: () => {
+            onSave(formData);
+            onClose();
+            setModal(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      } else if (result.success) {
         // Both recurring types settle the account and so wait for approval; 'Top Up' is simply
         // the prepaid name for the same thing.
         const needsApproval = formData.transactionType === 'Recurring Fee'
@@ -601,12 +899,23 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             setModal(prev => ({ ...prev, isOpen: false }));
           }
         });
+      } else if (result.errors?.reference_no?.length) {
+        // Duplicate reference number: shown on the field itself, and nothing is saved.
+        const message = result.errors.reference_no[0];
+        setErrors(prev => ({ ...prev, referenceNo: message }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Duplicate Reference No.',
+          message
+        });
       } else {
+        const fieldMessages = result.errors ? Object.values(result.errors).flat().join('\n') : '';
         setModal({
           isOpen: true,
           type: 'error',
           title: 'Error',
-          message: `Failed to create transaction: ${result.message}`
+          message: `Failed to ${isEdit ? 'update' : 'create'} transaction: ${fieldMessages || result.message}`
         });
       }
     } catch (error) {
@@ -686,6 +995,45 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         {/* Form Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
+          {/* Agent: whose collection this is — decides which accounts can be picked and which
+              payment fields are shown. Fixed on an edit, where it follows the row. */}
+          {isAgentUser && (
+            <div>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                Collected<span className="text-red-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Collected">
+                {COLLECTION_SCOPES.map(({ id, label }) => {
+                  const active = collectionScope === id;
+                  const primary = colorPalette?.primary || '#7c3aed';
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      disabled={!!initialTransactionData}
+                      onClick={() => handleCollectionScopeChange(id)}
+                      className={`px-3 py-2 rounded border text-sm font-medium transition-colors disabled:cursor-not-allowed ${active
+                        ? 'text-white'
+                        : (isDarkMode
+                          ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 disabled:hover:bg-gray-800 disabled:opacity-60'
+                          : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:hover:bg-white disabled:opacity-60')
+                        }`}
+                      style={active ? { backgroundColor: primary, borderColor: primary } : undefined}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                {initialTransactionData
+                  ? 'Set when this transaction was recorded.'
+                  : COLLECTION_SCOPES.find(s => s.id === collectionScope)?.hint}
+              </p>
+            </div>
+          )}
 
           {/* Account No */}
           <div>
@@ -693,18 +1041,67 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Account No.<span className="text-red-500">*</span>
             </label>
-            <div className="relative">
-              <select
-                value={formData.accountNo}
-                onChange={(e) => handleInputChange('accountNo', e.target.value)}
-                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
-                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
-                  }`}
-              >
-                <option value={billingRecord?.applicationId || ''}>{billingRecord?.applicationId || ''} | {billingRecord?.customerName || ''} | {billingRecord?.address || ''}</option>
-              </select>
-              <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
-            </div>
+            {!showAccountPicker ? (
+              <div className="relative">
+                <select
+                  value={formData.accountNo}
+                  onChange={(e) => handleInputChange('accountNo', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                    }`}
+                >
+                  <option value={billingRecord?.applicationId || ''}>{billingRecord?.applicationId || ''} | {billingRecord?.customerName || ''} | {billingRecord?.address || ''}</option>
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+              </div>
+            ) : (
+              // No account given: search and pick one. Shows 10 accounts until something is typed.
+              <div className="relative">
+                <input
+                  type="text"
+                  value={isAccountListOpen
+                    ? accountQuery
+                    : (pickedRecord ? [pickedRecord.applicationId, pickedRecord.customerName, pickedRecord.address].filter(Boolean).join(' | ') : '')}
+                  onChange={(e) => { setAccountQuery(e.target.value); setIsAccountListOpen(true); }}
+                  onFocus={() => { setAccountQuery(''); setIsAccountListOpen(true); }}
+                  onBlur={() => setTimeout(() => setIsAccountListOpen(false), 150)}
+                  placeholder={isPickingAccount
+                    ? 'Loading account…'
+                    : (isAgentSplit ? 'Search your customers by account no. or name…' : 'Search account no. or name…')}
+                  className={`w-full px-3 py-2 pr-9 border rounded focus:outline-none focus:border-orange-500 ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+                />
+                {isPickingAccount
+                  ? <Loader2 className="absolute right-3 top-2.5 text-gray-400 animate-spin" size={18} />
+                  : <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />}
+                {isAccountListOpen && (
+                  <div className={`absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded border shadow-lg ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+                    {visibleAccounts.length === 0 ? (
+                      <div className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {accountRecords.length ? 'No matching account' : 'Loading accounts…'}
+                      </div>
+                    ) : (
+                      visibleAccounts.map(o => (
+                        <button
+                          key={o.accountNo}
+                          type="button"
+                          // onMouseDown, not onClick: it fires before the input's blur closes the list.
+                          onMouseDown={(e) => { e.preventDefault(); handlePickAccount(o.accountNo); }}
+                          className={`block w-full text-left px-3 py-2 text-sm ${isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-800 hover:bg-gray-100'}`}
+                        >
+                          {o.label}
+                        </button>
+                      ))
+                    )}
+                    {!accountQuery.trim() && accountOptions.length > ACCOUNTS_SHOWN_BY_DEFAULT && (
+                      <div className={`px-3 py-1.5 text-xs border-t ${isDarkMode ? 'text-gray-500 border-gray-700' : 'text-gray-400 border-gray-200'}`}>
+                        Showing {ACCOUNTS_SHOWN_BY_DEFAULT} of {accountOptions.length}. Type to search all accounts.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {errors.accountNo && <p className="text-red-500 text-xs mt-1">{errors.accountNo}</p>}
           </div>
 
@@ -766,7 +1163,11 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                         // which never clobbers an existing value) because after deliberately
                         // switching plan, the previous plan's price is simply the wrong figure.
                         // Still editable — partial payments and adjustments remain possible.
-                        ...(picked ? { receivedPayment: Number(picked.price ?? 0).toFixed(2) } : {}),
+                        ...(picked
+                          ? (isAgentSplit
+                            ? { collectedPayment: Number(picked.price ?? 0).toFixed(2), agentCollected: '' }
+                            : { receivedPayment: Number(picked.price ?? 0).toFixed(2) })
+                          : {}),
                       }));
                       if (errors.plan) setErrors(prev => ({ ...prev, plan: '' }));
                       if (picked && errors.receivedPayment) {
@@ -789,6 +1190,12 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                   </select>
                   <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
                 </div>
+                {discountAmount > 0 && (
+                  <p className="text-xs mt-1 font-medium text-green-500">
+                    ₱{selectedPlanPrice.toFixed(2)} plan − ₱{discountAmount.toFixed(2)} discount / rebate = ₱{netPlanAmount.toFixed(2)} to collect.
+                    The discount is applied on approval and the account is credited the full plan price.
+                  </p>
+                )}
                 {billingRecord?.pendingPlanId ? (
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`}>
                     A plan change is already scheduled
@@ -888,28 +1295,62 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             {errors.paymentDate && <p className="text-red-500 text-xs mt-1">{errors.paymentDate}</p>}
           </div>
 
+          {/* Agent, Under My Account: the two parts Received Payment is made of. */}
+          {isAgentSplit && ([
+            { field: 'collectedPayment' as const, label: 'Collected Payment', required: true },
+            { field: 'agentCollected' as const, label: 'Agent Collected', required: false },
+          ]).map(({ field, label, required }) => (
+            <div key={field}>
+              <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                {label}{required && <span className="text-red-500">*</span>}
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={`₱ ${formData[field]}`}
+                onChange={(e) => {
+                  const val = e.target.value.replace('₱ ', '');
+                  if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                    handleInputChange(field, val);
+                    if (errors.receivedPayment) setErrors(prev => ({ ...prev, receivedPayment: '' }));
+                  }
+                }}
+                className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors[field] ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+              />
+              {errors[field] && <p className="text-red-500 text-xs mt-1">{errors[field]}</p>}
+            </div>
+          ))}
+
           {/* Received Payment */}
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
               Received Payment<span className="text-red-500">*</span>
+              {isAgentSplit && <span className={`ml-2 text-xs font-normal ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Collected Payment + Agent Collected</span>}
             </label>
             <div className="flex items-center">
               <div className="flex-1 relative">
                 <input
                   type="text"
                   value={`₱ ${formData.receivedPayment}`}
+                  readOnly={isAgentSplit}
                   onChange={(e) => {
+                    if (isAgentSplit) return;
                     const val = e.target.value.replace('₱ ', '');
                     if (val === '' || /^\d*\.?\d*$/.test(val)) {
                       handleInputChange('receivedPayment', val);
                     }
                   }}
-                  className={`w-full px-3 py-2 border rounded-l focus:outline-none focus:border-orange-500 ${errors.receivedPayment ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
-                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                  className={`w-full px-3 py-2 border ${isAgentSplit ? 'rounded cursor-not-allowed' : 'rounded-l'} focus:outline-none focus:border-orange-500 ${errors.receivedPayment ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isAgentSplit
+                      ? (isDarkMode ? 'bg-gray-900 text-gray-300' : 'bg-gray-100 text-gray-700')
+                      : (isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900')
                     }`}
                 />
               </div>
+              {/* No ± Under My Account: the total is derived from the two parts above. */}
+              {!isAgentSplit && (
               <div className="flex flex-col">
                 <button
                   type="button"
@@ -928,6 +1369,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                   <Minus size={16} />
                 </button>
               </div>
+              )}
             </div>
             {errors.receivedPayment && <p className="text-red-500 text-xs mt-1">{errors.receivedPayment}</p>}
           </div>
@@ -938,13 +1380,35 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Processed By<span className="text-red-500">*</span>
             </label>
-            <input
-              type="text"
-              value={formData.processedBy}
-              readOnly
-              className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
-                }`}
-            />
+            {isTechnicianUser ? (
+              // Technicians pick who collected the payment from the technicians table.
+              <div className="relative">
+                <select
+                  value={formData.processedBy}
+                  onChange={(e) => handleInputChange('processedBy', e.target.value)}
+                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
+                >
+                  <option value="">Select technician</option>
+                  {formData.processedBy && !technicians.some(t => technicianName(t) === formData.processedBy) && (
+                    // An edited row's stored value that is not a current technician name.
+                    <option value={formData.processedBy}>{formData.processedBy}</option>
+                  )}
+                  {technicians.map(t => (
+                    <option key={t.id} value={technicianName(t)}>{technicianName(t)}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={formData.processedBy}
+                readOnly
+                className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
+                  }`}
+              />
+            )}
             {errors.processedBy && <p className="text-red-500 text-xs mt-1">{errors.processedBy}</p>}
           </div>
 
@@ -1079,10 +1543,10 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
-              Payment Proof Image
+              Payment Proof Image<span className="text-red-500">*</span>
             </label>
             <div className={`relative w-full border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
-              } ${imagePreview ? 'h-auto' : 'h-48'}`}>
+              } ${errors.image ? 'border-red-500' : ''} ${imagePreview ? 'h-auto' : 'h-48'}`}>
               <input
                 type="file"
                 accept="image/*"
@@ -1114,6 +1578,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 </div>
               )}
             </div>
+            {errors.image && <p className="text-red-500 text-xs mt-1">{errors.image}</p>}
           </div>
         </div>
       </div>

@@ -73,6 +73,7 @@ interface JobOrderDoneFormData {
   portLabelImage: File | null;
   clientSignatureImage: File | null;
   speedTestImage: File | null;
+  otherPhotosImage: File | null;
   modifiedBy: string;
   modifiedDate: string;
   itemName1: string;
@@ -179,6 +180,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     portLabelImage: null,
     clientSignatureImage: null,
     speedTestImage: null,
+    otherPhotosImage: null,
     modifiedBy: currentUserEmail,
     modifiedDate: new Date().toLocaleString('en-US', {
       month: '2-digit',
@@ -224,6 +226,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     portLabelImage: string | null;
     clientSignatureImage: string | null;
     speedTestImage: string | null;
+    otherPhotosImage: string | null;
   }>({
     signedContractImage: null,
     setupImage: null,
@@ -231,7 +234,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     routerReadingImage: null,
     portLabelImage: null,
     clientSignatureImage: null,
-    speedTestImage: null
+    speedTestImage: null,
+    otherPhotosImage: null
   });
 
   const [showModal, setShowModal] = useState(false);
@@ -447,7 +451,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         routerReadingImage: convertGoogleDriveUrl(jobOrderData?.router_reading_image_url || jobOrderData?.Router_Reading_Image_URL),
         portLabelImage: convertGoogleDriveUrl(jobOrderData?.port_label_image_url || jobOrderData?.Port_Label_Image_URL),
         clientSignatureImage: convertGoogleDriveUrl(getImageUrl(clientSignatureVariations)),
-        speedTestImage: convertGoogleDriveUrl(jobOrderData?.speedtest_image_url || jobOrderData?.Speedtest_Image_URL)
+        speedTestImage: convertGoogleDriveUrl(jobOrderData?.speedtest_image_url || jobOrderData?.Speedtest_Image_URL),
+        otherPhotosImage: convertGoogleDriveUrl(jobOrderData?.other_photos_url || jobOrderData?.Other_Photos_URL)
       };
 
       setImagePreviews(newImagePreviews);
@@ -476,7 +481,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         routerReadingImage: null,
         portLabelImage: null,
         clientSignatureImage: null,
-        speedTestImage: null
+        speedTestImage: null,
+        otherPhotosImage: null
       });
     }
   }, [jobOrderData, isOpen]);
@@ -864,7 +870,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                 routerReadingImage: safeConvert(jobOrderData.router_reading_image_url || jobOrderData.Router_Reading_Image_URL),
                 portLabelImage: safeConvert(jobOrderData.port_label_image_url || jobOrderData.Port_Label_Image_URL),
                 clientSignatureImage: safeConvert(jobOrderData.client_signature_url || jobOrderData.Client_Signature_URL),
-                speedTestImage: safeConvert(jobOrderData.speedtest_image_url || jobOrderData.Speedtest_Image_URL)
+                speedTestImage: safeConvert(jobOrderData.speedtest_image_url || jobOrderData.Speedtest_Image_URL),
+                otherPhotosImage: safeConvert(jobOrderData.other_photos_url || jobOrderData.Other_Photos_URL)
               });
             }
           } else {
@@ -924,7 +931,8 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           routerReadingImage: safeConvertDefault(jobOrderData.router_reading_image_url || jobOrderData.Router_Reading_Image_URL),
           portLabelImage: safeConvertDefault(jobOrderData.port_label_image_url || jobOrderData.Port_Label_Image_URL),
           clientSignatureImage: safeConvertDefault(jobOrderData.client_signature_url || jobOrderData.Client_Signature_URL),
-          speedTestImage: safeConvertDefault(jobOrderData.speedtest_image_url || jobOrderData.Speedtest_Image_URL)
+          speedTestImage: safeConvertDefault(jobOrderData.speedtest_image_url || jobOrderData.Speedtest_Image_URL),
+          otherPhotosImage: safeConvertDefault(jobOrderData.other_photos_url || jobOrderData.Other_Photos_URL)
         });
       };
 
@@ -958,7 +966,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
     }
   };
 
-  const handleImageUpload = async (field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'speedTestImage', file: File) => {
+  const handleImageUpload = async (field: 'signedContractImage' | 'setupImage' | 'boxReadingImage' | 'routerReadingImage' | 'portLabelImage' | 'clientSignatureImage' | 'speedTestImage' | 'otherPhotosImage', file: File) => {
     try {
       let processedFile = file;
       const originalSize = (file.size / 1024 / 1024).toFixed(2);
@@ -1300,6 +1308,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
           console.log(`[APPEND] Speed Test: ${(formData.speedTestImage.size / 1024 / 1024).toFixed(2)}MB`);
           imageFormData.append('speed_test_image', formData.speedTestImage, formData.speedTestImage.name);
         }
+        // Optional extra photo; only sent when the technician added one.
+        if (formData.otherPhotosImage) {
+          imageFormData.append('other_photos_image', formData.otherPhotosImage, formData.otherPhotosImage.name);
+        }
 
         console.log('[UPLOAD] FormData prepared, sending to backend...');
 
@@ -1315,6 +1327,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
               port_label_image_url?: string;
               client_signature_image_url?: string;
               speedtest_image_url?: string;
+              other_photos_url?: string;
             };
             folder_id?: string;
           }>(`/job-orders/${jobOrderId}/upload-images`, imageFormData, {
@@ -1346,6 +1359,9 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
             }
             if (imageUrls.speedtest_image_url) {
               jobOrderUpdateData.speedtest_image_url = imageUrls.speedtest_image_url;
+            }
+            if (imageUrls.other_photos_url) {
+              jobOrderUpdateData.other_photos_url = imageUrls.other_photos_url;
             }
           }
         } catch (uploadError: any) {
@@ -2622,6 +2638,14 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                   label="Speed Test Image"
                   onUpload={(file) => handleImageUpload('speedTestImage', file)}
                   error={errors.speedTestImage}
+                />
+
+                {/* Optional: any extra photos the technician wants to attach. */}
+                <ImagePreview
+                  imageUrl={imagePreviews.otherPhotosImage}
+                  label="Other Photos"
+                  onUpload={(file) => handleImageUpload('otherPhotosImage', file)}
+                  error={errors.otherPhotosImage}
                 />
 
                 <div>

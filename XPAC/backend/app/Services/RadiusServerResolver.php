@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\RadiusConfig;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -186,77 +185,58 @@ class RadiusServerResolver
     }
 
     /**
-     * Attempt to find the user on a single config, trying the configured protocol first
-     * then the alternate (https <-> http), tolerant of connection failures.
+     * Attempt to find the user on a single config over the native RouterOS API.
+     *
+     * Tolerant of connection failures: an unreachable device is logged and reported as
+     * "not here" so the caller still checks the remaining servers. `base_url` is a label
+     * for the device that answered — its User Manager tree and IP, e.g. `/user-manager@10.0.0.1`.
      *
      * @return array{base_url: string, radius_id: string, group: string}|null
      */
     private function lookupOnConfig(RadiusConfig $config, string $username, int $position): ?array
     {
-        $path = '/rest/user-manage/user/' . urlencode($username);
+        $this->log('info', 'Searching for account on RADIUS server', [
+            'username'         => $username,
+            'position'         => $position,
+            'radius_config_id' => $config->id,
+            'radius_ip'        => $config->ip,
+        ]);
 
-        foreach ($this->baseUrlsFor($config) as $baseUrl) {
-            $this->log('info', 'Searching for account on RADIUS server', [
-                'username'  => $username,
-                'position'  => $position,
-                'base_url'  => $baseUrl,
+        try {
+            $api = app(RouterosApiService::class);
+
+            $user = $api->findUser($config, $username);
+
+            if ($user === null) {
+                $error = $api->getLastError();
+
+                if ($error !== '') {
+                    $this->log('error', 'Connection error during account lookup', [
+                        'username'         => $username,
+                        'radius_config_id' => $config->id,
+                        'radius_ip'        => $config->ip,
+                        'error'            => $error,
+                    ]);
+                }
+
+                return null;
+            }
+
+            return [
+                'base_url'  => $api->getUserManagerPrefix() . '@' . $config->ip,
+                'radius_id' => $user['.id'],
+                'group'     => $user['group'],
+            ];
+        } catch (Throwable $e) {
+            $this->log('error', 'Connection error during account lookup', [
+                'username'         => $username,
+                'radius_config_id' => $config->id,
+                'radius_ip'        => $config->ip,
+                'error'            => $e->getMessage(),
             ]);
 
-            try {
-                $response = Http::withOptions(['verify' => false])
-                    ->withBasicAuth($config->username, $config->password)
-                    ->connectTimeout(2)
-                    ->timeout(4)
-                    ->get($baseUrl . $path);
-
-                if ($response->successful()) {
-                    $data = $response->json();
-                    if (is_array($data) && isset($data['.id'])) {
-                        return [
-                            'base_url'  => $baseUrl,
-                            'radius_id' => $data['.id'],
-                            'group'     => $data['group'] ?? '',
-                        ];
-                    }
-                    // Reachable but the user is not here — no need to try the alternate protocol.
-                    return null;
-                }
-
-                // 404 etc. — server reachable, user absent on this config.
-                if ($response->status() === 404) {
-                    return null;
-                }
-
-                $this->log('warning', 'Unexpected HTTP status during account lookup', [
-                    'username' => $username,
-                    'base_url' => $baseUrl,
-                    'status'   => $response->status(),
-                ]);
-            } catch (Throwable $e) {
-                // Connection/timeout error — try the alternate protocol / next server.
-                $this->log('error', 'Connection error during account lookup', [
-                    'username' => $username,
-                    'base_url' => $baseUrl,
-                    'error'    => $e->getMessage(),
-                ]);
-            }
+            return null;
         }
-
-        return null;
-    }
-
-    /**
-     * Build the base URL(s) to try for a config: configured protocol first, then the alternate.
-     */
-    public function baseUrlsFor(RadiusConfig $config): array
-    {
-        $protocol = strtolower($config->ssl_type ?: 'https');
-        $primary = "{$protocol}://{$config->ip}:{$config->port}";
-        $alternate = $protocol === 'https'
-            ? "http://{$config->ip}:{$config->port}"
-            : "https://{$config->ip}:{$config->port}";
-
-        return [$primary, $alternate];
     }
 
     private function log(string $level, string $message, array $context = []): void

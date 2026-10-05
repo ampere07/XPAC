@@ -280,8 +280,11 @@ const BillingConfig: React.FC = () => {
       }
       return;
     }
+    // Day-of-month style settings stop at 31; Pullout Day counts days AFTER disconnection, so it
+    // may run longer (up to 60). Mirrors BillingConfigController's validation.
+    const maxValue = field === 'pullout_day' ? 60 : 31;
     const numValue = parseInt(value, 10);
-    if (!isNaN(numValue) && numValue >= 0 && numValue <= 31) {
+    if (!isNaN(numValue) && numValue >= 0 && numValue <= maxValue) {
       setBillingConfigInput((prev) => ({ ...prev, [field]: numValue }));
     }
   };

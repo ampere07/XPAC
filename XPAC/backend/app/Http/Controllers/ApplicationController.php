@@ -596,6 +596,90 @@ class ApplicationController extends Controller
         }
     }
 
+    /**
+     * DELETE /api/applications/{id}/with-job-orders — Super Admin only.
+     *
+     * The Application-side twin of JobOrderController::destroyWithApplication(): permanently
+     * deletes the application AND every job order created from it, in one transaction. A customer
+     * account already onboarded from one of those job orders stays (its link is nulled by the
+     * foreign key). Role checked here on the server, not only by hiding the button.
+     */
+    public function destroyWithJobOrders($id)
+    {
+        $user = auth()->user();
+        if (!$user || (int) $user->role_id !== 7) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete an application and its job orders.',
+            ], 403);
+        }
+
+        try {
+            $application = Application::find($id);
+            if (!$application) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Application not found. It may have been deleted already.',
+                ], 404);
+            }
+
+            $applicationData = $application->toArray();
+            $jobOrders = \App\Models\JobOrder::where('application_id', $application->id)->get();
+            $jobOrderData = $jobOrders->toArray();
+
+            DB::transaction(function () use ($application, $jobOrders) {
+                foreach ($jobOrders as $jobOrder) {
+                    $jobOrder->delete();
+                }
+                $application->delete();
+            });
+
+            $userEmail = $user->email_address ?? $user->email ?? 'System';
+            $jobOrderIds = $jobOrders->pluck('id')->all();
+
+            AuditTrailLog::create([
+                'old_details' => [
+                    'type' => 'applications_with_joborders',
+                    'id' => $id,
+                    'data' => $applicationData,
+                    'job_orders' => $jobOrderData,
+                ],
+                'new_details' => null,
+                'created_by_user' => $userEmail,
+                'updated_by_user' => $userEmail,
+            ]);
+
+            ActivityLog::log(
+                'Application Deleted',
+                "Application #{$id}" . ($jobOrderIds ? ' and Job Order #' . implode(', #', $jobOrderIds) : '') . " deleted by {$userEmail}",
+                'warning',
+                [
+                    'resource_type' => 'Application',
+                    'resource_id' => $id,
+                    'additional_data' => [
+                        'application_data' => $applicationData,
+                        'job_order_ids' => $jobOrderIds,
+                    ],
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => $jobOrderIds
+                    ? "Application #{$id} and job order #" . implode(', #', $jobOrderIds) . ' were deleted.'
+                    : "Application #{$id} was deleted (it had no job order).",
+                'deleted_job_order_ids' => $jobOrderIds,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("Failed to delete application {$id} with job orders: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete the application and its job orders.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function destroy($id)
     {
         try {

@@ -6,7 +6,7 @@ import { userSettingsService } from '../services/userSettingsService';
 import NotificationToast from '../components/NotificationToast';
 import { formUIService } from '../services/formUIService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
+import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts, NAV_BADGES_CHANGED_EVENT } from '../services/navBadgeService';
 import { usePermissions } from '../hooks/usePermissions';
 
 interface HeaderProps {
@@ -68,6 +68,7 @@ const ATTENTION_ROWS: { key: keyof NavBadgeCounts; label: string; section: strin
   { key: 'service_order', label: 'Service Orders', section: 'service-order' },
   { key: 'work_order', label: 'Work Orders', section: 'work-order' },
   { key: 'transaction', label: 'Transactions', section: 'transaction-list' },
+  { key: 'prepaid_override', label: 'Prepaid Overrides', section: 'prepaid-override' },
 ];
 
 /**
@@ -472,10 +473,12 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, onSearch, onNavigate, 
 
     load();
     const interval = setInterval(load, 2 * 60 * 1000);
+    window.addEventListener(NAV_BADGES_CHANGED_EVENT, load);
 
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener(NAV_BADGES_CHANGED_EVENT, load);
     };
   }, []);
 

@@ -74,12 +74,20 @@ final class Permissions
 
         'live-monitor',
 
+        // One queue for everything awaiting an approver: pending transactions and job orders
+        // whose onsite work is Done. Read-only — each Approve still needs its own page's key.
+        'for-approval',
+
         // Billing
         'customer',
         'transaction-list',
         'transactions-revert',
         'prepaid-override',
+        'customer-images',
         'payment-portal',
+        // Collections summary across transactions and the payment portal. Read-only; no
+        // seeded role but SuperAdmin holds it — grant it to a custom role from Role Management.
+        'finance',
         'soa',
         'invoice',
         'overdue',
@@ -457,6 +465,7 @@ final class Permissions
         Role::ADMINISTRATOR => [
             'dashboard',
             'live-monitor',
+            'for-approval',
             // Billing
             'customer',
             'customer.so-request', 'customer.details-edit', 'customer.attachment', 'customer.transact',
@@ -465,6 +474,7 @@ final class Permissions
             'transaction-list.batch-approve', 'transaction-list.approve', 'transaction-list.revert-request',
             'transactions-revert',
             'prepaid-override',
+            'customer-images',
             'payment-portal',
             'soa',
             'invoice',
@@ -561,6 +571,9 @@ final class Permissions
             'service-order.tech-edit',
             'work-order',
             'lcp-nap-location',
+            // View only: the list and details. No 'transaction-list.approve', so no
+            // Approve / Mark as Failed (TransactionController also refuses them for role 2).
+            'transaction-list',
         ],
 
         // The customer portal. No sidebar, no admin pages.
@@ -570,15 +583,11 @@ final class Permissions
             'customer-support',
         ],
 
-        // Sales agent: their own referrals, their own payout history and
-        // invoices (read-only, scoped server side), the application form.
+        // Sales agent: the Transaction List only, exactly as a technician sees it — browse
+        // transactions and record a payment (Add Transaction), but no 'transaction-list.approve',
+        // so no Approve / Mark as Failed (TransactionController also refuses them for role 4).
         Role::AGENT => [
-            'agent-dashboard',
-            'agent-application',
-            'job-order',
-            'work-order',
-            'bonus-history',
-            'agent-invoices',
+            'transaction-list',
         ],
 
         Role::INVENTORY_STAFF => [
@@ -629,7 +638,7 @@ final class Permissions
         Role::ADMINISTRATOR   => 'dashboard',
         Role::TECHNICIAN      => 'job-order',
         Role::CUSTOMER        => 'customer-dashboard',
-        Role::AGENT           => 'agent-dashboard',
+        Role::AGENT           => 'transaction-list',
         Role::INVENTORY_STAFF => 'inventory',
         Role::OSP             => 'work-order',
         Role::HEAD_TECH       => 'application-management',

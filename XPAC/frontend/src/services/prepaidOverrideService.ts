@@ -23,6 +23,8 @@ export interface PrepaidOverrideEnforcement {
     reason?: string;
     expires_at?: string;
     username?: string;
+    /** true = the change was read back from RADIUS and confirmed; false = it did not take and was queued. */
+    verified?: boolean;
 }
 
 export type PrepaidOverrideStatus = 'pending' | 'approved' | 'processed' | 'rejected';
@@ -159,6 +161,8 @@ export const prepaidOverrideService = {
         message?: string;
         data?: PrepaidOverrideRequest;
         enforcement?: PrepaidOverrideEnforcement | null;
+        /** 'radius_user_missing' when the approval was refused because the PPPoE user is not on RADIUS. */
+        code?: string;
     }> => {
         try {
             const response = await apiClient.put<ApiResponse<PrepaidOverrideRequest>>(
@@ -176,6 +180,7 @@ export const prepaidOverrideService = {
             return {
                 success: false,
                 message: error.response?.data?.message || error.message || 'Failed to update status',
+                code: error.response?.data?.code,
             };
         }
     },

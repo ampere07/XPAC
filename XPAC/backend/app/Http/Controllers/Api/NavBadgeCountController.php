@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\ForApprovalQueueService;
+use App\Support\Permissions;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -76,11 +78,22 @@ class NavBadgeCountController extends Controller
                 'transaction' => $this->countWhere('transactions', $organizationId, function (Builder $q) {
                     $q->whereIn(DB::raw('LOWER(TRIM(status))'), ['pending', 'queued']);
                 }),
+
+                // Prepaid Override requests waiting for a decision.
+                'prepaid_override' => $this->countWhere('prepaid_override_requests', $organizationId, function (Builder $q) {
+                    $q->whereRaw('LOWER(TRIM(status)) = ?', ['pending']);
+                }),
             ];
 
             return response()->json([
                 'success' => true,
-                'data' => $counts + ['total' => array_sum($counts)],
+                'data' => $counts + [
+                    'total' => array_sum($counts),
+                    // Beside the total, never in it: the queue re-counts pending transactions and
+                    // done job orders the badges above already include, so the bell would count
+                    // each of them twice.
+                    'for_approval' => $this->forApprovalCount(),
+                ],
             ]);
         } catch (\Throwable $e) {
             Log::error('[NAV BADGES] Failed to build counts: ' . $e->getMessage());
@@ -96,9 +109,32 @@ class NavBadgeCountController extends Controller
                     'service_order' => 0,
                     'work_order' => 0,
                     'transaction' => 0,
+                    'prepaid_override' => 0,
                     'total' => 0,
+                    'for_approval' => 0,
                 ],
             ]);
+        }
+    }
+
+    /**
+     * Records in the For Approval queue, counted by the same rules the page lists them by (see
+     * ForApprovalQueueService) so the badge and the page always agree. 0 for a user who cannot
+     * open the page, without querying.
+     */
+    private function forApprovalCount(): int
+    {
+        $user = auth()->user();
+
+        if (!Permissions::allows($user, 'for-approval')) {
+            return 0;
+        }
+
+        try {
+            return app(ForApprovalQueueService::class)->counts($user)['total'];
+        } catch (\Throwable $e) {
+            Log::warning('[NAV BADGES] For Approval count failed: ' . $e->getMessage());
+            return 0;
         }
     }
 

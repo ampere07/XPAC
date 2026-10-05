@@ -16,6 +16,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import { transactionService } from '../services/transactionService';
+import { usePermissions } from '../hooks/usePermissions';
 import { relatedDataService } from '../services/relatedDataService';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import LoadingModalGlobal from './common/LoadingModalGlobal';
@@ -25,6 +26,9 @@ interface Transaction {
   account_no: string;
   transaction_type: string;
   received_payment: number;
+  // Agent-recorded payments only: the two parts received_payment is made of. NULL otherwise.
+  collected_payment?: number | string | null;
+  agent_collected?: number | string | null;
   payment_date: string;
   date_processed: string;
   processed_by_user: string;
@@ -78,6 +82,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   onPrevious,
   onNext,
 }) => {
+  // Approve is hidden from roles without 'transaction-list.approve' (e.g. technicians,
+  // who may view transactions but not settle them).
+  const { can: hasPermission } = usePermissions();
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -244,7 +251,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           >
             {accountNo} | {transaction.account?.customer?.full_name || '-'}
           </Text>
-          {statusLower === 'pending' && (
+          {hasPermission('transaction-list.approve') && statusLower === 'pending' && (
             <TouchableOpacity
               onPress={handleApprove}
               disabled={loading}
@@ -304,6 +311,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
             {renderField('Full Name', transaction.account?.customer?.full_name || '-')}
             {renderField('Contact No.', transaction.account?.customer?.contact_number_primary || '-')}
             {renderField('Transaction Type', transaction.transaction_type || '-')}
+            {/* Only on agent-recorded payments, where Received Payment is these two added together. */}
+            {transaction.collected_payment != null && renderField('Collected Payment', formatCurrency(transaction.collected_payment))}
+            {transaction.agent_collected != null && renderField('Agent Collected', formatCurrency(transaction.agent_collected))}
             {renderField(
               'Received Payment',
               formatCurrency(transaction.received_payment),

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   X, ExternalLink, Edit, Settings, Loader, ArrowRightCircle, Paperclip,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Trash2
 } from 'lucide-react';
-import { updateJobOrder, approveJobOrder, getRelatedDetailsUpdateLogs } from '../services/jobOrderService';
+import { updateJobOrder, getRelatedDetailsUpdateLogs } from '../services/jobOrderService';
 import apiClient from '../config/api';
 import { getBillingStatuses, BillingStatus } from '../services/lookupService';
 import { JobOrderDetailsProps } from '../types/jobOrder';
@@ -24,7 +24,9 @@ import { User as UserType } from '../types/api';
 import { getBillingRecords, getBillingRecordDetails, BillingDetailRecord } from '../services/billingService';
 import { getAllInventoryItems } from '../services/inventoryItemService';
 import { isAgentUser } from '../utils/agentReferral';
+import { isSuperAdminUser } from '../utils/agentAccess';
 import { usePermissions } from '../hooks/usePermissions';
+import { useJobOrderApproval, canApproveJobOrder } from '../hooks/useJobOrderApproval';
 
 const PlanListDetails = React.lazy(() => import('./PlanListDetails'));
 const UserDetails = React.lazy(() => import('./UserDetails'));
@@ -67,6 +69,10 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [shouldCloseOnSuccess, setShouldCloseOnSuccess] = useState(false);
+  // Delete job order + its application: Super Admin only (the backend checks the role too).
+  const canDeleteJobOrder = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeletingJobOrder, setIsDeletingJobOrder] = useState(false);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const startXRef = useRef<number>(0);
@@ -322,6 +328,9 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
   // One answer for every role, from config/permissions.ts: the seeded role's
   // table (as the web draws it) or a custom role's server-resolved list.
   const hasPermission = (permission: string): boolean => can(permission);
+
+  // Shared with the For Approval queue, so approving there is the same act as approving here.
+  const { approveJobOrder } = useJobOrderApproval();
 
   useEffect(() => {
     const fetchBillingStatuses = async () => {
@@ -634,144 +643,27 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
       setIsApprovalModalOpen(false);
       setShowLoadingModal(true);
 
-      if (!jobOrder.id) {
-        throw new Error('Cannot approve job order: Missing ID');
-      }
+      const outcome = await approveJobOrder(jobOrder);
 
-      const response = await approveJobOrder(jobOrder.id);
+      setShowLoadingModal(false);
 
-      if (response.success) {
-        const accountNumber = response.data?.account_number || 'N/A';
-        const contactNumber = response.data?.contact_number_primary || 'N/A';
-        const userCreated = response.data?.user_created;
-
-        let message = 'Job Order approved successfully! Customer, billing account, and technical details have been created.';
-
-        // A VIP job order is approved as a standard postpaid account, so the prepaid pay-first
-        // steps are skipped even when the customer signed up under a prepaid billing type. Stated
-        // here because the difference is otherwise invisible until someone opens the account.
-        if (response.data?.vip_enabled) {
-          message += '\n\nApproved as VIP: the account was created Active and is handled the same as a postpaid customer — no prepaid restriction was applied.';
-        }
-
-        if (userCreated) {
-          message += `\n\nCustomer Login Credentials:\nUsername: ${accountNumber}\nPassword: ${contactNumber}`;
-        }
-
-        // Update the ONU's location details in SmartOLT — name, address and contact (best-effort).
-        const sn = jobOrder.Modem_Router_SN || jobOrder.modem_router_sn || jobOrder.Modem_SN || jobOrder.modem_sn;
-        const pppoeUsername = jobOrder.Username || jobOrder.username || jobOrder.pppoe_username;
-
-        // SmartOLT's "Address or comment" is one free-text field, so the installation address is
-        // composed into a single readable line. Empty parts are dropped rather than leaving
-        // stray commas.
-        const smartOltAddress = [
-          jobOrder.Installation_Address || jobOrder.installation_address || jobOrder.Address,
-          jobOrder.Barangay,
-          jobOrder.City,
-          jobOrder.Region,
-        ].filter(Boolean).join(', ');
-
-        const smartOltContact = jobOrder.Mobile_Number || jobOrder.Contact_Number || '';
-
-        if (sn && pppoeUsername) {
-          try {
-            const smartOltResponse = await apiClient.post('/smart-olt/update-name', {
-              sn,
-              pppoe_username: pppoeUsername,
-              // Omitted when blank so a missing value never blanks out what is already in SmartOLT.
-              ...(smartOltAddress ? { address_or_comment: smartOltAddress } : {}),
-              ...(smartOltContact ? { contact: smartOltContact } : {}),
-            });
-
-            if ((smartOltResponse.data as any)?.success) {
-              const updated = (smartOltResponse.data as any)?.updated || {};
-              const extras = [
-                updated.address ? 'address' : null,
-                updated.contact ? 'contact' : null,
-              ].filter(Boolean).join(' and ');
-              message += `\n\nSmartOLT ONU updated — name: ${pppoeUsername}`;
-              if (extras) message += ` (also ${extras})`;
-            } else {
-              const smartOltMsg = (smartOltResponse.data as any)?.message || 'Unknown error';
-              message += `\n\nNote: Could not update SmartOLT ONU name (${smartOltMsg}).`;
-            }
-          } catch (smartOltErr: any) {
-            console.error('SmartOLT ONU name update error:', smartOltErr);
-            const smartOltMsg = smartOltErr.response?.data?.message || smartOltErr.message || 'Connection error';
-            message += `\n\nNote: Could not update SmartOLT ONU name (${smartOltMsg}).`;
-          }
-        }
-
-        setShowLoadingModal(false);
-        setSuccessMessage(message);
+      if (outcome.success) {
+        setSuccessMessage(outcome.message);
         setShouldCloseOnSuccess(true);
         setShowSuccessModal(true);
         if (onRefresh) {
           onRefresh();
         }
       } else {
-        setShowLoadingModal(false);
-        const backendMsg = response.error || response.message || 'Failed to approve job order';
-        let displayMsg = backendMsg;
-
-        // Map duplicate errors to more specific messages
-        if (backendMsg.includes('already data') || backendMsg.includes('duplicate') || backendMsg.toLowerCase().includes('serial number')) {
-          if (backendMsg.toLowerCase().includes('serial number') || backendMsg.toLowerCase().includes('modem')) {
-            displayMsg = "SN Duplicate, Please check on Customer Details. SN Duplicate Detected.";
-          } else if (backendMsg.includes("already data") || backendMsg.toLowerCase().includes('duplicate')) {
-            displayMsg = "Username Duplicate, Please check on Customer Details. Username Duplicate Detected.";
-          }
-
-          if (response.table && !displayMsg.includes('Customer Details')) {
-            displayMsg = `Duplicate Entry Error: ${displayMsg}\nTable: ${response.table}`;
-          }
-        }
-
-        setErrorMessage(displayMsg);
+        setErrorMessage(outcome.message);
         setShowErrorModal(true);
       }
-    } catch (err: any) {
-      setShowLoadingModal(false);
-
-      let displayMsg = 'Failed to approve job order';
-      let tableInfo = '';
-
-      if (err.response?.data) {
-        const data = err.response.data;
-        const rawMsg = data.error || data.message || 'Failed to approve job order';
-        displayMsg = rawMsg;
-
-        // Map duplicate errors to more specific messages
-        if (rawMsg.includes('already data') || rawMsg.includes('duplicate') || rawMsg.toLowerCase().includes('serial number') || rawMsg.includes('already been approved')) {
-          if (rawMsg.toLowerCase().includes('serial number') || rawMsg.toLowerCase().includes('modem')) {
-            displayMsg = "SN Duplicate, Please check on Customer Details. SN Duplicate Detected.";
-          } else if (rawMsg.includes("already data") || rawMsg.toLowerCase().includes('duplicate')) {
-            displayMsg = "Username Duplicate, Please check on Customer Details. Username Duplicate Detected.";
-          }
-
-          if (data.table && !displayMsg.includes('Customer Details')) {
-            tableInfo = `\nTable: ${data.table}`;
-          }
-        }
-      } else if (err.message) {
-        displayMsg = err.message;
-      }
-
-      setErrorMessage(`${displayMsg}${tableInfo}`);
-      setShowErrorModal(true);
-      console.error('Approve error:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const shouldShowApproveButton = () => {
-    const onsiteStatus = (jobOrder.Onsite_Status || '').toLowerCase();
-    const billingStatus = (jobOrder.billing_status || jobOrder.Billing_Status || '').toLowerCase();
-
-    return onsiteStatus === 'done' && billingStatus !== 'done' && hasPermission('job-order.approve');
-  };
+  const shouldShowApproveButton = () => canApproveJobOrder(jobOrder, hasPermission);
 
   const shouldShowEditButton = () => {
     const billingStatus = (jobOrder.billing_status || jobOrder.Billing_Status || '').toLowerCase();
@@ -2135,6 +2027,17 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </button>
             </div>
 
+            {canDeleteJobOrder && (
+              <button
+                onClick={() => setShowDeleteModal(true)}
+                disabled={isDeletingJobOrder}
+                className={`${isDarkMode ? 'text-gray-400' : 'text-gray-600'} hover:text-red-500 disabled:opacity-50`}
+                title="Delete Job Order and Application"
+              >
+                {isDeletingJobOrder ? <Loader size={20} className="animate-spin" /> : <Trash2 size={20} />}
+              </button>
+            )}
+
             {!(userRole === 'agent' || String(roleId) === '4') && (
               <div className="relative">
                 <button
@@ -2142,7 +2045,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                   className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}
                   title="Field Settings"
                 >
-                  <Settings size={16} />
+                  <Settings size={20} />
                 </button>
                 {showFieldSettings && (
                   <div className={`absolute right-0 mt-2 w-64 sm:w-80 rounded-lg shadow-lg border z-50 max-h-80 overflow-y-auto ${isDarkMode
@@ -2222,7 +2125,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                 className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}
                 title="Attachments"
               >
-                <Paperclip size={18} />
+                <Paperclip size={20} />
               </button>
             )}
 
@@ -2231,7 +2134,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}
               aria-label="Close"
             >
-              <X size={18} />
+              <X size={20} />
             </button>
           </div>
         </div>
@@ -2426,6 +2329,32 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
           </div>
         </div>
       )}
+
+      {/* Delete Job Order + Application (Super Admin) */}
+      <ConfirmationModal
+        isOpen={showDeleteModal}
+        title="Delete Job Order"
+        message={`Are you sure you want to permanently delete Job Order #${jobOrder.id} and its application? This cannot be undone.`}
+        confirmText="Yes, Delete"
+        cancelText="Cancel"
+        onConfirm={async () => {
+          setShowDeleteModal(false);
+          setIsDeletingJobOrder(true);
+          try {
+            const res = await apiClient.delete<{ success: boolean; message: string }>(`/job-orders/${jobOrder.id}/with-application`);
+            setSuccessMessage(res.data?.message || 'Job order and application deleted.');
+            setShouldCloseOnSuccess(true);
+            setShowSuccessModal(true);
+            onRefresh?.();
+          } catch (err: any) {
+            setErrorMessage(err?.response?.data?.message || 'Failed to delete the job order and its application.');
+            setShowErrorModal(true);
+          } finally {
+            setIsDeletingJobOrder(false);
+          }
+        }}
+        onCancel={() => setShowDeleteModal(false)}
+      />
 
       {/* Error Modal */}
       <ConfirmationModal

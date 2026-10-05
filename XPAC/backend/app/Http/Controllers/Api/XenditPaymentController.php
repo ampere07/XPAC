@@ -21,6 +21,9 @@ class XenditPaymentController extends Controller
     /** SuperAdmin sees every organization; everyone else is scoped to their own. */
     private const SUPERADMIN_ROLE_ID = 7;
 
+    /** Prepaid advance payment: periods a portal checkout may buy at once. 1 = an ordinary top-up. */
+    private const ADVANCE_MONTH_OPTIONS = [1, 2, 3, 5];
+
     private $xenditApiKey;
     private $xenditCallbackToken;
     private $portalLink;
@@ -123,12 +126,6 @@ class XenditPaymentController extends Controller
 
             $amount = floatval($amount);
 
-            // Convenience fee is charged on top of the bill. $amount stays the amount that
-            // settles the customer's invoices; $chargeAmount is what Xendit collects.
-            $convenienceFeePercentage = $this->getConvenienceFeePercentage();
-            $convenienceFee = round($amount * ($convenienceFeePercentage / 100), 2);
-            $chargeAmount = round($amount + $convenienceFee, 2);
-
             // Get account details from billing_accounts table using username (account_no)
             $account = DB::table('billing_accounts')
                 ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
@@ -189,6 +186,160 @@ class XenditPaymentController extends Controller
                 // outer of two guards, not the only one.
                 $activateNow = $selectedPlanId !== null && $request->boolean('activate_now');
             }
+
+            // Prepaid plan purchase: the customer's discounts come off the plan price (₱1,000 plan,
+            // ₱100 discount -> ₱900 charged). Decided here, not trusted from the client, which
+            // keeps sending the full plan price.
+            //
+            // Only for a plan purchase that raises no bill. "Pay Current Balance" (no plan) and an
+            // unpaid onboarding bill both pay an invoice that createEnhancedInvoice() already
+            // discounted — applying it again would discount the same bill twice.
+            $discountAmount = 0.0;
+            $discountIds = [];
+            $discountColumnsPresent = Schema::hasColumn('pending_payments', 'discount_amount')
+                && Schema::hasColumn('pending_payments', 'discount_ids');
+
+            // Rebates come off the same purchases as discounts, after them (CheckoutRebateService).
+            $rebateAmount = 0.0;
+            $rebateUsages = [];
+            $rebateColumnsPresent = Schema::hasColumn('pending_payments', 'rebate_amount')
+                && Schema::hasColumn('pending_payments', 'rebate_usage_ids');
+
+            $isOnboardingBill = false;
+            if ($isPrepaid && $selectedPlanId !== null) {
+                $billingAccount = BillingAccount::where('account_no', $accountNo)->first();
+                $isOnboardingBill = $billingAccount && app(EnhancedBillingGenerationServiceWithNotifications::class)
+                    ->isUnpaidPrepaidOnboarding($billingAccount);
+            }
+
+            // Prepaid advance payment: buy 2, 3 or 5 periods at once (₱1,000 plan × 3 = ₱3,000,
+            // expiry +34 × 3 days). Only on a plan purchase — "Pay Current Balance" and an unpaid
+            // onboarding bill pay one existing bill, not periods.
+            //
+            // The amount is checked against plan price × months rather than trusted: the months
+            // decide how many days are granted, so a request claiming 5 months for the price of
+            // one must be refused, not settled.
+            $advanceMonths = (int) ($request->input('months') ?: 1);
+            if (!in_array($advanceMonths, self::ADVANCE_MONTH_OPTIONS, true)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Advance payment can only be for ' . implode(', ', array_slice(self::ADVANCE_MONTH_OPTIONS, 1)) . ' months'
+                ], 422);
+            }
+
+            if ($advanceMonths > 1) {
+                if (!$isPrepaid || $selectedPlanId === null || $isOnboardingBill) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Advance payment is only available when buying a prepaid plan'
+                    ], 422);
+                }
+
+                $requiredAmount = round((float) (AppPlan::find($selectedPlanId)->price ?? 0) * $advanceMonths, 2);
+                if ($requiredAmount <= 0 || round($amount, 2) < $requiredAmount) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => "{$advanceMonths} months of this plan costs ₱" . number_format($requiredAmount, 2)
+                    ], 422);
+                }
+            }
+
+            // Billing type switch chosen at Pay Now. Applied only once this payment settles
+            // (BillingTypeMigrationService via PaymentWorkerService), so nothing changes here
+            // beyond checking the request is valid and the amount covers what the switch needs.
+            $migrateTo = $request->input('migrate_to') ?: null;
+            if ($migrateTo !== null) {
+                if (!\App\Services\BillingTypeMigrationService::isValidTarget($migrateTo, $account->generation_type ?? null)) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'This account cannot be switched to ' . $migrateTo
+                    ], 422);
+                }
+
+                // A queued prepaid plan change is prepaid-only (it takes effect when the period
+                // lapses) and switching to postpaid would have to drop it — after the customer paid
+                // for it. Refused until the switch has taken effect.
+                if ($migrateTo === \App\Services\BillingTypeMigrationService::TO_POSTPAID
+                    && filled(BillingAccount::where('account_no', $accountNo)->value('pending_plan_id'))) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'You have a plan change scheduled. Switch to postpaid after it takes effect.'
+                    ], 422);
+                }
+
+                if ($migrateTo === \App\Services\BillingTypeMigrationService::TO_PREPAID) {
+                    // Postpaid -> prepaid: clear what is owed AND buy the first prepaid period.
+                    $migratingAccount = BillingAccount::with('customer')->where('account_no', $accountNo)->first();
+                    $currentPlan = $migratingAccount
+                        ? app(\App\Services\PrepaidPlanChangeService::class)->currentPlanFor($migratingAccount)
+                        : null;
+                    $planPriceForSwitch = (float) ($currentPlan->price ?? 0);
+                    // The balance as it stands, credit included: toPrepaid() floors whatever is left
+                    // to 0, so a postpaid credit must reduce what is charged here or it would be
+                    // lost (-₱500 credit + ₱1,000 plan = ₱500 to pay).
+                    $requiredAmount = round((float) $account->account_balance + $planPriceForSwitch, 2);
+
+                    if ($planPriceForSwitch <= 0) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Your current plan could not be priced, so the switch to prepaid cannot be made online. Please contact support.'
+                        ], 422);
+                    }
+
+                    if ($requiredAmount < 1) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Your account credit already covers a prepaid period, so there is nothing to pay online. Please contact support to switch.'
+                        ], 422);
+                    }
+
+                    // Exact, not "at least": toPrepaid() floors the balance to 0, so anything paid
+                    // beyond balance + one period would simply be lost.
+                    if ($advanceMonths > 1 || round($amount, 2) !== $requiredAmount) {
+                        return response()->json([
+                            'status' => 'error',
+                            'message' => 'Switching to prepaid costs ₱' . number_format($requiredAmount, 2)
+                                . ' (your balance plus one period of your plan)'
+                        ], 422);
+                    }
+                }
+            }
+
+            if ($isPrepaid && $selectedPlanId !== null && $discountColumnsPresent) {
+                if (!$isOnboardingBill) {
+                    $discountService = app(\App\Services\CheckoutDiscountService::class);
+                    $available = $discountService->available($accountNo);
+                    $discountAmount = $discountService->applicableAmount($available['amount'], $amount);
+
+                    if ($discountAmount > 0) {
+                        $discountIds = $available['ids'];
+                    }
+                }
+            }
+
+            // Rebates on what the discount left, under the same ₱1 floor: ₱1,000 plan, ₱100
+            // discount, 3-day rebate (₱88.24) -> ₱811.76 charged.
+            if ($isPrepaid && $selectedPlanId !== null && $rebateColumnsPresent && !$isOnboardingBill) {
+                $rebates = app(\App\Services\CheckoutRebateService::class)
+                    ->available($accountNo, (float) (AppPlan::find($selectedPlanId)->price ?? 0));
+                $rebateAmount = app(\App\Services\CheckoutDiscountService::class)
+                    ->applicableAmount($rebates['amount'], round($amount - $discountAmount, 2));
+
+                if ($rebateAmount > 0) {
+                    $rebateUsages = $rebates['usages'];
+                }
+            }
+
+            // $planPrice is what the purchase is worth to the account; $amount is the cash that
+            // settles it once the discount and rebate are off.
+            $planPrice = $amount;
+            $amount = round($amount - $discountAmount - $rebateAmount, 2);
+
+            // Convenience fee is charged on top of the bill (after any discount). $amount stays the
+            // amount that settles the customer's invoices; $chargeAmount is what Xendit collects.
+            $convenienceFeePercentage = $this->getConvenienceFeePercentage();
+            $convenienceFee = round($amount * ($convenienceFeePercentage / 100), 2);
+            $chargeAmount = round($amount + $convenienceFee, 2);
 
             // Note: Duplicate check now handled by frontend via check-pending endpoint
             // This allows better UX with resume option
@@ -258,7 +409,12 @@ class XenditPaymentController extends Controller
             // Prepare Xendit payload. The gateway collects the bill plus the convenience fee.
             $items = [
                 [
-                    'name' => "Account $accountNo - " . ($account->desired_plan ?? 'Internet Service'),
+                    // The discount is named on the line rather than itemised: Xendit items cannot be
+                    // negative, and the item prices have to add up to the invoice amount.
+                    'name' => "Account $accountNo - " . ($account->desired_plan ?? 'Internet Service')
+                        . ($advanceMonths > 1 ? " ({$advanceMonths} months advance)" : '')
+                        . ($discountAmount > 0 ? ' (less ₱' . number_format($discountAmount, 2) . ' discount)' : '')
+                        . ($rebateAmount > 0 ? ' (less ₱' . number_format($rebateAmount, 2) . ' rebate)' : ''),
                     'quantity' => 1,
                     'price' => $amount,
                     'category' => 'Internet Service'
@@ -286,6 +442,21 @@ class XenditPaymentController extends Controller
                 'customer' => $customer,
                 'items' => $items
             ];
+
+            // Advance months ride in the invoice metadata, which is stored with the row in
+            // json_payload: PaymentWorkerService reads it back at settlement to grant
+            // advance_months × 34 days. Omitted for an ordinary one-period top-up.
+            $metadata = [];
+            if ($advanceMonths > 1) {
+                $metadata['advance_months'] = $advanceMonths;
+            }
+            // Likewise the billing type switch, applied by the worker once this payment settles.
+            if ($migrateTo !== null) {
+                $metadata['migrate_to'] = $migrateTo;
+            }
+            if ($metadata) {
+                $payload['metadata'] = $metadata;
+            }
 
             // Call Xendit API
             $response = Http::withBasicAuth($this->xenditApiKey, '')
@@ -377,6 +548,16 @@ class XenditPaymentController extends Controller
                 $paymentRow['activate_now'] = $activateNow;
             }
 
+            if ($discountColumnsPresent) {
+                $paymentRow['discount_amount'] = $discountAmount > 0 ? $discountAmount : null;
+                $paymentRow['discount_ids'] = $discountAmount > 0 ? json_encode($discountIds) : null;
+            }
+
+            if ($rebateColumnsPresent) {
+                $paymentRow['rebate_amount'] = $rebateAmount > 0 ? $rebateAmount : null;
+                $paymentRow['rebate_usage_ids'] = $rebateAmount > 0 ? json_encode($rebateUsages, JSON_FORCE_OBJECT) : null;
+            }
+
             DB::table('pending_payments')->insert($paymentRow);
 
             Log::info('Payment created successfully', [
@@ -391,6 +572,13 @@ class XenditPaymentController extends Controller
                 // materialise at settlement can be traced back to what was actually asked for.
                 'selected_plan_id' => $selectedPlanId,
                 'activate_now' => $activateNow,
+                'plan_price' => $planPrice,
+                'advance_months' => $advanceMonths,
+                'migrate_to' => $migrateTo,
+                'discount_amount' => $discountAmount,
+                'discount_ids' => $discountIds,
+                'rebate_amount' => $rebateAmount,
+                'rebate_usage_ids' => $rebateUsages,
             ]);
 
             event(new PaymentUpdated(['action' => 'created', 'reference_no' => $referenceNo, 'account_no' => $accountNo, 'amount' => $amount]));
@@ -406,6 +594,9 @@ class XenditPaymentController extends Controller
                 'convenience_fee_percentage' => $convenienceFeePercentage,
                 'convenience_fee' => $convenienceFee,
                 'total_charged' => $chargeAmount,
+                'discount_amount' => $discountAmount,
+                'rebate_amount' => $rebateAmount,
+                'advance_months' => $advanceMonths,
                 'account_balance' => floatval($account->account_balance)
             ]);
 
@@ -790,6 +981,55 @@ class XenditPaymentController extends Controller
             return response()->json([
                 'status' => 'error',
                 'message' => 'Failed to get account balance'
+            ], 500);
+        }
+    }
+
+    /**
+     * Read-only: the discount a prepaid plan purchase would currently get, so the payment screen
+     * can show the net price before checkout. createPayment() re-derives it — this is disclosure,
+     * and the charge never depends on what the client was shown.
+     *
+     * Returns the full available amount; the per-purchase ₱1 floor is applied against the chosen
+     * plan's price (CheckoutDiscountService::applicableAmount), which the client mirrors.
+     */
+    public function getAvailableDiscount(Request $request)
+    {
+        try {
+            $accountNo = $request->input('account_no');
+
+            if (!$accountNo) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Account number is required'
+                ], 400);
+            }
+
+            $available = app(\App\Services\CheckoutDiscountService::class)->available($accountNo);
+            $rebates = Schema::hasColumn('pending_payments', 'rebate_amount')
+                ? app(\App\Services\CheckoutRebateService::class)->available($accountNo)
+                : ['amount' => 0.0];
+
+            return response()->json([
+                'status' => 'success',
+                // Discounts and rebates together: both come off the plan price at checkout, and the
+                // client applies the ₱1 floor to the total.
+                'discount_amount' => round($available['amount'] + $rebates['amount'], 2),
+                'discounts_only' => $available['amount'],
+                'rebate_amount' => $rebates['amount'],
+            ]);
+
+        } catch (Exception $e) {
+            Log::error('Get available discount failed', [
+                'account_no' => $request->input('account_no'),
+                'error' => $e->getMessage()
+            ]);
+
+            // Non-fatal for the client: it shows no discount, and checkout still applies it.
+            return response()->json([
+                'status' => 'error',
+                'discount_amount' => 0,
+                'message' => 'Failed to get available discount'
             ], 500);
         }
     }

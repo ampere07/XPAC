@@ -579,6 +579,35 @@ class GoogleDrivePdfGenerationService
         ];
     }
 
+    /**
+     * Render one of the PDF templates in email_templates (e.g. SOA_TEMPLATE) with $data, exactly
+     * as generateBillingPdf() does — same placeholder rules, CSS and paper — and return the PDF
+     * bytes without uploading anything. For callers that send the file themselves
+     * (PrepaidSoaService emails it as an attachment).
+     *
+     * @throws \Exception when the template is missing or inactive
+     */
+    public function renderTemplatePdf(string $templateCode, array $data): string
+    {
+        $template = EmailTemplate::where('Template_Code', $templateCode)
+            ->where('Is_Active', true)
+            ->first();
+
+        if (!$template) {
+            throw new \Exception("PDF template {$templateCode} not found");
+        }
+
+        $html = $this->addStrictCss() . $this->replacePlaceholders($template->Body_HTML, $data);
+
+        // A fresh renderer per document: Dompdf instances are single-use.
+        $dompdf = new Dompdf($this->options);
+        $dompdf->loadHtml($html);
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->render();
+
+        return $dompdf->output();
+    }
+
     protected function replacePlaceholders(string $template, array $data): string
     {
         foreach ($data as $key => $value) {

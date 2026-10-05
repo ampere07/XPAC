@@ -9,6 +9,7 @@ import { ColorPalette } from '../services/settingsColorPaletteService';
 import { useBillingStore } from '../store/billingStore';
 import { getUserDisplayName } from '../utils/userDisplay';
 import LoadingModal from './common/LoadingModalGlobal';
+import { notifyNavBadgesChanged } from '../services/navBadgeService';
 
 interface PrepaidOverrideDetailsProps {
     overrideRequest: PrepaidOverrideRequest;
@@ -42,6 +43,8 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [pendingDecision, setPendingDecision] = useState<PendingDecision>(null);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
+    // Set when an approval was refused because the PPPoE user is not on RADIUS.
+    const [radiusMissingMessage, setRadiusMissingMessage] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState('');
     const [enforcement, setEnforcement] = useState<PrepaidOverrideEnforcement | null>(null);
     const [current, setCurrent] = useState<PrepaidOverrideRequest>(overrideRequest);
@@ -137,6 +140,10 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
             setLoadingPercentage(80);
 
             if (!result.success) {
+                if (result.code === 'radius_user_missing') {
+                    setRadiusMissingMessage(result.message || 'This PPPoE username is missing in RADIUS.');
+                    return;
+                }
                 setError(result.message || 'Failed to update this request.');
                 return;
             }
@@ -145,15 +152,13 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
 
             // An approval moves prepaid_expires_at, which the billing list renders — refresh it so
             // the customer row does not keep showing the old date.
+            // In the background: it can pull thousands of billing rows, and the approval is already
+            // saved, so the result is shown without waiting for it.
             if (decision === 'approved') {
-                try {
-                    await refreshLatestData();
-                } catch (refreshErr) {
+                refreshLatestData().catch((refreshErr) => {
                     console.error('Failed to refresh billing records:', refreshErr);
-                }
+                });
             }
-
-            await new Promise((resolve) => setTimeout(resolve, 400));
 
             const updated = (result.data || {
                 ...current,
@@ -163,6 +168,7 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
             setCurrent(updated);
             if (onUpdate) onUpdate(updated);
             setEnforcement(result.enforcement ?? null);
+            notifyNavBadgesChanged();
             setSuccessMessage(
                 result.message ||
                     (decision === 'approved'
@@ -196,11 +202,11 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
     const enforcementBanner = (() => {
         if (!enforcement) return null;
         const map: Record<string, { tone: string; text: string }> = {
-            reconnected: { tone: 'green', text: 'Customer reconnected — the extended period is live in RADIUS.' },
-            restricted: { tone: 'yellow', text: 'Customer restricted — the shortened period has already lapsed.' },
+            reconnected: { tone: 'green', text: `Customer reconnected — the extended period is live in RADIUS${enforcement.verified ? ' (confirmed on the router)' : ''}.` },
+            restricted: { tone: 'yellow', text: `Customer restricted — the shortened period has already lapsed${enforcement.verified ? ' (confirmed on the router)' : ''}.` },
             queued: {
                 tone: 'yellow',
-                text: `RADIUS did not respond, so the change was queued for retry${enforcement.reason ? ` (${enforcement.reason})` : ''}. The expiration itself is already saved.`,
+                text: `${enforcement.verified === false ? 'The change did not show on the router after a retry' : 'RADIUS did not respond'}, so it was queued for retry${enforcement.reason ? ` (${enforcement.reason})` : ''}. The expiration itself is already saved.`,
             },
             skipped: { tone: 'gray', text: `No RADIUS change needed${enforcement.reason ? ` — ${enforcement.reason}` : ''}.` },
             error: {
@@ -397,6 +403,25 @@ const PrepaidOverrideDetails: React.FC<PrepaidOverrideDetailsProps> = ({
                                 className={`text-white px-6 py-2.5 rounded font-medium transition-all active:scale-95 ${pendingDecision === 'approved' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
                             >
                                 {pendingDecision === 'approved' ? 'Confirm Approval' : 'Confirm Rejection'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Approval refused: the PPPoE user is not on RADIUS */}
+            {radiusMissingMessage && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className={`rounded-lg p-6 max-w-md w-full mx-4 border shadow-2xl ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
+                        <h3 className="text-xl font-bold mb-4 text-red-500">PPPoE Username Missing in RADIUS</h3>
+                        <p className={`mb-6 text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{radiusMissingMessage}</p>
+                        <div className="flex justify-end">
+                            <button
+                                onClick={() => setRadiusMissingMessage(null)}
+                                className="text-white px-8 py-2.5 rounded font-medium transition-all active:scale-95"
+                                style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
+                            >
+                                OK
                             </button>
                         </div>
                     </div>

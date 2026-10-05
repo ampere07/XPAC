@@ -24,16 +24,19 @@ import BillingDetails from './CustomerDetails';
 import { BillingDetailRecord } from '../types/billing';
 import { accountStatusFrom, sessionStatusFrom } from '../utils/onlineStatus';
 import { usePermissions } from '../hooks/usePermissions';
+import { useTransactionApproval, canApproveTransaction } from '../hooks/useTransactionApproval';
 
-// Company details printed in the Official Receipt header. These are static registration
+// Company details printed in the Acknowledgement Receipt header. These are static registration
 // details (not stored in settings), so edit them here if the company info ever changes.
 const RECEIPT_COMPANY = {
-  name: 'XPAC IT SOLUTIONS',
-  address: 'Sta. Maria, Zamboanga City, Zamboanga del Sur, Zamboanga Peninsula (Region IX)',
-  tin: '654-854-244-00000',
-  sec: '2023100122771-00',
-  bpNo: 'BP-2024-13126-0',
-  tel: '09531354666',
+  name: "XPAC'S IT SOLUTION",
+  address: 'Purok II, Brgy. Wawa, Bayambang, Pangasinan',
+  // Left blank for now; the receipt omits a TIN / SEC / BP No line that has no value.
+  // Previous values: TIN 654-854-244-00000, SEC 2023100122771-00, BP No BP-2024-13126-0.
+  tin: '',
+  sec: '',
+  bpNo: '',
+  tel: '09338138918 / 09171387848',
   email: 'admin@xpacsconnect.ph',
 };
 
@@ -42,6 +45,9 @@ interface Transaction {
   account_no: string;
   transaction_type: string;
   received_payment: number;
+  // Agent-recorded payments only: the two parts received_payment is made of. NULL otherwise.
+  collected_payment?: number | string | null;
+  agent_collected?: number | string | null;
   payment_date: string;
   date_processed: string;
   processed_by_user: string;
@@ -310,6 +316,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   };
 
   const { refreshLatestData } = useBillingStore();
+  // Shared with the For Approval queue, so approving there is the same act as approving here.
+  const { approveTransaction } = useTransactionApproval();
 
   const handleOpenCustomerOverlay = async () => {
     const accNo = transaction.account?.account_no || transaction.account_no;
@@ -395,55 +403,24 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const confirmApprove = async () => {
     setShowConfirmModal(false);
 
-
     try {
       setLoading(true);
       setLoadingPercentage(0);
       setError(null);
 
-      setLoadingPercentage(20);
+      const outcome = await approveTransaction(transaction.id, setLoadingPercentage);
 
-      let currentUserEmail = '';
-      try {
-        const authData = localStorage.getItem('authData');
-        if (authData) {
-          const parsed = JSON.parse(authData);
-          currentUserEmail = parsed.email_address || parsed.email || parsed.user?.email_address || parsed.user?.email || '';
-        }
-      } catch (err) {
-        console.error('Error getting current user email:', err);
-      }
+      if (outcome.success) {
+        transaction.status = outcome.status || 'Done';
 
-      const result = await transactionService.approveTransaction(transaction.id, currentUserEmail);
-
-      setLoadingPercentage(60);
-
-      if (result.success) {
-        setLoadingPercentage(100);
-
-        const status = result.data?.status || 'Done';
-        transaction.status = status;
-
-        // Auto-refresh customer data
-        try {
-          await refreshLatestData();
-        } catch (refreshErr) {
-          console.error('Failed to auto-refresh customer data:', refreshErr);
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        setSuccessMessage(`Transaction approved successfully. Status: ${status}`);
+        setSuccessMessage(outcome.message);
         setShowSuccessModal(true);
         if (onApprovalSuccess) {
           onApprovalSuccess();
         }
       } else {
-        setError(result.message || 'Failed to approve transaction');
+        setError(outcome.message);
       }
-    } catch (err: any) {
-      setError(`Failed to approve transaction: ${err.message}`);
-      console.error('Approve transaction error:', err);
     } finally {
       setLoading(false);
       setLoadingPercentage(0);
@@ -723,6 +700,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
       contact: firstFilled(remote?.contact, customer?.contact_number_primary) ?? '-',
       address: firstFilled(remote?.address, location) ?? '',
       description: `${firstFilled(remote?.description, transaction.transaction_type) ?? 'Payment'}${planText}`,
+      periodLabel: remote?.coverage_from && remote?.coverage_to
+        ? `Coverage: ${formatSnapshotDate(remote.coverage_from)} – ${formatSnapshotDate(remote.coverage_to)}`
+        : undefined,
       amount: formatCurrency(amount ?? 0),
       paymentMethod: firstFilled(remote?.payment_method, getPaymentMethodName()) ?? '-',
       referenceNo: firstFilled(remote?.reference_no, transaction.reference_no),
@@ -811,7 +791,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           </div>
 
           <div className="flex items-center space-x-3">
-            {hasPermission('transaction-list.approve') && (transaction.status || '').toLowerCase() === 'pending' && (
+            {canApproveTransaction(transaction.status, hasPermission) && (
               <button
                 onClick={handleApproveTransaction}
                 disabled={loading}
@@ -834,7 +814,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                 <span>{loading ? 'Approving...' : 'Approve'}</span>
               </button>
             )}
-            {(transaction.status || '').toLowerCase() === 'pending' && (
+            {/* Same permission as Approve: marking a payment Failed is part of approving. */}
+            {hasPermission('transaction-list.approve') && (transaction.status || '').toLowerCase() === 'pending' && (
               <button
                 onClick={() => setShowFailedConfirmModal(true)}
                 disabled={loading}
@@ -890,7 +871,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                 </button>
               )}
 
-            {/* Print Official Receipt — for any transaction whose money was collected */}
+            {/* Print Acknowledgement Receipt — for any transaction whose money was collected */}
             {isReceiptPrintable && (
               <button
                 onClick={handlePrintReceipt}
@@ -980,6 +961,9 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
               {renderField('Full Name', transaction.account?.customer?.full_name)}
               {renderField('Contact No.', transaction.account?.customer?.contact_number_primary)}
               {renderField('Transaction Type', transaction.transaction_type)}
+              {/* Only on agent-recorded payments, where Received Payment is these two added together. */}
+              {transaction.collected_payment != null && renderField('Collected Payment', formatCurrency(transaction.collected_payment))}
+              {transaction.agent_collected != null && renderField('Agent Collected', formatCurrency(transaction.agent_collected))}
               {renderField('Received Payment', formatCurrency(transaction.received_payment), false, true)}
               {renderField('Payment Date', formatDate(transaction.payment_date))}
               {renderField('Date Processed', formatDate(transaction.date_processed, true))}
@@ -1022,22 +1006,18 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
                   }`}>
                   <div className={`w-40 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                     }`}>Payment Proof</div>
-                  <div className={isDarkMode ? 'text-white flex-1' : 'text-gray-900 flex-1'}>
-                    <div className="mt-2 relative group cursor-pointer" onClick={() => { if (transaction.image_url) window.open(transaction.image_url, '_blank'); }}>
-                      <img
-                        src={transaction.image_url && transaction.image_url.includes('drive.google.com')
-                          ? `${API_BASE_URL}/proxy/image?url=${encodeURIComponent(transaction.image_url)}`
-                          : (transaction.image_url || '')}
-                        alt="Payment Proof"
-                        className="w-full h-auto max-h-48 object-contain rounded border border-gray-700"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                      <div className="mt-1 text-xs text-orange-500 hover:text-orange-400 flex items-center">
-                        View Full Image <ExternalLink size={12} className="ml-1" />
-                      </div>
-                    </div>
+                  <div className={`flex-1 min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                    {/* The stored Google Drive link itself; opens in a new tab. */}
+                    <a
+                      href={transaction.image_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-orange-500 hover:text-orange-400 hover:underline break-all inline-flex items-start"
+                      title="Open payment proof in a new tab"
+                    >
+                      <span>{transaction.image_url}</span>
+                      <ExternalLink size={12} className="ml-1 mt-1 flex-shrink-0" />
+                    </a>
                   </div>
                 </div>
               )}

@@ -578,6 +578,22 @@ class BillingGenerationController extends Controller
                 $customerName = $account->customer->full_name;
                 $desiredPlan = $account->customer->desired_plan ?? 'NO PLAN';
 
+                // Switched prepaid -> postpaid with prepaid days still running: billing now would
+                // charge for days already paid for. Same rule as the billing-day cron.
+                if ($this->enhancedBillingService->isCoveredByPrepaidDays($account, $generationDate)) {
+                    Log::info('Force generate: skipped, still covered by prepaid days', [
+                        'account_no' => $account->account_no,
+                        'prepaid_expires_at' => (string) $account->prepaid_expires_at,
+                    ]);
+                    $invoiceResults['errors'][] = $soaResults['errors'][] = [
+                        'account_id' => $account->id,
+                        'account_no' => $account->account_no,
+                        'customer_name' => $customerName,
+                        'error' => 'Skipped: still covered by prepaid days until ' . $account->prepaid_expires_at,
+                    ];
+                    continue;
+                }
+
                 Log::info('Processing account', [
                     'account_no' => $account->account_no,
                     'customer_id' => $account->customer_id,

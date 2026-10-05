@@ -423,7 +423,7 @@ class Kernel extends ConsoleKernel
         // MIKROTIK RADIUS DAILY RECONCILIATION
         // ===================================================================
         // Uses: RadiusReconciliationService
-        // Dependencies: MikroTik User Manager REST
+        // Dependencies: MikroTik User Manager (RouterOS API)
         // Logs: storage/logs/radiusreconcile/daily-reconcile.log
         //
         // 03:15 — an hour after the SmartOLT pass so the two never contend for

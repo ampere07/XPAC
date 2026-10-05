@@ -26,7 +26,7 @@ class SystemRoleCatalogTest extends TestCase
     /** Web Sidebar, per seeded role. */
     private const WEB_SIDEBAR = [
         Role::ADMINISTRATOR => [
-            'dashboard', 'live-monitor',
+            'dashboard', 'live-monitor', 'for-approval',
             'customer', 'transaction-list', 'transactions-revert', 'prepaid-override', 'payment-portal',
             'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice', 'mass-rebate', 'discounts',
             'application-management', 'job-order', 'service-order', 'work-order', 'lcp-nap-location', 'sms-blast',

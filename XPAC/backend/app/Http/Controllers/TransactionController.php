@@ -71,6 +71,13 @@ class TransactionController extends Controller
                 $query->where('organization_id', $organizationId);
             }
 
+            // An agent sees only the transactions they processed (AgentScope).
+            $isAgent = \App\Support\AgentScope::isAgent($authUser);
+            if ($isAgent) {
+                \App\Support\AgentScope::limitTransactions($query, $authUser);
+            }
+            $totalQuery = clone $query;
+
             if ($request->has('updated_since')) {
                 $query->where('updated_at', '>', $request->input('updated_since'));
                 // Increase limit for updates to ensure we get all recent changes
@@ -102,7 +109,9 @@ class TransactionController extends Controller
                 'success' => true,
                 'data' => $transactions,
                 'count' => $transactions->count(),
-                'total' => $isSuperAdmin ? Transaction::count() : Transaction::where('organization_id', $organizationId)->count()
+                'total' => $isAgent
+                    ? $totalQuery->count()
+                    : ($isSuperAdmin ? Transaction::count() : Transaction::where('organization_id', $organizationId)->count())
             ]);
         }
         catch (\Exception $e) {
@@ -113,6 +122,33 @@ class TransactionController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * A reference number may be used by only one transaction.
+     *
+     * Compared ignoring case and surrounding spaces, so "GCASH-123 " and "gcash-123" count as
+     * the same payment. $ignoreId is the transaction being edited, so re-saving it with its own
+     * reference number is allowed.
+     */
+    private function uniqueReferenceNoRule(?int $ignoreId = null): \Closure
+    {
+        return function (string $attribute, $value, \Closure $fail) use ($ignoreId) {
+            $normalized = mb_strtolower(trim((string) $value));
+            if ($normalized === '') {
+                return;
+            }
+
+            $existing = Transaction::whereRaw('LOWER(TRIM(reference_no)) = ?', [$normalized])
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))
+                ->first(['id', 'account_no']);
+
+            if ($existing) {
+                $fail('Reference No. "' . trim((string) $value) . '" is already used by transaction #' . $existing->id
+                    . ($existing->account_no ? ' (account ' . $existing->account_no . ')' : '')
+                    . '. Each payment needs its own reference number.');
+            }
+        };
     }
 
     public function store(Request $request): JsonResponse
@@ -128,13 +164,16 @@ class TransactionController extends Controller
                 // 'Top Up' and 'Recurring Fee' are mutually exclusive. See resolveTypeRule().
                 'transaction_type' => $this->resolveTypeRule($request->input('account_no')),
                 'received_payment' => 'required|numeric|min:0',
+                // Agent-recorded payments only; received_payment is re-derived from them below.
+                'collected_payment' => 'nullable|numeric|min:0',
+                'agent_collected' => 'nullable|numeric|min:0',
                 'payment_date' => 'required|date',
                 'date_processed' => 'nullable|date',
                 'processed_by_user_id' => 'nullable|exists:users,id',
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => 'required|string|max:255',
+                'reference_no' => ['required', 'string', 'max:255', $this->uniqueReferenceNoRule()],
                 'or_no' => 'required|string|max:255',
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
@@ -147,6 +186,41 @@ class TransactionController extends Controller
             ]);
 
             $this->assertPrepaidOnlyFields($request);
+
+            $validated = $this->applyAgentCollectionSplit($validated);
+
+            // Technicians and agents may record a payment but never settle one: whatever the
+            // request says, theirs is created Pending and waits for approval (which denyTechnician()
+            // refuses them). Without this, status='Done' or auto_apply_payment=true on a direct call
+            // would apply the payment to the account and skip approval altogether.
+            $authRoleId = (int) (auth()->user()->role_id ?? 0);
+            if (in_array($authRoleId, [2, 4], true)) {
+                $validated['status'] = 'Pending';
+                $validated['auto_apply_payment'] = false;
+            }
+
+            // An agent records a payment Under My Account (a customer they referred, with the
+            // Agent Collected split) or Under XPACS (any customer, no split) — see
+            // denyAgentSplitOnForeignAccount(). Either way it is recorded as themselves, which is
+            // what scopes their Transaction List (AgentScope).
+            $authUserForScope = auth()->user();
+            if (\App\Support\AgentScope::isAgent($authUserForScope)) {
+                if (empty($validated['account_no'])) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Select the customer account this payment is for.',
+                        'errors' => ['account_no' => ['Select the customer account this payment is for.']],
+                    ], 422);
+                }
+
+                if ($denied = $this->denyAgentSplitOnForeignAccount($authUserForScope, $validated['account_no'], $validated)) {
+                    return $denied;
+                }
+
+                $agentEmail = \App\Support\AgentScope::email($authUserForScope);
+                $validated['processed_by_user'] = $agentEmail;
+                $validated['created_by_user'] = $agentEmail;
+            }
 
             \Log::info('Transaction validation passed', [
                 'validated_data' => $validated
@@ -187,7 +261,7 @@ class TransactionController extends Controller
                 'account_no' => $transaction->account_no
             ]);
 
-            if ($autoApplyPayment && $transaction->account_no && $transaction->transaction_type !== 'Security Deposit') {
+            if ($autoApplyPayment && $transaction->account_no && !\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
                 \Log::info('Auto-applying payment', [
                     'transaction_id' => $transaction->id,
                     'account_no' => $transaction->account_no
@@ -220,7 +294,9 @@ class TransactionController extends Controller
                         $this->sendApprovalEmail($billingAccount, $appliedData['invoices_updated']['invoices_paid'] ?? [], $transaction->received_payment, $transaction->payment_date);
 
                         // Attempt reconnection for auto-applied payments
-                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id));
+                        $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id), (float) $transaction->received_payment);
+                        // After the renewal above, so the SOA states the final expiry.
+                        $this->sendPrepaidSoaAfterPayment($transaction);
                     }
 
                 }
@@ -292,6 +368,14 @@ class TransactionController extends Controller
                 ], 403);
             }
 
+            // An agent may only open transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Transaction not found'
+                ], 404);
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => $transaction
@@ -339,6 +423,14 @@ class TransactionController extends Controller
                 ], 403);
             }
 
+            // An agent may only open transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Transaction not found'
+                ], 404);
+            }
+
             $formatter = app(\App\Services\TransactionReceiptFormatter::class);
 
             if (!$formatter->isPrintable($transaction->status)) {
@@ -374,8 +466,106 @@ class TransactionController extends Controller
         }
     }
 
+    /**
+     * Agent-recorded payment: received_payment = collected_payment + agent_collected.
+     *
+     * The agent form sends both parts and shows their sum, but the stored total is derived here so
+     * it can never disagree with its parts — received_payment is what approval applies to the
+     * account. Rows without either part (every non-agent transaction) are returned untouched.
+     *
+     * On an edit ($existing), a part the request leaves out is taken from the stored row rather
+     * than read as 0 — editing only Collected Payment must not wipe Agent Collected and shrink the
+     * total. And an edit that changes received_payment directly on a split row (an admin correcting
+     * the amount) clears both parts, because they no longer describe the total.
+     */
+    private function applyAgentCollectionSplit(array $validated, ?Transaction $existing = null): array
+    {
+        $hasCollected = array_key_exists('collected_payment', $validated) && $validated['collected_payment'] !== null;
+        $hasAgent = array_key_exists('agent_collected', $validated) && $validated['agent_collected'] !== null;
+        $existingIsSplit = $existing && ($existing->collected_payment !== null || $existing->agent_collected !== null);
+
+        if (!$hasCollected && !$hasAgent) {
+            if ($existingIsSplit && array_key_exists('received_payment', $validated) && $validated['received_payment'] !== null
+                && round((float) $validated['received_payment'], 2) !== round((float) $existing->received_payment, 2)) {
+                $validated['collected_payment'] = null;
+                $validated['agent_collected'] = null;
+            }
+
+            return $validated;
+        }
+
+        $collected = round((float) ($hasCollected ? $validated['collected_payment'] : ($existing->collected_payment ?? 0)), 2);
+        $agent = round((float) ($hasAgent ? $validated['agent_collected'] : ($existing->agent_collected ?? 0)), 2);
+
+        $validated['collected_payment'] = $collected;
+        $validated['agent_collected'] = $agent;
+        $validated['received_payment'] = round($collected + $agent, 2);
+
+        return $validated;
+    }
+
+    /**
+     * An agent records a payment one of two ways, chosen on the transaction form:
+     *
+     *   Under My Account  a customer they referred, entered as Collected Payment + Agent Collected.
+     *   Under XPACS       any customer, collected for the company: Received Payment only.
+     *
+     * The split is what marks a payment as the agent's own collection, so it is refused on an
+     * account the agent did not refer, whatever the client sends. A payment with no split is
+     * accepted for any account.
+     *
+     * $validated is after applyAgentCollectionSplit(): a split being written has non-null parts.
+     */
+    private function denyAgentSplitOnForeignAccount($user, ?string $accountNo, array $validated): ?JsonResponse
+    {
+        $hasSplit = ($validated['collected_payment'] ?? null) !== null
+            || ($validated['agent_collected'] ?? null) !== null;
+
+        if (!$hasSplit) {
+            return null;
+        }
+
+        $referredBy = DB::table('billing_accounts')
+            ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+            ->where('billing_accounts.account_no', $accountNo ?? '')
+            ->value('customers.referred_by');
+
+        if (\App\Support\AgentScope::ownsReferral($user, $referredBy)) {
+            return null;
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Collected Payment and Agent Collected are only for customers you referred. '
+                . 'Record this payment Under XPACS instead.',
+        ], 403);
+    }
+
+    /**
+     * Technicians may view transactions but not settle them: no approve, batch approve or
+     * status change (Mark as Failed). Enforced here because the API permission layer only
+     * logs, so hiding the buttons alone would not stop a direct call.
+     */
+    private function denyTechnician(): ?JsonResponse
+    {
+        // Agents (role 4) have the technician's Transaction List view, so the same refusal.
+        $user = auth()->user();
+        if ($user && in_array((int) $user->role_id, [2, 4], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Technicians and agents can view transactions but cannot approve them or change their status.',
+            ], 403);
+        }
+
+        return null;
+    }
+
     public function approve(Request $request, string $id): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
@@ -473,8 +663,14 @@ class TransactionController extends Controller
                 ];
             }
 
-            if ($transaction->transaction_type !== 'Security Deposit') {
-                $newBalance = $currentBalance - $paymentReceived;
+            // Prepaid plan purchase: the discount/rebate the form took off the cash is spent and
+            // credited, so the account is credited the full plan price. $paymentReceived stays the
+            // cash (receipt, SMS); $creditedPayment is what the balance and renewal see.
+            $checkoutCredit = $this->creditPrepaidCheckoutDiscounts($transaction, $billingAccount);
+            $creditedPayment = round((float) $paymentReceived + $checkoutCredit, 2);
+
+            if (!\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
+                $newBalance = $currentBalance - $creditedPayment;
                 // Prepaid accounts never carry a credit (negative) balance — a settling payment
                 // renews the prepaid period instead of banking credit, so overpayment floors to 0.
                 // Postpaid / blank generation_type keep the real (possibly negative) balance.
@@ -492,14 +688,14 @@ class TransactionController extends Controller
                     'account_id' => $billingAccount->id,
                     'old_balance' => $currentBalance,
                     'new_balance' => $newBalance,
-                    'payment_applied' => $paymentReceived
+                    'payment_applied' => $creditedPayment
                 ]);
 
                 // Service Charge is balance-only: the SO charge it pays for is not an invoice
                 // yet (it lands on the NEXT monthly bill), so distributing this payment would mark
                 // an unrelated monthly invoice Paid. See Transaction::settlesInvoices().
                 if (Transaction::settlesInvoices($transaction->transaction_type)) {
-                    $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transactionId, $userId, $currentTime);
+                    $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $creditedPayment, $transactionId, $userId, $currentTime);
                 }
             }
             else {
@@ -571,7 +767,9 @@ class TransactionController extends Controller
 
 
             // Attempt reconnection after successful approval
-            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id));
+            $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id), $creditedPayment);
+            // After the renewal above, so the SOA states the final expiry.
+            $this->sendPrepaidSoaAfterPayment($transaction);
 
             event(new TransactionUpdated(['action' => 'approved', 'transaction_id' => $transactionId, 'account_no' => $accountNo]));
 
@@ -670,7 +868,7 @@ class TransactionController extends Controller
             $revertedInvoices = [];
             $newBalance = $currentBalance;
 
-            if ($transaction->transaction_type !== 'Security Deposit') {
+            if (!\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
                 // 1. Revert Account Balance
                 $newBalance = $currentBalance + $paymentToRevert;
 
@@ -762,7 +960,7 @@ class TransactionController extends Controller
             // Deposit transactions never affect balance/expiry, so there is nothing to reconcile.
             // Never throws — see the service's contract.
             $prepaidEnforcement = null;
-            if ($transaction->transaction_type !== 'Security Deposit') {
+            if (!\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
                 $prepaidEnforcement = app(\App\Services\PrepaidRevertReconciliationService::class)->reconcileAfterRevert(
                     $accountNo,
                     null,
@@ -1056,6 +1254,9 @@ class TransactionController extends Controller
             'invoices_partial_count' => count($invoicesPartial)
         ]);
 
+        // A PDF for each invoice this payment settled, made once the approval commits.
+        \App\Services\PaidInvoicePdfService::generateAfterCommit(array_column($invoicesPaid, 'invoice_id'));
+
         return [
             'invoices_paid' => $invoicesPaid,
             'invoices_partial' => $invoicesPartial,
@@ -1066,6 +1267,10 @@ class TransactionController extends Controller
 
     public function updateStatus(Request $request, string $id): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
@@ -1125,15 +1330,17 @@ class TransactionController extends Controller
             // what decides whether 'Top Up' or 'Recurring Fee' is the legal recurring type here —
             // and because the row's existing type stays permitted even if it has since been
             // retired, so an old pending transaction remains editable.
-            $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type']);
+            $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type', 'received_payment', 'collected_payment', 'agent_collected']);
             $existingAccountNo = $existing->account_no ?? null;
 
             $validated = $request->validate([
                 'transaction_type' => $this->resolveTypeRule($existingAccountNo, false, $existing->transaction_type ?? null),
                 'received_payment' => 'nullable|numeric|min:0',
+                'collected_payment' => 'nullable|numeric|min:0',
+                'agent_collected' => 'nullable|numeric|min:0',
                 'payment_date' => 'nullable|date',
                 'payment_method' => 'nullable|string|max:255',
-                'reference_no' => 'nullable|string|max:255',
+                'reference_no' => ['nullable', 'string', 'max:255', $this->uniqueReferenceNoRule((int) $id)],
                 'or_no' => 'nullable|string|max:255',
                 'remarks' => 'nullable|string',
                 'image_url' => 'nullable|string|max:255',
@@ -1145,6 +1352,8 @@ class TransactionController extends Controller
 
             $this->assertPrepaidOnlyFields($request, $existingAccountNo);
 
+            $validated = $this->applyAgentCollectionSplit($validated, $existing);
+
             DB::beginTransaction();
 
             $transaction = Transaction::findOrFail($id);
@@ -1155,6 +1364,22 @@ class TransactionController extends Controller
                     'success' => false,
                     'message' => 'Unauthorized access to transaction'
                 ], 403);
+            }
+
+            // An agent may only edit transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Transaction not found'
+                ], 404);
+            }
+
+            // Nor turn a payment Under XPACS into their own collection by adding the split.
+            if (\App\Support\AgentScope::isAgent($authUser)
+                && ($denied = $this->denyAgentSplitOnForeignAccount($authUser, $transaction->account_no, $validated))) {
+                DB::rollBack();
+                return $denied;
             }
 
             if ($transaction->status !== 'Pending') {
@@ -1206,6 +1431,10 @@ class TransactionController extends Controller
 
     public function batchApprove(Request $request): JsonResponse
     {
+        if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
         try {
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
@@ -1319,8 +1548,12 @@ class TransactionController extends Controller
                         ];
                     }
 
-                    if ($transaction->transaction_type !== 'Security Deposit') {
-                        $newBalance = $currentBalance - $paymentReceived;
+                    // Prepaid plan purchase discount/rebate — see approve().
+                    $checkoutCredit = $this->creditPrepaidCheckoutDiscounts($transaction, $billingAccount);
+                    $creditedPayment = round((float) $paymentReceived + $checkoutCredit, 2);
+
+                    if (!\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
+                        $newBalance = $currentBalance - $creditedPayment;
                         // Prepaid accounts never carry a credit (negative) balance — overpayment floors to 0.
                         // Postpaid / blank generation_type keep the real (possibly negative) balance.
                         if (BillingAccount::isPrepaidType($billingAccount->generation_type) && $newBalance < 0) {
@@ -1335,7 +1568,7 @@ class TransactionController extends Controller
                         // Balance-only for Service Charge — see approve() and
                         // Transaction::settlesInvoices().
                         if (Transaction::settlesInvoices($transaction->transaction_type)) {
-                            $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $paymentReceived, $transaction->id, $userId, $currentTime);
+                            $invoiceUpdateResult = $this->updateInvoiceDetails($accountNo, $creditedPayment, $transaction->id, $userId, $currentTime);
                         }
                     }
 
@@ -1382,7 +1615,9 @@ class TransactionController extends Controller
                     $accountPayments[$accountNo]['total'] += $paymentReceived;
 
                     // Attempt reconnection after successful approval
-                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id));
+                    $reconnectStatus = $this->attemptReconnectionAfterApproval($billingAccount, $transaction->updated_by_user, $transaction->transaction_type, $transaction->payment_date, $transaction->selected_plan_id, $transaction->activate_now, (string) ($transaction->reference_no ?? $transaction->id), $creditedPayment);
+                    // After the renewal above, so the SOA states the final expiry.
+                    $this->sendPrepaidSoaAfterPayment($transaction);
 
                     $results['success'][] = [
                         'transaction_id' => $transactionId,
@@ -1452,26 +1687,45 @@ class TransactionController extends Controller
         try {
             $folderName = $request->input('folder_name', 'transactions');
 
+            // Fail loudly when the file never arrived. Previously this answered success with no URL,
+            // and the form went on to save the transaction without its payment proof. The usual
+            // cause is a photo over PHP's upload_max_filesize / post_max_size: PHP drops the file
+            // before Laravel sees it, so hasFile() is simply false.
+            $file = $request->file('payment_proof_image');
+            if (!$file || !$file->isValid()) {
+                $reason = $file ? $file->getErrorMessage() : 'No payment proof image was received.';
+
+                \Log::warning('Transaction payment proof upload rejected', [
+                    'reason' => $reason,
+                    'upload_max_filesize' => ini_get('upload_max_filesize'),
+                    'post_max_size' => ini_get('post_max_size'),
+                    'content_length' => $request->server('CONTENT_LENGTH'),
+                ]);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => $reason . ' The image may be larger than the server allows ('
+                        . ini_get('upload_max_filesize') . ').',
+                ], 422);
+            }
+
             $googleDriveService = new \App\Services\GoogleDriveService();
             $folderId = $googleDriveService->createFolder($folderName);
 
-            $imageUrls = [];
+            $fileName = 'payment_proof_' . time() . '.' . ($file->getClientOriginalExtension() ?: 'jpg');
 
-            if ($request->hasFile('payment_proof_image')) {
-                $file = $request->file('payment_proof_image');
-                $fileName = 'payment_proof_' . time() . '.' . $file->getClientOriginalExtension();
+            $fileUrl = $googleDriveService->uploadFile(
+                $file,
+                $folderId,
+                $fileName,
+                $file->getMimeType()
+            );
 
-                $fileUrl = $googleDriveService->uploadFile(
-                    $file,
-                    $folderId,
-                    $fileName,
-                    $file->getMimeType()
-                );
-
-                if ($fileUrl) {
-                    $imageUrls['payment_proof_image_url'] = $fileUrl;
-                }
+            if (!$fileUrl) {
+                throw new \RuntimeException('Google Drive returned no URL for the uploaded image.');
             }
+
+            $imageUrls = ['payment_proof_image_url' => $fileUrl];
 
             return response()->json([
                 'success' => true,
@@ -1484,17 +1738,152 @@ class TransactionController extends Controller
             \Log::error('Error uploading transaction images: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to upload images',
+                'message' => 'Failed to upload the payment proof: ' . $e->getMessage(),
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
+     * Prepaid only: email the customer a Statement of Account PDF covering the payment date to the
+     * account's (now renewed) prepaid expiry. Called right after attemptReconnectionAfterApproval()
+     * so the expiry it states is final. Payments that buy no service time (deposit, installation
+     * fee, service charge) get none. PrepaidSoaService never throws.
+     */
+    private function sendPrepaidSoaAfterPayment(Transaction $transaction): void
+    {
+        if (!$transaction->account_no || !Transaction::grantsService($transaction->transaction_type)) {
+            return;
+        }
+
+        $method = $transaction->payment_method;
+        if (is_numeric($method)) {
+            $method = \App\Models\PaymentMethod::where('id', (int) $method)->value('payment_method') ?? $method;
+        }
+
+        app(\App\Services\PrepaidSoaService::class)->sendForPayment((string) $transaction->account_no, [
+            'amount' => (float) $transaction->received_payment,
+            'paid_at' => \Carbon\Carbon::parse($transaction->payment_date ?? $transaction->date_processed ?? now()),
+            'reference' => $transaction->reference_no,
+            'method' => $method,
+            // Set by approve() / batchApprove() before the payment was applied.
+            'balance_before' => $transaction->account_balance_before,
+            'source' => 'transaction approval',
+        ]);
+    }
+
+    /**
+     * Extend (if still active) or restart (if expired) the prepaid period and act on any plan
+     * bought with the payment. Anchored to the actual payment date. No-op for postpaid accounts.
+     *
+     * One call rather than renew-then-plan-change: "Activate Now" makes the two steps
+     * interdependent, and settlePayment() owns that ordering for both payment pipelines.
+     * Mirrors PaymentWorkerService.
+     */
+    /**
+     * Spend the prepaid customer's discounts and rebates on this plan purchase, as Pay Now does.
+     *
+     * The form takes the discount off what is collected (₱1,000 plan − ₱100 discount = ₱900
+     * received), so the gap between the plan price and the cash is what the discounts cover. They
+     * are spent here, at approval, through the same CheckoutDiscountService / CheckoutRebateService
+     * the portal settles with — discounts first, rebates on what is left, at least ₱1 always paid —
+     * and only what was ACTUALLY spent is returned. The caller credits cash + that, so the purchase
+     * counts as the full plan price for the balance and for the prepaid renewal.
+     *
+     * Only for a prepaid account buying a plan (Top Up / Recurring Fee with a selected plan).
+     * Runs inside the caller's DB transaction, so a rolled-back approval leaves them unspent.
+     *
+     * @return float the discount + rebate credited (0 when none applies)
+     */
+    private function creditPrepaidCheckoutDiscounts(Transaction $transaction, BillingAccount $billingAccount): float
+    {
+        $discount = 0.0;
+        try {
+            if (!BillingAccount::isPrepaidType($billingAccount->generation_type)
+                || empty($transaction->selected_plan_id)
+                || !in_array($transaction->transaction_type, [Transaction::TYPE_TOP_UP, 'Recurring Fee'], true)) {
+                return 0.0;
+            }
+
+            $planPrice = (float) (\App\Models\Plan::find($transaction->selected_plan_id)->price ?? 0);
+            $cash = round((float) $transaction->received_payment, 2);
+            $gap = round($planPrice - $cash, 2);
+            if ($planPrice <= 0 || $gap <= 0) {
+                return 0.0;
+            }
+
+            $reference = 'transaction ' . ($transaction->reference_no ?: $transaction->id);
+            $discountService = app(\App\Services\CheckoutDiscountService::class);
+
+            $available = $discountService->available($transaction->account_no);
+            $discountQuote = min($gap, $discountService->applicableAmount($available['amount'], $planPrice));
+            $discount = (float) ($discountQuote > 0 ? $discountService->consume($available['ids'], $reference, $discountQuote) : 0.0);
+
+            $rebate = 0.0;
+            $left = round($gap - $discount, 2);
+            if ($left > 0) {
+                $rebates = app(\App\Services\CheckoutRebateService::class)->available($transaction->account_no, $planPrice);
+                $rebateQuote = min($left, $discountService->applicableAmount($rebates['amount'], round($planPrice - $discount, 2)));
+                $rebate = $rebateQuote > 0
+                    ? app(\App\Services\CheckoutRebateService::class)->consume($rebates['usages'], $reference, $rebateQuote)
+                    : 0.0;
+            }
+
+            $credited = round($discount + $rebate, 2);
+            if ($credited > 0) {
+                $transaction->remarks = trim(($transaction->remarks ?? '') . ' [Discount ₱' . number_format($discount, 2)
+                    . ($rebate > 0 ? ' + rebate ₱' . number_format($rebate, 2) : '') . ' applied]');
+
+                \Log::info('Prepaid discount/rebate credited on transaction approval', [
+                    'transaction_id' => $transaction->id,
+                    'account_no' => $transaction->account_no,
+                    'plan_price' => $planPrice,
+                    'cash' => $cash,
+                    'discount' => $discount,
+                    'rebate' => $rebate,
+                ]);
+            }
+
+            return $credited;
+        } catch (\Throwable $e) {
+            \Log::error('Prepaid discount/rebate on transaction approval failed: ' . $e->getMessage(), [
+                'transaction_id' => $transaction->id,
+            ]);
+            // Whatever was already spent is credited, so a spent discount is never lost.
+            return round($discount, 2);
+        }
+    }
+
+    private function settlePrepaidPeriod(string $accountNo, $paymentDate, $selectedPlanId, $activateNow): void
+    {
+        $prepaidPayDate = $paymentDate ? \Carbon\Carbon::parse($paymentDate) : null;
+
+        $settled = app(\App\Services\PrepaidPlanChangeService::class)
+            ->settlePayment($accountNo, $selectedPlanId, (bool) $activateNow, $prepaidPayDate);
+
+        $prepaidRenewal = $settled['renewal'];
+        $planChange = $settled['plan_change'];
+
+        if (!empty($prepaidRenewal['prepaid'])) {
+            \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}"
+                . (!empty($prepaidRenewal['forfeited_days']) ? " ({$prepaidRenewal['forfeited_days']} day(s) forfeited)" : ''));
+        }
+
+        if (($planChange['action'] ?? 'none') !== 'none') {
+            \Log::info("[TRANSACTION RECONNECT] Prepaid plan {$planChange['action']} for {$accountNo} — plan: {$planChange['plan']}"
+                . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
+        }
+    }
+
+    /**
      * Attempt to reconnect user account after transaction approval
      * Only reconnects if billing_status_id is not 1 (Active) and balance is 0 or negative
+     *
+     * @param float|null $amountPaid What this transaction paid. Decides whether the prepaid period
+     *   renews — see PrepaidPlanChangeService::paymentBuysPeriod(). Null keeps the historical
+     *   "renew whenever the balance is cleared" rule.
      */
-    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null, $selectedPlanId = null, $activateNow = false, ?string $paymentReference = null): string
+    private function attemptReconnectionAfterApproval($billingAccount, $updatedByUser = 'System', $transactionType = null, $paymentDate = null, $selectedPlanId = null, $activateNow = false, ?string $paymentReference = null, ?float $amountPaid = null): string
     {
         try {
             // Reload billing account to get latest balance and status
@@ -1505,7 +1894,23 @@ class TransactionController extends Controller
 
             // Step 1: Check if balance qualifies (0 or negative)
             $balance = floatval($billingAccount->account_balance ?? 0);
+
+            // Decided once, before the renewal touches the expiry, and used on both branches below.
+            $buysPeriod = Transaction::grantsService($transactionType) && ($amountPaid === null
+                ? $balance <= 0
+                : app(\App\Services\PrepaidPlanChangeService::class)->qualifiesForRenewal(
+                    $accountNo, $amountPaid, $balance, $selectedPlanId,
+                    $paymentDate ? \Carbon\Carbon::parse($paymentDate) : null
+                ));
+
             if ($balance > 0) {
+                // Still owing, so no reconnect, queue cancel or pullout closure — but a prepaid
+                // top-up worth a full plan still buys its period. Without this a ₱1,000 top-up
+                // against a ₱1,120 first bill added no days at all.
+                if ($buysPeriod) {
+                    $this->settlePrepaidPeriod($accountNo, $paymentDate, $selectedPlanId, $activateNow);
+                }
+
                 \Log::info('[TRANSACTION RECONNECT SKIP] Balance is positive: ₱' . $balance);
                 return 'balance_positive';
             }
@@ -1518,37 +1923,21 @@ class TransactionController extends Controller
             // Prepaid: a settling *service* payment extends (if still active) or restarts (if
             // expired) the prepaid service period, and acts on any plan bought with it. Done
             // BEFORE the already-online short-circuit below so an early payer whose session is
-            // still up still gets extended. No-op for postpaid accounts. Anchored to the actual
-            // payment date.
+            // still up still gets extended. No-op for postpaid accounts.
             //
-            // Guarded by Transaction::grantsService(): a Security Deposit, Installation Fee or
-            // Service Charge is not payment for service time, so none of them may grant prepaid
-            // days OR switch a customer's plan.
-            if (Transaction::grantsService($transactionType)) {
-                $prepaidPayDate = $paymentDate ? \Carbon\Carbon::parse($paymentDate) : null;
-
-                // One call rather than renew-then-plan-change: "Activate Now" makes the two steps
-                // interdependent, and settlePayment() owns that ordering for both payment
-                // pipelines. Mirrors PaymentWorkerService.
-                $settled = app(\App\Services\PrepaidPlanChangeService::class)
-                    ->settlePayment($accountNo, $selectedPlanId, (bool) $activateNow, $prepaidPayDate);
-
-                $prepaidRenewal = $settled['renewal'];
-                $planChange = $settled['plan_change'];
-
-                if (!empty($prepaidRenewal['prepaid'])) {
-                    \Log::info("[TRANSACTION RECONNECT] Prepaid period {$prepaidRenewal['mode']} for {$accountNo} — new expiry: {$prepaidRenewal['new_expiry']}"
-                        . (!empty($prepaidRenewal['forfeited_days']) ? " ({$prepaidRenewal['forfeited_days']} day(s) forfeited)" : ''));
-                }
-
-                if (($planChange['action'] ?? 'none') !== 'none') {
-                    \Log::info("[TRANSACTION RECONNECT] Prepaid plan {$planChange['action']} for {$accountNo} — plan: {$planChange['plan']}"
-                        . (isset($planChange['effective_at']) ? " effective {$planChange['effective_at']}" : ''));
-                }
+            // Guarded by Transaction::grantsService() (inside $buysPeriod): a Security Deposit,
+            // Installation Fee or Service Charge is not payment for service time, so none of them
+            // may grant prepaid days OR switch a customer's plan. And a small payment that only
+            // clears what is left of an already-renewed bill does not renew again.
+            if ($buysPeriod) {
+                $this->settlePrepaidPeriod($accountNo, $paymentDate, $selectedPlanId, $activateNow);
             }
 
             // Step 2: Check current billing status.
             $isAlreadyActive = ($billingAccount->billing_status_id == 1);
+            // Read before the reconnect flips it to Active: an Inactive postpaid account restarts
+            // its billing cycle on the day it pays (PostpaidBillingDayService, Step 7 below).
+            $wasInactive = \App\Services\PostpaidBillingDayService::isInactiveStatus($billingAccount->billing_status_id);
 
             // Step 2b: If the account is already active in billing AND the customer is
             // genuinely Online in RADIUS, there is nothing to fix — the payment's balance
@@ -1661,6 +2050,16 @@ class TransactionController extends Controller
                     $billingAccount->updated_by = Auth::id();
                     $billingAccount->save();
                     \Log::info('[TRANSACTION RECONNECT DB] Updated billing_status_id to 1 for Account: ' . $accountNo);
+
+                    // Postpaid and was Inactive: the billing day moves to the payment's day. An
+                    // account that was still Active (online or not) never reaches this branch.
+                    if ($wasInactive) {
+                        app(\App\Services\PostpaidBillingDayService::class)->resetToPaymentDay(
+                            $accountNo,
+                            $paymentDate ? \Carbon\Carbon::parse($paymentDate) : now(),
+                            'transaction approval'
+                        );
+                    }
                 } else {
                     \Log::info('[TRANSACTION RECONNECT DB SKIP] Account already 1, skipping status update');
                 }

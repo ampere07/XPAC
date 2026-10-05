@@ -78,11 +78,39 @@ class Transaction extends Model
      */
     public static function grantsService(?string $transactionType): bool
     {
-        return !in_array($transactionType, [
+        return !self::isOneOf($transactionType, [
             self::TYPE_SECURITY_DEPOSIT,
             self::TYPE_INSTALLATION_FEE,
             self::TYPE_SERVICE_CHARGE,
-        ], true);
+        ]);
+    }
+
+    /**
+     * Is $transactionType one of $types, ignoring case and spacing?
+     *
+     * Some deployments created transactions.transaction_type as an enum in lower case
+     * ('security deposit', 'installation fee' — see 2026_08_03_000001_extend_transaction_type_for_prepaid),
+     * so the stored value is not always the title-cased constant. An exact comparison let a
+     * lower-cased Security Deposit count as a service payment: it renewed prepaid days and was
+     * deducted from the balance.
+     */
+    public static function isOneOf(?string $transactionType, array $types): bool
+    {
+        $norm = fn ($v) => preg_replace('/\s+/', ' ', strtolower(trim((string) $v)));
+        $value = $norm($transactionType);
+
+        foreach ($types as $type) {
+            if ($value === $norm($type)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static function isSecurityDeposit(?string $transactionType): bool
+    {
+        return self::isOneOf($transactionType, [self::TYPE_SECURITY_DEPOSIT]);
     }
 
     /**
@@ -102,16 +130,20 @@ class Transaction extends Model
      */
     public static function settlesInvoices(?string $transactionType): bool
     {
-        return !in_array($transactionType, [
+        return !self::isOneOf($transactionType, [
             self::TYPE_SERVICE_CHARGE,
             self::TYPE_SECURITY_DEPOSIT,
-        ], true);
+        ]);
     }
 
     protected $fillable = [
         'account_no',
         'transaction_type',
         'received_payment',
+        // Agent-recorded payments: the two parts received_payment is made of. NULL on every other
+        // transaction. See TransactionController::applyAgentCollectionSplit().
+        'collected_payment',
+        'agent_collected',
         'payment_date',
         'date_processed',
         'processed_by_user',
@@ -139,6 +171,8 @@ class Transaction extends Model
         'payment_date' => 'datetime',
         'date_processed' => 'datetime',
         'received_payment' => 'decimal:2',
+        'collected_payment' => 'decimal:2',
+        'agent_collected' => 'decimal:2',
         'updated_column' => 'array',
         'activate_now' => 'boolean',
     ];

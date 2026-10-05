@@ -21,13 +21,13 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Hash;
 
 use App\Services\GoogleDriveService;
 use App\Services\PppoeUsernameService;
 use App\Services\RadiusServerResolver;
+use App\Services\RouterosApiService;
 use App\Services\VisitTimerResetService;
 use App\Models\RadiusConfig;
 use App\Models\ActivityLog;
@@ -283,144 +283,9 @@ class JobOrderController extends Controller
                 ]);
             }
 
-            // Normal mode: Return full data
-            //
-            // Resolve every referral on the page in one query rather than one
-            // per row: a referral made through the agent picker holds the
-            // agent's user id, and the list shows their name.
-            \App\Support\AgentReferral::prime(
-                $jobOrders->flatMap(fn ($jo) => [
-                    optional($jo->application)->referred_by,
-                    optional(optional($jo->billingAccount)->customer)->referred_by,
-                ])
-            );
-
-            $formattedJobOrders = $jobOrders->map(function ($jobOrder) {
-                $application = $jobOrder->application;
-                $customer = $jobOrder->billingAccount ? $jobOrder->billingAccount->customer : null;
-                
-                return [
-                    'id' => $jobOrder->id,
-                    'JobOrder_ID' => $jobOrder->id,
-                    'application_id' => $jobOrder->application_id,
-                    'Timestamp' => $jobOrder->timestamp ? $jobOrder->timestamp->format('Y-m-d H:i:s') : null,
-                    'Installation_Fee' => $jobOrder->installation_fee,
-                    'Billing_Day' => $jobOrder->billing_day,
-                    // This response is a hand-built whitelist, not the model, so every billing
-                    // field the Job Order details panel renders has to be listed here explicitly
-                    // — anything omitted silently renders as blank.
-                    'generation_type' => $jobOrder->generation_type,
-                    'vat_type' => $jobOrder->vat_type,
-                    'vat_enabled' => $jobOrder->vat_enabled,
-                    'withholding_enabled' => $jobOrder->withholding_enabled,
-                    'withholding_percentage' => $jobOrder->withholding_percentage,
-                    'vip_enabled' => $jobOrder->vip_enabled,
-                    'vip_expiration' => $jobOrder->vip_expiration,
-                    // job_orders has no prepaid column of its own — the expiry lives on the
-                    // linked billing account, which is already eager-loaded, so no extra query.
-                    // Needed by the Prepaid Expiration funnel filter on the Job Order list.
-                    'prepaid_expires_at' => $jobOrder->billingAccount && $jobOrder->billingAccount->prepaid_expires_at
-                        ? $jobOrder->billingAccount->prepaid_expires_at->format('Y-m-d H:i:s')
-                        : null,
-                    'Onsite_Status' => $jobOrder->onsite_status,
-                    'Status' => $jobOrder->status,
-                    'status' => $jobOrder->status,
-                    'billing_status' => $jobOrder->billing_status,
-                    'Status_Remarks' => $jobOrder->status_remarks,
-                    'Assigned_Email' => $jobOrder->assigned_email,
-                    'Contract_Template' => $jobOrder->contract_link,
-                    'contract_link' => $jobOrder->contract_link,
-                    'Created_By' => $jobOrder->created_by_user_email,
-                    'Created_At' => $jobOrder->created_at ? $jobOrder->created_at->format('Y-m-d H:i:s') : null,
-                    'Updated_By' => $jobOrder->updated_by_user_email,
-                    'Updated_At' => $jobOrder->updated_at ? $jobOrder->updated_at->format('Y-m-d H:i:s') : null,
-                    'Modified_By' => $jobOrder->created_by_user_email, // Keep for compatibility
-                    'Modified_Date' => $jobOrder->updated_at ? $jobOrder->updated_at->format('Y-m-d H:i:s') : null, // Keep for compatibility
-                    'Username' => $jobOrder->username,
-                    'group_name' => $jobOrder->group_name,
-                    'pppoe_username' => $jobOrder->pppoe_username,
-                    'pppoe_password' => $jobOrder->pppoe_password,
-                    
-                    'date_installed' => $jobOrder->date_installed,
-                    'start_time' => $jobOrder->start_time,
-                    'end_time' => $jobOrder->end_time,
-                    'technicians' => $jobOrder->technicians,
-                    'usage_type' => $jobOrder->usage_type,
-                    'connection_type' => $jobOrder->connection_type,
-                    'router_model' => $jobOrder->router_model,
-                    'modem_router_sn' => $jobOrder->modem_router_sn,
-                    'Modem_SN' => $jobOrder->modem_router_sn,
-                    'modem_sn' => $jobOrder->modem_router_sn,
-                    'lcpnap' => $jobOrder->lcpnap,
-                    'port' => $jobOrder->port,
-                    'vlan' => $jobOrder->vlan,
-                    'visit_by' => $jobOrder->visit_by,
-                    'visit_with' => $jobOrder->visit_with,
-                    'visit_with_other' => $jobOrder->visit_with_other,
-                    'ip_address' => $jobOrder->ip_address,
-                    'address_coordinates' => $jobOrder->address_coordinates,
-                    'onsite_remarks' => $jobOrder->onsite_remarks,
-                    'username_status' => $jobOrder->username_status,
-                    
-                    'client_signature_url' => $jobOrder->client_signature_url,
-                    'setup_image_url' => $jobOrder->setup_image_url,
-                    'speedtest_image_url' => $jobOrder->speedtest_image_url,
-                    'signed_contract_image_url' => $jobOrder->signed_contract_image_url,
-                    'box_reading_image_url' => $jobOrder->box_reading_image_url,
-                    'router_reading_image_url' => $jobOrder->router_reading_image_url,
-                    'port_label_image_url' => $jobOrder->port_label_image_url,
-                    'house_front_picture_url' => $jobOrder->house_front_picture_url,
-                    'client_tagging_url' => $jobOrder->client_tagging_url,
-                    'proof_image_url' => $jobOrder->proof_image_url,
-                    'installation_landmark' => $jobOrder->installation_landmark,
-            
-                    'created_at' => $jobOrder->created_at ? $jobOrder->created_at->format('Y-m-d H:i:s') : null,
-                    'updated_at' => $jobOrder->updated_at ? $jobOrder->updated_at->format('Y-m-d H:i:s') : null,
-                    'created_by_user_email' => $jobOrder->created_by_user_email,
-                    'updated_by_user_email' => $jobOrder->updated_by_user_email,
-                    
-                    'First_Name' => $application ? $application->first_name : ($customer ? $customer->first_name : null),
-                    'Middle_Initial' => $application ? $application->middle_initial : ($customer ? $customer->middle_initial : null),
-                    'Last_Name' => $application ? $application->last_name : ($customer ? $customer->last_name : null),
-                    'Address' => ($application && !empty(trim($application->installation_address ?? ''))) 
-                        ? $application->installation_address 
-                        : ($customer ? $customer->address : null),
-                    'Installation_Address' => ($application && !empty(trim($application->installation_address ?? ''))) 
-                        ? $application->installation_address 
-                        : ($customer ? $customer->address : null),
-                    'Location' => ($application && !empty(trim($application->location ?? ''))) 
-                        ? $application->location 
-                        : ($customer ? $customer->location : null),
-                    'City' => ($application && !empty(trim($application->city ?? ''))) 
-                        ? $application->city 
-                        : ($customer ? $customer->city : null),
-                    'Region' => ($application && !empty(trim($application->region ?? ''))) 
-                        ? $application->region 
-                        : ($customer ? $customer->region : null),
-                    'Barangay' => ($application && !empty(trim($application->barangay ?? ''))) 
-                        ? $application->barangay 
-                        : ($customer ? $customer->barangay : null),
-                    'Email_Address' => $application ? $application->email_address : ($customer ? $customer->email_address : null),
-                    'Mobile_Number' => $application ? $application->mobile_number : ($customer ? $customer->contact_number_primary : null),
-                    'Secondary_Mobile_Number' => $application ? $application->secondary_mobile_number : ($customer ? $customer->contact_number_secondary : null),
-                    'Desired_Plan' => $application ? $application->desired_plan : ($customer ? $customer->desired_plan : null),
-                    // The stored value and how to show it, side by side. Every
-                    // list, export and detail pane reads Referred_By and keeps
-                    // showing a name; the edit forms read the id so that saving
-                    // an untouched record writes the same referral back rather
-                    // than turning it into a name again.
-                    'Referred_By' => \App\Support\AgentReferral::displayName(
-                        $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
-                    ),
-                    'Referred_By_Raw' => $application ? $application->referred_by : ($customer ? $customer->referred_by : null),
-                    'Referred_By_Agent_ID' => \App\Support\AgentReferral::agentIdIfAgent(
-                        $application ? $application->referred_by : ($customer ? $customer->referred_by : null)
-                    ),
-                    'Billing_Status' => $jobOrder->billing_status,
-                    'commission_status' => $jobOrder->commission_status,
-                    'job_order_items' => $jobOrder->items,
-                ];
-            });
+            // Normal mode: Return full data. The row shape lives in JobOrderListFormatter,
+            // which the For Approval queue sends as well, so the two can never drift apart.
+            $formattedJobOrders = \App\Support\JobOrderListFormatter::formatMany($jobOrders);
 
             return response()->json([
                 'success' => true,
@@ -917,6 +782,8 @@ class JobOrderController extends Controller
                 'house_front_picture_url' => 'nullable|string|max:500',
                 'proof_image_url' => 'nullable|string|max:500',
                 'client_tagging_url' => 'nullable|string|max:500',
+                // Column is VARCHAR(255).
+                'other_photos_url' => 'nullable|string|max:255',
                 'technicians' => 'nullable|array',
             ]);
 
@@ -1456,6 +1323,89 @@ class JobOrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete job order',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * DELETE /api/job-orders/{id}/with-application — Super Admin only.
+     *
+     * Permanently deletes the job order AND the application it was created from, in one
+     * transaction. Nothing else is touched: a customer account already onboarded from this
+     * job order stays (its link to the job order is nulled by the foreign key).
+     *
+     * The role is checked here, on the server, not just by hiding the button: the API
+     * permission layer only logs, so without this any signed-in user could call it.
+     */
+    public function destroyWithApplication($id): JsonResponse
+    {
+        $user = auth()->user();
+        if (!$user || (int) $user->role_id !== 7) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete a job order and its application.',
+            ], 403);
+        }
+
+        try {
+            $jobOrder = JobOrder::find($id);
+            if (!$jobOrder) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Job order not found. It may have been deleted already.',
+                ], 404);
+            }
+
+            $jobOrderData = $jobOrder->toArray();
+            $application = $jobOrder->application_id ? Application::find($jobOrder->application_id) : null;
+            $applicationData = $application ? $application->toArray() : null;
+
+            DB::transaction(function () use ($jobOrder, $application) {
+                $jobOrder->delete();
+                $application?->delete();
+            });
+
+            $userEmail = $user->email_address ?? $user->email ?? 'System';
+
+            AuditTrailLog::create([
+                'old_details' => [
+                    'type' => 'joborders_with_application',
+                    'id' => $id,
+                    'data' => $jobOrderData,
+                    'application' => $applicationData,
+                ],
+                'new_details' => null,
+                'created_by_user' => $userEmail,
+                'updated_by_user' => $userEmail,
+            ]);
+
+            ActivityLog::log(
+                'Job Order Deleted',
+                "Job Order #{$id}" . ($application ? " and Application #{$application->id}" : '') . " deleted by {$userEmail}",
+                'warning',
+                [
+                    'resource_type' => 'JobOrder',
+                    'resource_id' => $id,
+                    'additional_data' => [
+                        'job_order_data' => $jobOrderData,
+                        'application_id' => $application->id ?? null,
+                    ],
+                ]
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => $application
+                    ? "Job order #{$id} and application #{$application->id} were deleted."
+                    : "Job order #{$id} was deleted (it had no application).",
+                'deleted_application_id' => $application->id ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error("Failed to delete job order {$id} with application: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete the job order and its application.',
                 'error' => $e->getMessage(),
             ], 500);
         }
@@ -2400,6 +2350,7 @@ class JobOrderController extends Controller
                 'has_client_tagging' => $request->hasFile('client_tagging_image'),
                 'has_speed_test' => $request->hasFile('speed_test_image'),
                 'has_proof_image' => $request->hasFile('proof_image'),
+                'has_other_photos' => $request->hasFile('other_photos_image'),
             ]);
 
             $validator = Validator::make($request->all(), [
@@ -2414,6 +2365,8 @@ class JobOrderController extends Controller
                 'speed_test_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'proof_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
                 'house_front_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
+                // Optional extra photo from the technician's done form.
+                'other_photos_image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,heic,heif,bmp,svg,tiff|max:10240',
             ]);
 
             if ($validator->fails()) {
@@ -2444,7 +2397,8 @@ class JobOrderController extends Controller
                 'client_tagging_image',
                 'speed_test_image',
                 'proof_image',
-                'house_front_image'
+                'house_front_image',
+                'other_photos_image',
             ];
 
             $queuedCount = 0;
@@ -2461,6 +2415,7 @@ class JobOrderController extends Controller
                 'speed_test_image' => 'speedtest_image_url',
                 'proof_image' => 'proof_image_url',
                 'house_front_image' => 'house_front_picture_url',
+                'other_photos_image' => 'other_photos_url',
             ];
 
             foreach ($imageFields as $field) {
@@ -2674,10 +2629,6 @@ class JobOrderController extends Controller
                     continue;
                 }
 
-                $radiusUrl = $radiusConfig->ssl_type . '://' . $radiusConfig->ip . ':' . $radiusConfig->port . '/rest/user-manage/user';
-                $radiusUsername = $radiusConfig->username;
-                $radiusPassword = $radiusConfig->password;
-
                 \Log::channel('radiusrelated')->info('RADIUS server selected for JobOrder account creation', [
                     'job_order_id'     => $id,
                     'position'         => $position,
@@ -2687,31 +2638,61 @@ class JobOrderController extends Controller
 
                 for ($attempt = 1; $attempt <= $maxAttemptsPerConfig; $attempt++) {
                     try {
-                        $response = Http::withOptions([
-                            'verify' => false
-                        ])
-                        ->withBasicAuth($radiusUsername, $radiusPassword)
-                        ->put($radiusUrl, $payload);
+                        $api = app(RouterosApiService::class);
 
-                        $statusCode = $response->status();
+                        // Connect first so an unreachable device is told apart from a
+                        // device that answered and refused the account. connect() walks
+                        // both transports for this config — api-ssl 8729, then api 8728 —
+                        // so reaching here means neither answered.
+                        if (!$api->connect($radiusConfig)) {
+                            $radiusError = $api->getLastError() !== ''
+                                ? $api->getLastError()
+                                : 'No RADIUS endpoint responded.';
+                            $lastFailureWasConnection = true;
+                            \Log::channel('radiusrelated')->error('RADIUS Connection Exception for JobOrder: ' . $id, [
+                                'error' => $radiusError,
+                                'position' => $position,
+                                'attempt' => $attempt,
+                                'radius_config_id' => $radiusConfig->id,
+                                'radius_ip' => $radiusConfig->ip,
+                                'transports' => $api->endpointStates($radiusConfig),
+                            ]);
 
-                        if ($statusCode === 204 || $response->successful()) {
+                            // Both transports are already in cool-off: retrying here only
+                            // repeats the refusal. Hand over to the next config now.
+                            if ($api->lastConnectAllEndpointsDown()) {
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        // addUser() is idempotent: an account that is already on the
+                        // device is reported as success rather than duplicated, so a
+                        // retry after a half-completed attempt is safe.
+                        if ($api->addUser($radiusConfig, $payload['name'], $payload['password'], $payload['group'])) {
                             $radiusSubmitted = true;
                             $radiusError = null;
                             break;
                         }
 
-                        $radiusError = 'HTTP ' . $statusCode . ': ' . $response->body();
+                        $radiusError = $api->getLastError() !== ''
+                            ? $api->getLastError()
+                            : 'The RADIUS device rejected the account.';
                         $lastFailureWasConnection = false;
                         \Log::channel('radiusrelated')->error('RADIUS API Error for JobOrder: ' . $id, [
-                            'status' => $statusCode,
-                            'response' => $response->body(),
+                            'error' => $radiusError,
                             'payload' => $payload,
                             'position' => $position,
                             'attempt' => $attempt,
                             'radius_config_id' => $radiusConfig->id,
                             'radius_ip' => $radiusConfig->ip,
                         ]);
+
+                        // The device answered and refused this exact account (unknown
+                        // group, bad value). Re-sending it produces the same refusal, so
+                        // move on to the next server instead of burning the retries.
+                        break;
                     } catch (\Exception $mikrotikException) {
                         $radiusError = $mikrotikException->getMessage();
                         $lastFailureWasConnection = true;

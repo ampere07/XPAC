@@ -59,6 +59,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // Convenience fee rate the ISP adds on top of an online payment (2.5 = 2.5%). Disclosed under
     // the amount field so the customer is not surprised by a higher total at the gateway. 0 = none.
     const [convenienceFeePercentage, setConvenienceFeePercentage] = useState<number>(0);
+    // Prepaid-only: discounts on file for this account, taken off a plan purchase at checkout
+    // (server-side — see CheckoutDiscountService). Fetched when the pay sheet opens. 0 = none.
+    const [availableDiscount, setAvailableDiscount] = useState<number>(0);
+    // Prepaid-only advance payment: how many periods to buy at once. 1 = an ordinary top-up; the
+    // amount becomes plan price × months and the expiry moves by 34 × months days.
+    const [advanceMonths, setAdvanceMonths] = useState<number>(1);
+    // Billing type switch chosen at Pay Now. null = stay on the current type. Carried with the
+    // payment and applied by the server only once it settles (BillingTypeMigrationService).
+    const [migrateTo, setMigrateTo] = useState<'prepaid' | 'postpaid' | null>(null);
 
     const latestPayments = useMemo(() => {
         return (payments || []).slice(0, 3);
@@ -197,7 +206,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
      *
      * Neither applies while nothing is owed — a zero/credit balance keeps the ₱1 floor only.
      */
-    const requiresExactPayment = !isPrepaid && balance > 0;
+    // Postpaid -> prepaid: the payment is the balance PLUS a plan period, so it is not pinned to
+    // the balance. Its own amount check (isCheckoutAmountValid) comes after currentPlan below.
+    const isSwitchingToPrepaid = !isPrepaid && migrateTo === 'prepaid';
+    const requiresExactPayment = !isPrepaid && balance > 0 && !isSwitchingToPrepaid;
     // A quoted onboarding re-price REPLACES the outstanding balance rather than paying it off, so
     // the "plan must cover the balance" floor does not apply - that is what lets a first-time
     // customer move to a cheaper plan before they have paid anything.
@@ -213,14 +225,6 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             ? paymentCoversBalance
             : paymentAmount >= 1;
 
-    // Convenience fee preview. Mirrors the server's maths (fee on top of the bill, 2 dp) purely so
-    // the customer can see the real total before leaving for the gateway — the charge is still
-    // computed server-side at checkout, so this is disclosure only and never sent anywhere.
-    const feeBaseAmount = requiresExactPayment ? balance : paymentAmount;
-    const convenienceFeeAmount = convenienceFeePercentage > 0
-        ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
-        : 0;
-    const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
     // formatCurrency() rounds to whole pesos, which would hide the centavos a percentage fee almost
     // always produces. No padding either: 922.5 stays 922.5. Capped at 2 dp only because the fee
     // above is already rounded to centavos, so nothing here is ever actually rounded away.
@@ -260,6 +264,49 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         () => plans.find(p => p.id === selectedPlanId) || null,
         [plans, selectedPlanId]
     );
+    // Prepaid customers cannot change plan at Pay Now, so the picker only ever offers ONE plan:
+    // the one they will actually be on. That is a switch they already paid for and is queued, if
+    // any, else the plan in force. Offering the plan in force while another is queued would be
+    // wrong, not just cosmetic: the server reads "paid for the plan in force while a different one
+    // is queued" as backing out of the switch (PrepaidPlanChangeService::handleSettledPayment) and
+    // would silently cancel the plan the customer already bought.
+    const queuedPlan = pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null;
+    const lockedPlan = queuedPlan ?? currentPlan;
+    const selectablePlans = lockedPlan ? [lockedPlan] : [];
+
+    // Postpaid -> prepaid costs the outstanding balance plus one period of the current plan; the
+    // server re-checks this (XenditPaymentController::createPayment).
+    // Credit included (a postpaid balance can be negative): the switch floors whatever is left to
+    // 0, so a credit must reduce the charge or it is lost. Mirrors XenditPaymentController.
+    const switchToPrepaidAmount = Math.round((balance + Number(currentPlan?.price ?? 0)) * 100) / 100;
+    const isCheckoutAmountValid = isSwitchingToPrepaid
+        ? !!currentPlan && toCentavos(paymentAmount) >= toCentavos(switchToPrepaidAmount)
+        : isPaymentAmountValid;
+
+    // Discount preview for a prepaid plan purchase: ₱1,000 plan with a ₱100 discount -> ₱900.
+    // Mirrors XenditPaymentController::createPayment, which is what actually applies it:
+    //  - only when buying a plan (not "Pay Current Balance") and not on a re-priced first bill —
+    //    both of those pay an invoice that billing already discounted;
+    //  - capped so at least ₱1.00 is still charged (CheckoutDiscountService::applicableAmount).
+    // paymentAmount stays the plan price; that is what is sent, and the server takes the discount.
+    const discountApplies = isPrepaid && !payCurrentBalance && !!selectedPlan && !canRepriceOnboarding;
+    // Advance payment is offered on exactly the same purchases the discount applies to: buying a
+    // plan's period(s). Mirrors XenditPaymentController::ADVANCE_MONTH_OPTIONS (1 is the default).
+    const canPayAdvance = discountApplies;
+    const ADVANCE_MONTH_CHOICES = [1, 2, 3, 5];
+    const discountAmount = discountApplies && availableDiscount > 0 && paymentAmount > 1
+        ? Math.round(Math.min(availableDiscount, paymentAmount - 1) * 100) / 100
+        : 0;
+    const netPaymentAmount = Math.round((paymentAmount - discountAmount) * 100) / 100;
+
+    // Convenience fee preview. Mirrors the server's maths (fee on top of the bill, 2 dp) purely so
+    // the customer can see the real total before leaving for the gateway — the charge is still
+    // computed server-side at checkout, so this is disclosure only and never sent anywhere.
+    const feeBaseAmount = requiresExactPayment ? balance : netPaymentAmount;
+    const convenienceFeeAmount = convenienceFeePercentage > 0
+        ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
+        : 0;
+    const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
     // A switch already paid for and waiting. It takes priority when preselecting, so a top-up is
     // priced at the plan the customer will actually be on rather than the one they are leaving.
     const pendingPlan = useMemo(
@@ -294,7 +341,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // leave the guard false and re-trigger this effect forever.
     const plansRequestedRef = React.useRef(false);
     useEffect(() => {
-        if (!isPrepaid || plansRequestedRef.current) return;
+        // Every account, not only prepaid: a postpaid customer switching to prepaid at Pay Now
+        // pays one period of their current plan, so its price has to be known.
+        if (!customerDetail || plansRequestedRef.current) return;
         plansRequestedRef.current = true;
         let cancelled = false;
         (async () => {
@@ -307,7 +356,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
             }
         })();
         return () => { cancelled = true; };
-    }, [isPrepaid]);
+    }, [customerDetail]);
 
     // Format a stored date string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or ISO) to
     // MM/DD/YYYY by reading the parts directly — avoids the timezone shift that
@@ -554,19 +603,28 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     async function openVerifyModal() {
         setOnboardingQuoteAmount(null);
         setCanRepriceOnboarding(false);
+        // The billing type always starts on "stay", so a switch is an explicit choice.
+        setMigrateTo(null);
         let preselectedPlan: Plan | null = null;
         if (isPrepaid) {
-            // A queued switch wins over the plan currently in force: the customer has already
-            // bought it, so a top-up must be priced at that plan, not the one being replaced.
-            preselectedPlan = pendingPlan ?? currentPlan ?? plans[0] ?? null;
+            // Locked — prepaid customers cannot change plan at Pay Now. A queued switch wins over
+            // the plan in force (see lockedPlan): the customer already bought it.
+            preselectedPlan = lockedPlan;
             setSelectedPlanId(preselectedPlan?.id ?? null);
             setPaymentAmount(Number(preselectedPlan?.price ?? 0));
+            setAdvanceMonths(1);
         } else {
             setPaymentAmount(balance);
         }
         setPayCurrentBalance(false);
         setIsPlanListOpen(false);
         setShowPaymentVerifyModal(true);
+
+        // Re-read every time: a discount may have been added (or spent) since the screen loaded.
+        setAvailableDiscount(0);
+        if (isPrepaid) {
+            paymentService.getAvailableDiscount(accountNo).then(setAvailableDiscount);
+        }
 
         // Resolve up front whether this is an unpaid first bill that can be re-priced. Without
         // this, every plan cheaper than the balance renders as under-balance and the customer
@@ -594,7 +652,8 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         // Deliberately reset: forfeiting days is a decision about ONE specific switch, so it has
         // to be made again for a different plan rather than carried over silently.
         setActivateNow(false);
-        setPaymentAmount(price);
+        // Keep the chosen number of months across a plan change; the amount follows both.
+        setPaymentAmount(price * advanceMonths);
         setIsPlanListOpen(false);
         setErrorMessage('');
 
@@ -607,6 +666,8 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 setCanRepriceOnboarding(true);
                 setOnboardingQuoteAmount(quote.amount);
                 setPaymentAmount(quote.amount);
+                // A first bill is paid once; advance months are not offered on it.
+                setAdvanceMonths(1);
                 return;
             }
             setCanRepriceOnboarding(false);
@@ -617,11 +678,31 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
 
         // Flag a plan too cheap to clear the balance straight away, rather than letting the
         // customer discover it only when they press Pay.
-        if (requiresPlanCoversBalance && toCentavos(price) < toCentavos(balance)) {
+        if (requiresPlanCoversBalance && toCentavos(price * advanceMonths) < toCentavos(balance)) {
             setErrorMessage(`${plan.name} costs ${formatCurrency(price)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
         } else {
             setErrorMessage('');
         }
+    };
+
+    /**
+     * Billing type for this payment: stay (null) or switch. Switching postpaid -> prepaid re-prices
+     * the payment to balance + one plan period; prepaid -> postpaid leaves the amount alone (the
+     * customer keeps their paid days and monthly bills start once those run out).
+     */
+    const handleSelectMigration = (target: 'prepaid' | 'postpaid' | null) => {
+        setMigrateTo(target);
+        setErrorMessage('');
+        if (!isPrepaid) {
+            setPaymentAmount(target === 'prepaid' ? switchToPrepaidAmount : balance);
+        }
+    };
+
+    /** Advance payment: n periods of the selected plan — the amount is always price × months. */
+    const handleSelectAdvanceMonths = (months: number) => {
+        setAdvanceMonths(months);
+        setPaymentAmount(Number(selectedPlan?.price ?? 0) * months);
+        setErrorMessage('');
     };
 
     /** "Pay Current Balance": settle the outstanding balance directly — no plan change. */
@@ -629,6 +710,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         setPayCurrentBalance(true);
         setSelectedPlanId(null);
         setActivateNow(false);
+        setAdvanceMonths(1);
         setPaymentAmount(balance);
         setIsPlanListOpen(false);
         setErrorMessage('');
@@ -643,6 +725,8 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         setIsPlanListOpen(false);
         setPayCurrentBalance(false);
         setActivateNow(false);
+        setAdvanceMonths(1);
+        setMigrateTo(null);
         setPaymentAmount(isPrepaid ? Number(selectedPlan?.price ?? 0) : balance);
     };
 
@@ -674,6 +758,11 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 setErrorMessage(`${selectedPlan.name} costs ${formatCurrency(paymentAmount)}, which does not cover your balance of ${formatCurrency(balance)}. Pick a plan priced at ${formatCurrency(balance)} or more.`);
                 return;
             }
+        } else if (isSwitchingToPrepaid && !isCheckoutAmountValid) {
+            setErrorMessage(currentPlan
+                ? `Switching to prepaid costs ${formatPeso(switchToPrepaidAmount)} (your balance plus one period of ${currentPlan.name}).`
+                : 'Your current plan could not be found, so the switch to prepaid cannot be made online. Please contact support.');
+            return;
         } else if (requiresExactPayment && !isPaymentAmountValid) {
             setErrorMessage(`Payment must be exactly your current balance of ${formatCurrency(balance)}`);
             return;
@@ -694,7 +783,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                 paymentAmount,
                 redirectUrl,
                 (isPrepaid && !payCurrentBalance) ? selectedPlanId : null,
-                activateNow && canActivateNow
+                activateNow && canActivateNow,
+                canPayAdvance ? advanceMonths : 1,
+                migrateTo
             );
 
             if (response.status === 'success' && response.payment_url) {
@@ -1132,6 +1223,53 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 </View>
                             )}
 
+                            {/* Billing type: stay, or switch with this payment. Nothing changes
+                                until the payment is confirmed. */}
+                            <View style={styles.planWrap}>
+                                <Text style={styles.inputLabel}>Billing Type</Text>
+                                <View style={styles.advanceRow}>
+                                    {[
+                                        { target: null, label: `Stay ${isPrepaid ? 'Prepaid' : 'Postpaid'}` },
+                                        // A queued prepaid plan change blocks a switch to postpaid (the server refuses it too).
+                                        ...(isPrepaid && pendingPlanId ? [] : [{ target: (isPrepaid ? 'postpaid' : 'prepaid') as 'prepaid' | 'postpaid', label: `Switch to ${isPrepaid ? 'Postpaid' : 'Prepaid'}` }]),
+                                    ].map(option => {
+                                        const isChosen = migrateTo === option.target;
+                                        return (
+                                            <Pressable
+                                                key={option.label}
+                                                onPress={() => handleSelectMigration(option.target)}
+                                                accessibilityRole="button"
+                                                accessibilityState={{ selected: isChosen }}
+                                                style={[
+                                                    styles.advanceChip,
+                                                    isChosen && {
+                                                        backgroundColor: colorPalette?.primary || '#7c3aed',
+                                                        borderColor: colorPalette?.primary || '#7c3aed',
+                                                    },
+                                                ]}
+                                            >
+                                                <Text style={[styles.advanceChipText, isChosen && styles.advanceChipTextChosen]}>
+                                                    {option.label}
+                                                </Text>
+                                            </Pressable>
+                                        );
+                                    })}
+                                </View>
+                                {migrateTo === 'prepaid' && (
+                                    <Text style={[styles.activateNowHint, styles.advanceHint]}>
+                                        {currentPlan
+                                            ? `You pay ${formatPeso(switchToPrepaidAmount)}: one period of ${currentPlan.name} (${formatPeso(Number(currentPlan.price ?? 0))})${balance > 0 ? ` plus your ${formatPeso(balance)} balance` : balance < 0 ? ` less your ${formatPeso(-balance)} credit` : ''}. Your 34 prepaid days start once the payment is confirmed, and monthly bills stop.`
+                                            : 'Your current plan could not be found, so the switch cannot be made online. Please contact support.'}
+                                    </Text>
+                                )}
+                                {migrateTo === 'postpaid' && (
+                                    <Text style={[styles.activateNowHint, styles.advanceHint]}>
+                                        You keep the prepaid days you have{prepaidExpiresAt ? ` (until ${formatDbDate(prepaidExpiresAt)}, plus any bought now)` : ''}.
+                                        After they run out you are billed monthly, on the day your prepaid period ends.
+                                    </Text>
+                                )}
+                            </View>
+
                             {/* Prepaid only: pick the plan being paid for. The amount below follows
                                 this selection, so the two can never disagree. */}
                             {isPrepaid && (
@@ -1143,9 +1281,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             <ActivityIndicator size="small" color={colorPalette?.primary || '#111827'} />
                                             <Text style={styles.planLoadingText}>Loading plans…</Text>
                                         </View>
-                                    ) : plans.length === 0 ? (
+                                    ) : selectablePlans.length === 0 ? (
                                         <Text style={styles.planEmptyText}>
-                                            No plans are available right now. Please contact support.
+                                            Your current plan could not be found. Please contact support.
                                         </Text>
                                     ) : (
                                         <>
@@ -1188,7 +1326,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                                 </Text>
                                                             </Pressable>
                                                         )}
-                                                        {plans.map(plan => {
+                                                        {selectablePlans.map(plan => {
                                                             const isSelected = plan.id === selectedPlanId;
                                                             const isCurrent = plan.id === currentPlan?.id;
                                                             return (
@@ -1276,7 +1414,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                 <View style={styles.activateNowWarning}>
                                                     <Text style={styles.activateNowWarningText}>
                                                         Heads up: {selectedPlan?.name} starts as soon as your payment is
-                                                        confirmed and your service period resets to 34 days from today.
+                                                        confirmed and your service period resets to {34 * advanceMonths} days from today.
                                                         You will lose the{' '}
                                                         {prepaidDaysLeft !== null && prepaidDaysLeft > 0
                                                             ? `${prepaidDaysLeft} ${prepaidDaysLeft === 1 ? 'day' : 'days'}`
@@ -1292,6 +1430,46 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                             )}
                                         </View>
                                     )}
+
+                                    {/* Advance payment: buy several periods at once. The amount becomes
+                                        plan price × months and the expiry moves by 34 × months days,
+                                        stacked onto any days still left. */}
+                                    {canPayAdvance && (
+                                        <View style={styles.activateNowWrap}>
+                                            <Text style={styles.activateNowLabel}>Pay in advance</Text>
+                                            <View style={styles.advanceRow}>
+                                                {ADVANCE_MONTH_CHOICES.map(months => {
+                                                    const isChosen = advanceMonths === months;
+                                                    return (
+                                                        <Pressable
+                                                            key={months}
+                                                            onPress={() => handleSelectAdvanceMonths(months)}
+                                                            accessibilityRole="button"
+                                                            accessibilityState={{ selected: isChosen }}
+                                                            style={[
+                                                                styles.advanceChip,
+                                                                isChosen && {
+                                                                    backgroundColor: colorPalette?.primary || '#7c3aed',
+                                                                    borderColor: colorPalette?.primary || '#7c3aed',
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <Text style={[styles.advanceChipText, isChosen && styles.advanceChipTextChosen]}>
+                                                                {months} {months === 1 ? 'month' : 'months'}
+                                                            </Text>
+                                                        </Pressable>
+                                                    );
+                                                })}
+                                            </View>
+                                            {advanceMonths > 1 && selectedPlan && (
+                                                <Text style={[styles.activateNowHint, styles.advanceHint]}>
+                                                    {formatPeso(Number(selectedPlan.price ?? 0))} × {advanceMonths} months
+                                                    = {formatPeso(Number(selectedPlan.price ?? 0) * advanceMonths)} · adds {34 * advanceMonths} days
+                                                    {isPrepaidPeriodActive ? ' on top of your remaining days' : ''}
+                                                </Text>
+                                            )}
+                                        </View>
+                                    )}
                                 </View>
                             )}
 
@@ -1302,8 +1480,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     // Not hand-editable when the amount is already determined:
                                     // prepaid takes it from the plan picker above, and postpaid
                                     // with a balance owed must settle that balance in full.
-                                    editable={!isPrepaid && !requiresExactPayment}
-                                    value={paymentAmount !== undefined && paymentAmount !== null ? paymentAmount.toString() : ''}
+                                    editable={!isPrepaid && !requiresExactPayment && !isSwitchingToPrepaid}
+                                    // Net of any discount when locked to a plan; the raw value
+                                    // when hand-typed, so editing never fights the discount maths.
+                                    value={paymentAmount !== undefined && paymentAmount !== null
+                                        ? (discountAmount > 0 ? netPaymentAmount : paymentAmount).toString()
+                                        : ''}
                                     onChangeText={(value) => {
                                         if (value === '' || /^-?\d*\.?\d*$/.test(value)) {
                                             const amount = value === '' || value === '-' ? 0 : parseFloat(value) || 0;
@@ -1312,7 +1494,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                         }
                                     }}
                                     placeholder="0.00"
-                                    style={[styles.inputField, (isPrepaid || requiresExactPayment) && styles.inputFieldLocked]}
+                                    style={[styles.inputField, (isPrepaid || requiresExactPayment || isSwitchingToPrepaid) && styles.inputFieldLocked]}
                                 />
                                 <View style={styles.inputHint}>
                                     <Text style={styles.inputHintText}>
@@ -1326,9 +1508,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                                             ? `${selectedPlan.name} — first bill re-priced (incl. VAT/withholding)`
                                                             : `Set by your ${selectedPlan.name} plan`)
                                                         : 'Select a plan above')
-                                            : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : 'Minimum: ₱1.00')}
+                                            : isSwitchingToPrepaid
+                                                ? `Balance + one prepaid period of ${currentPlan?.name ?? "your plan"}`
+                                                : (requiresExactPayment ? `Full settlement required: ${formatCurrency(balance)}` : "Minimum: ₱1.00")}
                                     </Text>
                                 </View>
+
+                                {discountAmount > 0 && (
+                                    <Text style={styles.discountNoteText}>
+                                        {formatPeso(paymentAmount)} plan − {formatPeso(discountAmount)} discount / rebate = {formatPeso(netPaymentAmount)}
+                                    </Text>
+                                )}
 
                                 {/* Convenience fee disclosure. The field above is the amount that
                                     settles the bill; the gateway collects this total instead. */}
@@ -1344,12 +1534,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                 disabled={
                                     isPaymentProcessing
                                     || paymentAmount < 1
-                                    || !isPaymentAmountValid
+                                    || !isCheckoutAmountValid
                                     || (isPrepaid && !selectedPlan && !payCurrentBalance)
                                 }
                                 style={[styles.primaryBtn, {
                                     backgroundColor: colorPalette?.primary || '#ef4444',
-                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isPaymentAmountValid || (isPrepaid && !selectedPlan && !payCurrentBalance)) ? 0.5 : 1,
+                                    opacity: (isPaymentProcessing || paymentAmount < 1 || !isCheckoutAmountValid || (isPrepaid && !selectedPlan && !payCurrentBalance)) ? 0.5 : 1,
                                 }]}
                             >
                                 <Text style={styles.primaryBtnText}>
@@ -1656,6 +1846,11 @@ const styles = StyleSheet.create({
     activateNowTick: { color: '#ffffff', fontSize: 12, fontWeight: '700', lineHeight: 14 },
     activateNowLabel: { fontSize: 14, fontWeight: '600', color: '#374151' },
     activateNowHint: { fontSize: 12, color: '#6b7280', marginTop: 6, marginLeft: 26, lineHeight: 17 },
+    advanceRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+    advanceChip: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#d1d5db', backgroundColor: '#ffffff', alignItems: 'center' },
+    advanceChipText: { fontSize: 13, fontWeight: '600', color: '#374151' },
+    advanceChipTextChosen: { color: '#ffffff' },
+    advanceHint: { marginLeft: 0 },
     activateNowWarning: {
         marginTop: 8, borderWidth: 1, borderColor: '#fbbf24', backgroundColor: '#fffbeb',
         borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8,
@@ -1664,6 +1859,7 @@ const styles = StyleSheet.create({
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
     feeNoteText: { fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 16 },
+    discountNoteText: { fontSize: 13, color: '#15803d', marginTop: 8, lineHeight: 18 },
     primaryBtn: { paddingVertical: 12, borderRadius: 50, width: '50%', alignSelf: 'center', alignItems: 'center' },
     primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
     spacer: { height: 24 },

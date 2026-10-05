@@ -60,15 +60,24 @@ class DashboardController extends Controller
             $radiusConfig = DB::table('radius_config')->first();
 
             if ($radiusConfig) {
+                /*
+                 * A real API login, not a bare socket — see RadiusConfigController for
+                 * why. fsockopen() went green as soon as TCP was accepted, which the
+                 * RouterOS API port does even when nothing usable will come back, so this
+                 * indicator reported a healthy RADIUS while account creation was failing.
+                 * Routed through the shared connection layer, so it also gets the
+                 * alternate transport and the circuit breaker.
+                 */
                 try {
-                    $connection = @fsockopen($radiusConfig->ip, $radiusConfig->port, $errno, $errstr, 2);
-                    if ($connection) {
-                        $radiusIsOnline = true;
-                        fclose($connection);
-                    } else {
-                        $radiusOfflineMessage = "Failed to connect to RADIUS API port {$radiusConfig->port} on {$radiusConfig->ip}: {$errstr} ({$errno})";
+                    $api = app(\App\Services\RouterosApiService::class);
+                    $radiusIsOnline = $api->ping($radiusConfig);
+
+                    if (!$radiusIsOnline) {
+                        $error = $api->getLastError();
+                        $radiusOfflineMessage = "Failed to reach the RADIUS API on {$radiusConfig->ip}"
+                            . ($error !== '' ? ": {$error}" : '.');
                     }
-                } catch (\Exception $e) {
+                } catch (\Throwable $e) {
                     $radiusOfflineMessage = $e->getMessage();
                 }
             } else {

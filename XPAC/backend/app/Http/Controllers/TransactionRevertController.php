@@ -270,7 +270,7 @@ class TransactionRevertController extends Controller
                         if ($billingAccountSnapshot && $accountNo) {
                             $billingAccount = BillingAccount::where('account_no', $accountNo)->first();
 
-                            if ($billingAccount && $transaction->transaction_type !== 'Security Deposit') {
+                            if ($billingAccount && !\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
                                 $billingAccount->account_balance = round(floatval($billingAccountSnapshot['old_account_balance']), 2);
                                 $billingAccount->balance_update_date = $currentTime;
                                 $billingAccount->updated_by = $userId;
@@ -475,7 +475,7 @@ class TransactionRevertController extends Controller
                             $billingAccount = BillingAccount::where('account_no', $accountNo)->first();
                             $paymentToRevert = floatval($transaction->received_payment);
 
-                            if ($billingAccount && $transaction->transaction_type !== 'Security Deposit') {
+                            if ($billingAccount && !\App\Models\Transaction::isSecurityDeposit($transaction->transaction_type)) {
                                 $billingAccount->account_balance = round(floatval($billingAccount->account_balance) + $paymentToRevert, 2);
                                 $billingAccount->balance_update_date = $currentTime;
                                 $billingAccount->updated_by = $userId;

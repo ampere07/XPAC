@@ -28,6 +28,25 @@ interface RadiusConfigResponse {
   message?: string;
 }
 
+// One Ping button run: TCP connects from the server to the device's API port (RadiusPingService).
+interface PingResult {
+  host: string;
+  port: number;
+  sent: number;
+  received: number;
+  refused: number;
+  loss_pct: number;
+  min_ms: number | null;
+  avg_ms: number | null;
+  max_ms: number | null;
+  measured_at: string;
+}
+
+type PingState =
+  | { status: 'running' }
+  | { status: 'done'; result: PingResult }
+  | { status: 'error'; message: string };
+
 interface ModalConfig {
   isOpen: boolean;
   type: 'success' | 'error' | 'warning' | 'confirm';
@@ -36,6 +55,65 @@ interface ModalConfig {
   onConfirm?: () => void;
   onCancel?: () => void;
 }
+
+// The server talks to every RADIUS device over the native RouterOS API, never REST.
+// ssl_type keeps its stored values ('https' / 'http') so existing rows need no
+// migration; RouterosApiService reads 'https' as api-ssl and 'http' as plain api.
+const CONNECTION_TYPE_LABELS: Record<string, string> = {
+  https: 'API-SSL (encrypted, 8729)',
+  http: 'API (plain, 8728)',
+};
+
+const connectionTypeLabel = (sslType: string): string =>
+  CONNECTION_TYPE_LABELS[(sslType || '').toLowerCase()] || sslType || 'Not set';
+
+// The port the API dials first — mirrors RouterosApiService::candidateEndpoints(). The
+// saved port is used as is (8728/8729, or a NAT-forwarded one such as 58728), except a web
+// port saved from the REST days (80, 443), which is replaced by the standard API port.
+const apiPortFor = (config: RadiusConfigData): string => {
+  const saved = String(config.port ?? '').trim();
+  if (/^\d+$/.test(saved) && Number(saved) > 0 && saved !== '80' && saved !== '443') return saved;
+  return (config.ssl_type || '').toLowerCase() === 'https' ? '8729' : '8728';
+};
+
+type PingTone = 'good' | 'warn' | 'bad' | 'none';
+
+// What the PING and LOSS cells show for a config's last Ping button run ('—' before the first).
+const pingView = (state?: PingState): {
+  ping: string;
+  loss: string;
+  tone: PingTone;
+  title: string;
+  measuredAt: string | null;
+  error: string | null;
+  running: boolean;
+} => {
+  const empty = { measuredAt: null, error: null, running: false };
+
+  if (!state) return { ...empty, ping: '—', loss: '—', tone: 'none', title: 'Press Ping to measure' };
+  if (state.status === 'running') return { ...empty, ping: '…', loss: '…', tone: 'none', title: 'Pinging…', running: true };
+  if (state.status === 'error') return { ...empty, ping: 'ERROR', loss: '—', tone: 'bad', title: state.message, error: state.message };
+
+  // REFUSED: the device answered but nothing listens on that port. TIMEOUT: no answer at all.
+  const r = state.result;
+  return {
+    ...empty,
+    ping: r.avg_ms !== null ? `${r.avg_ms}ms` : r.refused > 0 ? 'REFUSED' : 'TIMEOUT',
+    loss: `${r.loss_pct}%`,
+    tone: r.received === 0 ? 'bad' : r.loss_pct > 0 ? 'warn' : 'good',
+    title: `TCP ${r.host}:${r.port} · ${r.received} of ${r.sent} connected`
+      + (r.refused > 0 ? `, ${r.refused} refused` : '')
+      + (r.avg_ms !== null ? ` · min/avg/max ${r.min_ms}/${r.avg_ms}/${r.max_ms} ms` : ''),
+    measuredAt: r.measured_at.split(' ')[1] ?? r.measured_at,
+  };
+};
+
+const pingToneClass = (tone: PingTone, isDarkMode: boolean): string => ({
+  good: isDarkMode ? 'text-green-400' : 'text-green-600',
+  warn: isDarkMode ? 'text-yellow-400' : 'text-yellow-600',
+  bad: isDarkMode ? 'text-red-400' : 'text-red-600',
+  none: isDarkMode ? 'text-gray-400' : 'text-gray-500',
+}[tone]);
 
 const RadiusConfig: React.FC = () => {
   // Add, Edit and Delete are granted separately. The same keys the API
@@ -48,6 +126,8 @@ const RadiusConfig: React.FC = () => {
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<Record<number, boolean>>({});
+  // PING / LOSS per config, filled in by the Ping button. Empty until it is pressed.
+  const [pings, setPings] = useState<Record<number, PingState>>({});
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
@@ -89,6 +169,25 @@ const RadiusConfig: React.FC = () => {
       setRadiusConfigs([]);
     } finally {
       if (!isSilent) setLoading(false);
+    }
+  };
+
+  const handlePing = async (id: number) => {
+    setPings(prev => ({ ...prev, [id]: { status: 'running' } }));
+    try {
+      const response = await apiClient.post<{ success: boolean; data?: PingResult; message?: string }>(`/radius-config/${id}/ping`);
+      const result = response.data.data;
+      setPings(prev => ({
+        ...prev,
+        [id]: response.data.success && result
+          ? { status: 'done', result }
+          : { status: 'error', message: response.data.message || 'Ping failed' },
+      }));
+    } catch (error: any) {
+      setPings(prev => ({
+        ...prev,
+        [id]: { status: 'error', message: error?.response?.data?.message || error?.message || 'Ping failed' },
+      }));
     }
   };
 
@@ -350,8 +449,8 @@ const RadiusConfig: React.FC = () => {
                           disabled={loading}
                         >
                           <option value="">Select Connection Type</option>
-                          <option value="https">HTTPS</option>
-                          <option value="http">HTTP</option>
+                          <option value="https">API-SSL (encrypted, 8729)</option>
+                          <option value="http">API (plain, 8728)</option>
                         </select>
                       </div>
 
@@ -382,7 +481,7 @@ const RadiusConfig: React.FC = () => {
                           type="text"
                           value={formData.port}
                           onChange={(e) => handleInputChange('port', e.target.value)}
-                          placeholder="e.g., 1812"
+                          placeholder="8728 (API), 8729 (API-SSL), or the forwarded API port"
                           className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode
                               ? 'bg-gray-700 border-gray-600 text-white'
                               : 'bg-white border-gray-300 text-gray-900'
@@ -530,8 +629,8 @@ const RadiusConfig: React.FC = () => {
                         }`}>
                         <p className={`text-xs mb-0.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                           }`}>Connection Type</p>
-                        <p className={`font-medium text-sm uppercase ${isDarkMode ? 'text-white' : 'text-gray-900'
-                          }`}>{config.ssl_type || 'Not set'}</p>
+                        <p className={`font-medium text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
+                          }`}>{connectionTypeLabel(config.ssl_type)}</p>
                       </div>
                       <div className={`p-2.5 rounded ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'
                         }`}>
@@ -593,6 +692,11 @@ const RadiusConfig: React.FC = () => {
                     </div>
 
                     {/* Logs Container */}
+                    {(() => {
+                      const ping = pingView(pings[config.id]);
+                      const pingClass = pingToneClass(ping.tone, isDarkMode);
+
+                      return (
                     <div className={`mt-4 pt-3 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-3">
@@ -602,8 +706,25 @@ const RadiusConfig: React.FC = () => {
                               Audit: {config.checked_at.split(' ')[1]}
                             </span>
                           )}
+                          {ping.measuredAt && (
+                            <span className={`text-[9px] font-mono ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                              Ping: {ping.measuredAt}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handlePing(config.id)}
+                            disabled={ping.running}
+                            title="TCP ping from the server to this device's API port"
+                            className={`px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded border transition-colors disabled:opacity-50 disabled:cursor-wait ${isDarkMode
+                              ? 'border-gray-600 text-gray-300 hover:bg-gray-700'
+                              : 'border-gray-300 text-gray-600 hover:bg-gray-100'
+                              }`}
+                          >
+                            {ping.running ? 'Pinging…' : 'Ping'}
+                          </button>
                           <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${config.is_online ? 'bg-green-500' : 'bg-red-500'}`}></div>
                         </div>
                       </div>
@@ -616,24 +737,25 @@ const RadiusConfig: React.FC = () => {
                           <p className={`text-[10px] mb-0.5 font-semibold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>PUBLIC IP</p>
                           <p className={`font-mono text-xs ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{config.public_ip || config.ip || '0.0.0.0'}</p>
                         </div>
-                        <div>
+                        <div title={ping.title}>
                           <p className={`text-[10px] mb-0.5 font-semibold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>PING</p>
-                          <p className={`font-mono text-xs ${config.is_online ? (isDarkMode ? 'text-green-400' : 'text-green-600') : (isDarkMode ? 'text-red-400' : 'text-red-600')}`}>
-                            {config.is_online ? `${config.latency}ms` : 'TIMEOUT'}
-                          </p>
+                          <p className={`font-mono text-xs ${pingClass}`}>{ping.ping}</p>
                         </div>
-                        <div>
+                        <div title={ping.title}>
                           <p className={`text-[10px] mb-0.5 font-semibold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>LOSS</p>
-                          <p className={`font-mono text-xs ${config.is_online ? (isDarkMode ? 'text-green-400' : 'text-green-600') : (isDarkMode ? 'text-red-400' : 'text-red-600')}`}>
-                            {config.loss ?? (config.is_online ? '0%' : '100%')}{typeof config.loss === 'number' ? '%' : ''}
-                          </p>
+                          <p className={`font-mono text-xs ${pingClass}`}>{ping.loss}</p>
                         </div>
                         <div>
                           <p className={`text-[10px] mb-0.5 font-semibold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>API PORT</p>
-                          <p className={`font-mono text-xs ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{config.port || '8728'}</p>
+                          <p className={`font-mono text-xs ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{apiPortFor(config)}</p>
                         </div>
                       </div>
+                      {ping.error && (
+                        <p className={`text-[10px] mt-1.5 ${isDarkMode ? 'text-red-400' : 'text-red-600'}`}>{ping.error}</p>
+                      )}
                     </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -663,8 +785,8 @@ const RadiusConfig: React.FC = () => {
                         disabled={loading}
                       >
                         <option value="">Select Connection Type</option>
-                        <option value="https">HTTPS</option>
-                        <option value="http">HTTP</option>
+                        <option value="https">API-SSL (encrypted, 8729)</option>
+                        <option value="http">API (plain, 8728)</option>
                       </select>
                     </div>
 
@@ -695,7 +817,7 @@ const RadiusConfig: React.FC = () => {
                         type="text"
                         value={formData.port}
                         onChange={(e) => handleInputChange('port', e.target.value)}
-                        placeholder="e.g., 1812"
+                        placeholder="8728 (API), 8729 (API-SSL), or the forwarded API port"
                         className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode
                             ? 'bg-gray-700 border-gray-600 text-white'
                             : 'bg-white border-gray-300 text-gray-900'

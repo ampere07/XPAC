@@ -71,11 +71,14 @@ export const PAGES = [
   'customer-support',
   'agent-application',
   'live-monitor',
+  'for-approval',
   'customer',
   'transaction-list',
   'transactions-revert',
   'prepaid-override',
+  'customer-images',
   'payment-portal',
+  'finance',
   'soa',
   'invoice',
   'overdue',
@@ -457,11 +460,14 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'customer-support': 'Support',
   'agent-application': 'Agent Application',
   'live-monitor': 'Monitoring',
+  'for-approval': 'For Approval',
   'customer': 'Customer',
   'transaction-list': 'Transaction List',
   'transactions-revert': 'Revert Requests',
   'prepaid-override': 'Prepaid Override',
+  'customer-images': 'Customer Images',
   'payment-portal': 'Payment Portal',
+  'finance': 'Finance',
   'soa': 'Statements',
   'invoice': 'Invoice',
   'overdue': 'Overdue',
@@ -586,12 +592,12 @@ export const labelFor = (key: string): string => {
  * sidebar. Any page not named in a group is appended to "Other".
  */
 export const PERMISSION_GROUPS: Array<{ label: string; pages: string[] }> = [
-  { label: 'Dashboards', pages: ['dashboard', 'agent-dashboard', 'live-monitor'] },
+  { label: 'Dashboards', pages: ['dashboard', 'agent-dashboard', 'live-monitor', 'for-approval'] },
   {
     label: 'Billing',
     pages: [
-      'customer', 'transaction-list', 'transactions-revert', 'prepaid-override',
-      'payment-portal', 'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice',
+      'customer', 'transaction-list', 'transactions-revert', 'prepaid-override', 'customer-images',
+      'payment-portal', 'finance', 'soa', 'invoice', 'overdue', 'so-charge', 'dc-notice',
       'mass-rebate', 'staggered-payment', 'discounts', 'soa-generation',
     ],
   },
@@ -659,6 +665,7 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
   [ROLE.ADMINISTRATOR]: [
     'dashboard',
     'live-monitor',
+    'for-approval',
     'customer',
     'customer.so-request',
     'customer.details-edit',
@@ -671,6 +678,7 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
     'transaction-list.revert-request',
     'transactions-revert',
     'prepaid-override',
+    'customer-images',
     'payment-portal',
     'soa',
     'invoice',
@@ -849,19 +857,18 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
     'service-order.tech-edit',
     'work-order',
     'lcp-nap-location',
+    // View only: no 'transaction-list.approve', so no Approve / Mark as Failed.
+    'transaction-list',
   ],
   [ROLE.CUSTOMER]: [
     'customer-dashboard',
     'customer-bills',
     'customer-support',
   ],
+  // Transaction List only, as a technician sees it: browse and record a payment, no approve.
+  // Mirrors Permissions::ROLE_PERMISSIONS on the server.
   [ROLE.AGENT]: [
-    'agent-dashboard',
-    'agent-application',
-    'job-order',
-    'work-order',
-    'bonus-history',
-    'agent-invoices',
+    'transaction-list',
   ],
   [ROLE.INVENTORY_STAFF]: [
     'inventory',
@@ -973,7 +980,7 @@ export const WEB_WITHHELD: Record<number, string[]> = {
  */
 export const WEB_REACHABLE: Record<number, string[]> = {
   2: ['application-management', 'work-order', 'transaction-list'],
-  4: ['application-management', 'service-order', 'transaction-list'],
+  4: ['transaction-list'],
   5: ['application-management', 'job-order', 'service-order', 'work-order', 'transaction-list'],
   6: ['application-management', 'job-order', 'service-order', 'transaction-list'],
   8: ['transaction-list'],
@@ -1006,8 +1013,7 @@ export const ROLE_HOME: Record<number, string> = {
   [ROLE.ADMINISTRATOR]: 'dashboard',
   [ROLE.TECHNICIAN]: 'job-order',
   [ROLE.CUSTOMER]: 'customer-dashboard',
-  // The 'dashboard' section renders the agent's own dashboard for an agent.
-  [ROLE.AGENT]: 'dashboard',
+  [ROLE.AGENT]: 'transaction-list',
   [ROLE.INVENTORY_STAFF]: 'inventory',
   [ROLE.OSP]: 'work-order',
   [ROLE.HEAD_TECH]: 'application-management',

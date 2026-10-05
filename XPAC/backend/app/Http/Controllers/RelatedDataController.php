@@ -91,9 +91,21 @@ class RelatedDataController extends Controller
     public function getTransactionsByAccount(string $accountNo): JsonResponse
     {
         try {
-            $transactions = DB::table('transactions')
+            $query = DB::table('transactions')
                 ->leftJoin('payment_methods', 'transactions.payment_method', '=', 'payment_methods.id')
-                ->where('transactions.account_no', $accountNo)
+                ->where('transactions.account_no', $accountNo);
+
+            // An agent sees only the transactions they processed (AgentScope).
+            $authUser = auth()->user();
+            if (\App\Support\AgentScope::isAgent($authUser)) {
+                $email = \App\Support\AgentScope::email($authUser);
+                $query->where(function ($q) use ($email) {
+                    $q->where('transactions.processed_by_user', $email)
+                      ->orWhere('transactions.created_by_user', $email);
+                });
+            }
+
+            $transactions = $query
                 ->select([
                     'transactions.*',
                     'payment_methods.payment_method as payment_method_name'
@@ -882,7 +894,11 @@ class RelatedDataController extends Controller
                 ])
                 ->first();
 
-            if (!$transaction) {
+            // An agent may only open transactions they processed (AgentScope) — this is the route
+            // GET /transactions/{id} actually resolves to.
+            $authUser = auth()->user();
+            if (!$transaction
+                || (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction))) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction not found'
@@ -895,6 +911,9 @@ class RelatedDataController extends Controller
                 'account_no' => $transaction->account_no,
                 'transaction_type' => $transaction->transaction_type,
                 'received_payment' => (float)$transaction->received_payment,
+                // Agent-recorded payments only; NULL otherwise, which hides the rows in the details.
+                'collected_payment' => $transaction->collected_payment !== null ? (float) $transaction->collected_payment : null,
+                'agent_collected' => $transaction->agent_collected !== null ? (float) $transaction->agent_collected : null,
                 'payment_date' => $transaction->payment_date,
                 'date_processed' => $transaction->date_processed,
                 'processed_by_user' => $transaction->processed_by_user,
@@ -987,6 +1006,119 @@ class RelatedDataController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch distinct transaction types',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Distinct "Processed By" values across all transactions, for the transaction filter's search
+     * suggestions. The raw column, because that is what the Transactions list filters against.
+     */
+    public function getDistinctTransactionProcessors(): JsonResponse
+    {
+        try {
+            $processors = DB::table('transactions')
+                ->whereNotNull('processed_by_user')
+                ->whereRaw("TRIM(processed_by_user) != ''")
+                ->selectRaw('DISTINCT TRIM(processed_by_user) AS processed_by_user')
+                ->orderBy('processed_by_user')
+                ->pluck('processed_by_user');
+
+            return response()->json([
+                'success' => true,
+                'data' => $processors
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch distinct transaction processors',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * The agents and technicians who have processed transactions — the Transaction List's
+     * "collector" filter.
+     *
+     * transactions.processed_by_user holds whatever the recording form wrote: an agent's EMAIL
+     * (their own login) or a technician's NAME (picked from the technicians list, "First M. Last").
+     * Each distinct value is classified by matching it against:
+     *   agent       users with role 4, by email
+     *   technician  the technicians table, by full name; users with role 2, by email or full name
+     * Values that match neither (cashiers, admins, free text) are left out.
+     *
+     * @return array<int, array{value:string, label:string, role:string}>
+     */
+    public function getTransactionCollectors(): JsonResponse
+    {
+        try {
+            // Transactions are scoped exactly as the Transaction List scopes them
+            // (TransactionController::index): a SuperAdmin, or anyone without an organisation,
+            // sees every organisation. Filtering by the caller's organisation regardless hid every
+            // collector from a SuperAdmin whose own row carries an organisation_id.
+            $authUser = auth()->user();
+            // The collector filter is for Administrators (role 1) and SuperAdmins (role 7) only.
+            if ($authUser && !in_array((int) ($authUser->role_id ?? 0), [1, 7], true)) {
+                return response()->json(['success' => false, 'message' => 'Only administrators can use the collector filter.'], 403);
+            }
+            $isSuperAdmin = !$authUser || (int) ($authUser->role_id ?? 0) === 7 || empty($authUser->organization_id);
+            $organizationId = $isSuperAdmin ? null : $authUser->organization_id;
+            $norm = fn ($v) => strtolower(preg_replace('/\s+/', ' ', trim((string) $v)));
+            $fullName = fn ($first, $mi, $last) => trim(preg_replace('/\s+/', ' ',
+                trim((string) $first) . ' ' . (trim((string) $mi) !== '' ? rtrim(trim((string) $mi), '.') . '.' : '') . ' ' . trim((string) $last)));
+
+            $values = DB::table('transactions')
+                ->when($organizationId, fn ($q) => $q->where('organization_id', $organizationId))
+                ->whereNotNull('processed_by_user')
+                ->whereRaw("TRIM(processed_by_user) != ''")
+                ->distinct()
+                ->pluck('processed_by_user')
+                ->map(fn ($v) => trim((string) $v))
+                ->unique();
+
+            $byKey = [];   // normalized key => [label, role]
+            // Users are not filtered by organisation: they only label values the transactions query
+            // above already scoped. Role by the seeded id, or by role name for a custom role
+            // called Agent / Technician (as JobOrderController::isAgentUser() does for agents).
+            foreach (DB::table('users')
+                ->leftJoin('roles', 'users.role_id', '=', 'roles.id')
+                ->where(function ($q) {
+                    $q->whereIn('users.role_id', [2, 4])
+                      ->orWhereRaw("LOWER(TRIM(roles.role_name)) IN ('agent', 'technician')");
+                })
+                ->get(['users.email_address', 'users.first_name', 'users.middle_initial', 'users.last_name', 'users.role_id', 'roles.role_name']) as $u) {
+                $role = ((int) $u->role_id === 4 || strtolower(trim((string) $u->role_name)) === 'agent') ? 'agent' : 'technician';
+                $name = $fullName($u->first_name, $u->middle_initial, $u->last_name);
+                if (filled($u->email_address)) {
+                    $byKey[$norm($u->email_address)] = [$name !== '' ? "{$name} ({$u->email_address})" : $u->email_address, $role];
+                }
+                if ($role === 'technician' && $name !== '') {
+                    $byKey[$norm($name)] = [$name, 'technician'];
+                }
+            }
+            foreach (DB::table('technicians')->get(['first_name', 'middle_initial', 'last_name']) as $t) {
+                $name = $fullName($t->first_name, $t->middle_initial, $t->last_name);
+                if ($name !== '') {
+                    $byKey[$norm($name)] ??= [$name, 'technician'];
+                }
+            }
+
+            $collectors = $values
+                ->map(function ($value) use ($byKey, $norm) {
+                    $hit = $byKey[$norm($value)] ?? null;
+                    return $hit ? ['value' => $value, 'label' => $hit[0], 'role' => $hit[1]] : null;
+                })
+                ->filter()
+                ->sortBy(fn ($c) => strtolower($c['label']))
+                ->values();
+
+            return response()->json(['success' => true, 'data' => $collectors]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch transaction collectors',
                 'error' => $e->getMessage()
             ], 500);
         }

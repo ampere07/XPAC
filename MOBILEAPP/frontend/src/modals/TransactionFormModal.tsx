@@ -346,6 +346,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (!formData.referenceNo.trim()) newErrors.referenceNo = 'Reference No. is required';
     if (!formData.orNo.trim()) newErrors.orNo = 'OR No. is required';
     if (!formData.transactionType.trim()) newErrors.transactionType = 'Transaction Type is required';
+    // An edit may keep the proof already on file; anything else needs a new image chosen.
+    if (!formData.image && !initialTransactionData?.image_url) newErrors.image = 'Payment Proof Image is required';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -378,10 +380,14 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
           const uploadResponse = await transactionService.uploadTransactionImage(imageFormData);
 
-          if (uploadResponse.success && uploadResponse.data?.payment_proof_image_url) {
-            imageUrl = uploadResponse.data.payment_proof_image_url;
-            setUploadProgress(60);
+          // A chosen image that did not upload must stop the save. Carrying on used to store the
+          // transaction with no image_url and no warning, so the proof was silently lost.
+          if (!uploadResponse.success || !uploadResponse.data?.payment_proof_image_url) {
+            throw new Error(uploadResponse.message || 'The server did not return a URL for the image');
           }
+
+          imageUrl = uploadResponse.data.payment_proof_image_url;
+          setUploadProgress(60);
         } catch (uploadError: any) {
           setModal({
             isOpen: true,
@@ -414,13 +420,42 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
+      // The proof URL this save must leave on the transaction: the new upload, or on an edit
+      // without a new image, the one already on file.
+      const expectedImageUrl = imageUrl || initialTransactionData?.image_url;
+      if (!expectedImageUrl) {
+        setErrors(prev => ({ ...prev, image: 'Payment Proof Image is required' }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Payment Proof Missing',
+          message: 'There is no payment proof URL to save. Upload the payment proof image and try again.'
+        });
+        return;
+      }
+
       setUploadProgress(80);
-      const result = isEdit 
+      const result = isEdit
         ? await (transactionService as any).updateTransaction(initialTransactionData.id, payload)
         : await transactionService.createTransaction(payload);
       setUploadProgress(100);
 
-      if (result.success) {
+      if (result.success && !result.data?.image_url) {
+        // Saved, but the server did not store the proof URL — say so instead of reporting success.
+        setErrors(prev => ({ ...prev, image: 'The payment proof was not saved' }));
+        setModal({
+          isOpen: true,
+          type: 'error',
+          title: 'Payment Proof Not Saved',
+          message: `The transaction was ${isEdit ? 'updated' : 'created'} but its payment proof URL was not saved.`
+            + ' Open the transaction, upload the payment proof again and save.',
+          onConfirm: () => {
+            onSave(formData);
+            onClose();
+            setModal(prev => ({ ...prev, isOpen: false }));
+          }
+        });
+      } else if (result.success) {
         const isRecurringFee = formData.transactionType === 'Recurring Fee';
         setModal({
           isOpen: true,
@@ -805,10 +840,10 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
-              Payment Proof Image
+              Payment Proof Image<span className="text-red-500">*</span>
             </label>
             <div className={`relative w-full border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
-              } ${imagePreview ? 'h-auto' : 'h-48'}`}>
+              } ${errors.image ? 'border-red-500' : ''} ${imagePreview ? 'h-auto' : 'h-48'}`}>
               <input
                 type="file"
                 accept="image/*"
@@ -840,6 +875,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 </div>
               )}
             </div>
+            {errors.image && <p className="text-red-500 text-xs mt-1">{errors.image}</p>}
           </div>
         </div>
       </div>

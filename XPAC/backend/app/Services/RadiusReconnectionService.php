@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\RadiusConfig;
+use App\Support\CronLog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Http;
 use Exception;
 
 class RadiusReconnectionService
@@ -51,21 +52,20 @@ class RadiusReconnectionService
                 return 'no_username';
             }
 
-            $radiusConfigs = DB::table('radius_config')
-                ->orderBy('id')
-                ->get();
+            $radiusConfigs = RadiusConfig::orderBy('id')->get();
 
             if ($radiusConfigs->isEmpty()) {
                 $this->writeLog("[ERROR] No RADIUS configurations found");
                 return 'no_radius_config';
             }
 
-            // Build RADIUS endpoint URLs
+            // Build RADIUS endpoints. Each entry carries the RadiusConfig record the native
+            // RouterOS API client operates on; `url` is now a human label for the device.
             $radiusEndpoints = [];
             foreach ($radiusConfigs as $config) {
-                $url = "{$config->ssl_type}://{$config->ip}:{$config->port}";
                 $radiusEndpoints[] = [
-                    'url' => $url,
+                    'config' => $config,
+                    'url' => "{$config->ip} (Config #{$config->id})",
                     'username' => $config->username,
                     'password' => $config->password
                 ];
@@ -123,26 +123,30 @@ class RadiusReconnectionService
     {
         $this->writeLog("[RADIUS] Begin radiusOps for '$username' | Target: $targetGroup | isDC: " . ($isDisconnectAction ? 'Yes' : 'No'));
 
+        $api = app(RouterosApiService::class);
+
         $radiusId = null;
         $currentRadiusGroup = null;
         $activeEndpoint = null;
 
         // Find user in RADIUS servers
-        $userPath = "/rest/user-manage/user/" . urlencode($username);
-
         foreach ($radiusEndpoints as $endpoint) {
-            $fullUrl = $endpoint['url'] . $userPath;
-            $result = $this->callApiWithRetry(
-                $fullUrl,
-                'GET',
-                null,
-                $endpoint['username'],
-                $endpoint['password']
-            );
+            $config = $this->configFor($endpoint);
 
-            if ($result && isset($result['.id'])) {
+            if (!$config) {
+                continue;
+            }
+
+            try {
+                $result = $api->findUser($config, $username);
+            } catch (\Throwable $e) {
+                $this->writeLog("[API] Error querying {$endpoint['url']}: " . $e->getMessage());
+                continue;
+            }
+
+            if ($result !== null) {
                 $radiusId = $result['.id'];
-                $currentRadiusGroup = $result['group'] ?? '';
+                $currentRadiusGroup = $result['group'];
                 $activeEndpoint = $endpoint;
                 $this->writeLog("[FOUND] Radius ID: $radiusId | Current Group: '$currentRadiusGroup' at {$endpoint['url']}");
                 break;
@@ -161,23 +165,16 @@ class RadiusReconnectionService
             $this->writeLog("[CHECK] User is already on group '$targetGroup'. No patch needed.");
         } else {
             $this->writeLog("[PATCH] Mismatch ($currentRadiusGroup != $targetGroup). Updating group...");
-            $payload = ['group' => $targetGroup];
 
-            // Try to patch on all endpoints
-            foreach ($radiusEndpoints as $endpoint) {
-                $targetUrl = $endpoint['url'] . "/rest/user-manage/user/" . $radiusId;
-                $result = $this->callApiWithRetry(
-                    $targetUrl,
-                    'PATCH',
-                    $payload,
-                    $endpoint['username'],
-                    $endpoint['password']
-                );
+            // Patch ONLY the server the account was found on: the RADIUS id is
+            // server-specific, so replaying it against the others is incorrect.
+            $activeConfig = $this->configFor($activeEndpoint);
 
-                if ($result !== false) {
-                    $this->writeLog("[PATCH] Success at {$endpoint['url']}");
-                    $patchHappened = true;
-                }
+            if ($activeConfig && $api->setUserGroup($activeConfig, $radiusId, $targetGroup)) {
+                $this->writeLog("[PATCH] Success at {$activeEndpoint['url']}");
+                $patchHappened = true;
+            } else {
+                $this->writeLog("[PATCH] Failed at {$activeEndpoint['url']} - " . $api->getLastError());
             }
         }
 
@@ -196,7 +193,7 @@ class RadiusReconnectionService
 
         // Kill session if needed
         if ($shouldKill) {
-            $this->killUserSession($radiusEndpoints, $username);
+            $this->killUserSession($activeEndpoint !== null ? [$activeEndpoint] : $radiusEndpoints, $username);
         }
 
         return ['success' => true, 'message' => 'Reconnection successful'];
@@ -207,101 +204,60 @@ class RadiusReconnectionService
      */
     private function killUserSession($radiusEndpoints, $username)
     {
-        $sessPath = "/rest/user-manage/session?user=" . urlencode($username);
-        $sessions = null;
+        $api = app(RouterosApiService::class);
+        $killedAnywhere = 0;
 
-        // Find active sessions
         foreach ($radiusEndpoints as $endpoint) {
-            $fullUrl = $endpoint['url'] . $sessPath;
-            $result = $this->callApiWithRetry(
-                $fullUrl,
-                'GET',
-                null,
-                $endpoint['username'],
-                $endpoint['password']
-            );
+            $config = $this->configFor($endpoint);
 
-            if ($result && is_array($result)) {
-                $sessions = $result;
-                $this->writeLog("[SESSION] Found " . count($sessions) . " active session(s)");
-                break;
+            if (!$config) {
+                continue;
+            }
+
+            try {
+                $killed = $api->killSessionsForUser($config, $username);
+            } catch (\Throwable $e) {
+                $this->writeLog("[SESSION] Error cutting sessions at {$endpoint['url']}: " . $e->getMessage());
+                continue;
+            }
+
+            if ($killed > 0) {
+                $killedAnywhere += $killed;
+                $this->writeLog("[KILL] Terminated {$killed} session(s) for '$username' at {$endpoint['url']}");
             }
         }
 
-        if (!$sessions || empty($sessions)) {
+        if ($killedAnywhere === 0) {
             $this->writeLog("[SESSION] No active session found.");
-            return;
-        }
-
-        // Kill all sessions
-        foreach ($sessions as $session) {
-            if (isset($session['.id'])) {
-                $sessionId = $session['.id'];
-                
-                foreach ($radiusEndpoints as $endpoint) {
-                    $delUrl = $endpoint['url'] . "/rest/user-manage/session/" . $sessionId;
-                    $this->callApiWithRetry(
-                        $delUrl,
-                        'DELETE',
-                        null,
-                        $endpoint['username'],
-                        $endpoint['password']
-                    );
-                    $this->writeLog("[KILL] Terminated session ID $sessionId at {$endpoint['url']}");
-                }
-            }
         }
     }
 
     /**
-     * Call API with retry logic
+     * The RadiusConfig record behind an endpoint entry, resolved by IP when the entry
+     * was built without one.
      */
-    private function callApiWithRetry($url, $method, $payload, $username, $password, $retries = 3)
+    private function configFor($endpoint): ?RadiusConfig
     {
-        for ($attempt = 1; $attempt <= $retries; $attempt++) {
-            try {
-                $this->writeLog("[API] Attempt $attempt/$retries: $method $url");
-
-                $response = Http::withBasicAuth($username, $password)
-                    ->timeout(10)
-                    ->withOptions(['verify' => false]); // Disable SSL verification for self-signed certs
-
-                switch (strtoupper($method)) {
-                    case 'GET':
-                        $response = $response->get($url);
-                        break;
-                    case 'POST':
-                        $response = $response->post($url, $payload);
-                        break;
-                    case 'PATCH':
-                        $response = $response->patch($url, $payload);
-                        break;
-                    case 'DELETE':
-                        $response = $response->delete($url);
-                        break;
-                    default:
-                        return false;
-                }
-
-                if ($response->successful()) {
-                    $data = $response->json();
-                    $this->writeLog("[API] Success: " . json_encode($data));
-                    return $data;
-                } else {
-                    $this->writeLog("[API] HTTP Error {$response->status()}: {$response->body()}");
-                }
-
-            } catch (Exception $e) {
-                $this->writeLog("[API] Exception on attempt $attempt: " . $e->getMessage());
-                
-                if ($attempt < $retries) {
-                    sleep(1); // Wait 1 second before retry
-                }
-            }
+        if (!is_array($endpoint)) {
+            return null;
         }
 
-        $this->writeLog("[API] Failed after $retries attempts");
-        return false;
+        if (isset($endpoint['config']) && $endpoint['config'] instanceof RadiusConfig) {
+            return $endpoint['config'];
+        }
+
+        $host = $endpoint['ip'] ?? null;
+
+        if ($host === null && isset($endpoint['url'])) {
+            $host = parse_url((string) $endpoint['url'], PHP_URL_HOST)
+                ?: trim(explode(' ', (string) $endpoint['url'])[0]);
+        }
+
+        if (empty($host)) {
+            return null;
+        }
+
+        return RadiusConfig::where('ip', $host)->orderBy('id')->first();
     }
 
     /**
@@ -309,6 +265,13 @@ class RadiusReconnectionService
      */
     private function writeLog($message)
     {
+        // Errors and run summaries only - see App\Support\CronLog. This is a raw
+        // file write, so LOG_LEVEL never reached it and the narration accumulated
+        // no matter how the channels were configured.
+        if (!CronLog::shouldWrite($message)) {
+            return;
+        }
+
         $timestamp = now()->format('Y-m-d H:i:s');
         $logMessage = "[{$timestamp}] [{$this->logName}] {$message}";
         
@@ -324,7 +287,12 @@ class RadiusReconnectionService
         }
         
         // Also log to Laravel default log
-        Log::channel('single')->info("[{$this->logName}] {$message}");
+        // Only faults are mirrored, and as ->error(). Every line used to be
+        // duplicated into laravel.log at info level, which doubled the volume
+        // and misreported the severity of all of it.
+        if (CronLog::isError($message)) {
+            Log::channel('single')->error("[{$this->logName}] {$message}");
+        }
     }
 }
 

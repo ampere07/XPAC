@@ -27,6 +27,10 @@ interface CreateTransactionPayload {
   remarks?: string;
   status: string;
   image_url?: string;
+  processed_by_user?: string;
+  created_by_user?: string;
+  /** Prepaid only: the plan this payment buys. */
+  selected_plan_id?: number;
 }
 
 interface CreateTransactionResponse {
@@ -34,6 +38,8 @@ interface CreateTransactionResponse {
   message?: string;
   data?: any;
   error?: string;
+  /** Per-field validation messages from a 422, e.g. { reference_no: ['...already used...'] }. */
+  errors?: Record<string, string[]>;
 }
 
 export const transactionService = {
@@ -72,7 +78,8 @@ export const transactionService = {
       return {
         success: false,
         message: error.response?.data?.message || error.message || 'Failed to create transaction',
-        error: error.response?.data?.error || error.message
+        error: error.response?.data?.error || error.message,
+        errors: error.response?.data?.errors
       };
     }
   },

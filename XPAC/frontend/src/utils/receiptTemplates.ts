@@ -78,7 +78,7 @@ const firstFilled = (values: unknown[], fallback = PLACEHOLDER): string => {
  * has to say who issued it, and it is referenced in three places in each template.
  */
 const FALLBACK_COMPANY: ReceiptCompany = {
-  name: 'OFFICIAL RECEIPT',
+  name: 'ACKNOWLEDGEMENT RECEIPT',
   address: '',
   tin: '',
   sec: '',
@@ -187,7 +187,7 @@ const buildPos80Receipt = (d: ReceiptData): string => `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Receipt ${esc(d.receiptNo)}</title>
+  <title>Acknowledgement Receipt ${esc(d.receiptNo)}</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -202,7 +202,7 @@ const buildPos80Receipt = (d: ReceiptData): string => `<!DOCTYPE html>
     .company { font-weight: bold; font-size: 13px; letter-spacing: .5px; }
     .muted { font-size: 11px; }
     .divider { border: none; border-top: 1px dashed #000; margin: 8px 0; }
-    .title { font-weight: bold; letter-spacing: 2px; font-size: 13px; }
+    .title { font-weight: bold; letter-spacing: 1px; font-size: 12px; }
     .row { display: flex; justify-content: space-between; gap: 8px; }
     .row .label { white-space: nowrap; }
     .row .value { text-align: right; font-weight: bold; word-break: break-word; }
@@ -239,7 +239,7 @@ const buildPos80Receipt = (d: ReceiptData): string => `<!DOCTYPE html>
   </div>
 
   <hr class="divider" />
-  <div class="center title">* OFFICIAL RECEIPT *</div>
+  <div class="center title">* ACKNOWLEDGEMENT RECEIPT *</div>
   <hr class="divider" />
 
   <div class="row"><span class="label">Receipt #:</span><span class="value">${esc(d.receiptNo)}</span></div>
@@ -283,7 +283,7 @@ const buildA4Invoice = (d: ReceiptData): string => `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Invoice ${esc(d.receiptNo)}</title>
+  <title>Acknowledgement Receipt ${esc(d.receiptNo)}</title>
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -299,7 +299,7 @@ const buildA4Invoice = (d: ReceiptData): string => `<!DOCTYPE html>
     .logo { width: 74px; height: auto; display: block; margin-bottom: 4px; }
     .company-name { font-size: 17px; font-weight: bold; letter-spacing: .4px; }
     .company-meta { font-size: 10.5px; color: #444; line-height: 1.5; }
-    .doc-title { font-size: 22px; font-weight: bold; letter-spacing: 2px; text-align: right; }
+    .doc-title { font-size: 18px; font-weight: bold; letter-spacing: 1.5px; text-align: right; }
     .doc-meta { font-size: 11px; text-align: right; margin-top: 4px; }
     .doc-meta strong { display: inline-block; min-width: 62px; text-align: left; color: #444;
                        font-weight: normal; }
@@ -376,9 +376,9 @@ const buildA4Invoice = (d: ReceiptData): string => `<!DOCTYPE html>
           </div>
         </td>
         <td style="width:42%;">
-          <div class="doc-title">OFFICIAL RECEIPT</div>
+          <div class="doc-title">ACKNOWLEDGEMENT RECEIPT</div>
           <div class="doc-meta">
-            <strong>OR No.</strong> ${esc(d.receiptNo)}<br />
+            <strong>AR No.</strong> ${esc(d.receiptNo)}<br />
             <strong>Date</strong> ${esc(d.dateStr)}<br />
             <strong>Time</strong> ${esc(d.timeStr)}
             ${d.referenceNo ? `<br /><strong>Ref No.</strong> ${esc(d.referenceNo)}` : ''}

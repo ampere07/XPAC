@@ -31,7 +31,10 @@ import BillingListView from './BillingListView';
 import TransactionList from './TransactionList';
 import TransactionsRevert from './TransactionsRevert';
 import PrepaidOverride from './PrepaidOverride';
+import CustomerImages from './CustomerImages';
 import PaymentPortal from './PaymentPortal';
+import Finance from './Finance';
+import ForApproval from './ForApproval';
 import JobOrder from './JobOrder';
 import WorkOrder from './WorkOrder';
 import ServiceOrder from './ServiceOrder';
@@ -484,8 +487,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                 return <TransactionsRevert autoOpenRevertId={revertAutoOpenId} />;
             case 'prepaid-override':
                 return <PrepaidOverride autoOpenOverrideId={prepaidOverrideAutoOpenId} />;
+            case 'customer-images':
+                return <CustomerImages />;
             case 'payment-portal':
                 return <PaymentPortal />;
+            case 'finance':
+                return <Finance />;
+            case 'for-approval':
+                return <ForApproval />;
             case 'job-order':
                 return <JobOrder autoOpenJobOrderId={jobOrderAutoOpenId} />;
             case 'work-order':

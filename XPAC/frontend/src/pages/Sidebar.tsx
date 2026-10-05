@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, FileWarning, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock, TimerReset, ReceiptText, Gift } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, FileWarning, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock, TimerReset, ReceiptText, Gift, Images, Landmark, ClipboardCheck } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getPayableAlertCount } from '../services/monthlyPayableService';
-import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts } from '../services/navBadgeService';
+import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts, NAV_BADGES_CHANGED_EVENT } from '../services/navBadgeService';
 import pusher from '../services/pusherService';
 import { usePermissions } from '../hooks/usePermissions';
 import { ROLE } from '../config/permissions';
@@ -210,9 +210,13 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       return { channel, event };
     });
 
+    // Prepaid Override has no broadcast; its pages fire this after a submit or a decision.
+    window.addEventListener(NAV_BADGES_CHANGED_EVENT, load);
+
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener(NAV_BADGES_CHANGED_EVENT, load);
       bound.forEach(({ channel, event }) => channel.unbind(event, load));
     };
   }, [isStaff]);
@@ -221,6 +225,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     // An agent lands on their own dashboard (DashboardAgent) through this same entry.
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'live-monitor', label: 'Monitoring', icon: Activity },
+    // Every pending transaction and every Done job order awaiting approval, in one queue.
+    // Administrator and SuperAdmin; the badge is 0 (no pill) for anyone else.
+    { id: 'for-approval', label: 'For Approval', icon: ClipboardCheck, badge: navBadges.for_approval },
     {
       id: 'billing',
       label: 'Billing',
@@ -233,8 +240,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         // Approval queue for manual changes to a prepaid customer's expiry. The date is no longer
         // editable on the customer form, so this is where every adjustment is reviewed.
         // TimerReset rather than Clock — Overdue two rows down already owns Clock in this menu.
-        { id: 'prepaid-override', label: 'Prepaid Override', icon: TimerReset },
+        { id: 'prepaid-override', label: 'Prepaid Override', icon: TimerReset, badge: navBadges.prepaid_override },
+        // Every image stored against a customer, from every module, in one Drive-like view.
+        { id: 'customer-images', label: 'Customer Images', icon: Images },
         { id: 'payment-portal', label: 'Payment Portal', icon: DollarSign },
+        // Collections summary over the Transaction List and the Payment Portal together.
+        { id: 'finance', label: 'Finance', icon: Landmark },
         { id: 'soa', label: 'Statements', icon: FileText },
         { id: 'invoice', label: 'Invoice', icon: Receipt },
         { id: 'overdue', label: 'Overdue', icon: Clock },

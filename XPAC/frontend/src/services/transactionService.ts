@@ -37,6 +37,8 @@ interface CreateTransactionResponse {
   message?: string;
   data?: any;
   error?: string;
+  /** Per-field validation messages from a 422, e.g. { reference_no: ['...already used...'] }. */
+  errors?: Record<string, string[]>;
 }
 
 /**
@@ -64,6 +66,9 @@ export interface TransactionReceipt {
   amount: number;
   payment_method: string;
   processed_by: string | null;
+  /** Y-m-d service span this payment covers; null when it buys no identifiable span. */
+  coverage_from?: string | null;
+  coverage_to?: string | null;
   remarks: string | null;
   status: string | null;
   is_printable: boolean;
@@ -136,7 +141,8 @@ export const transactionService = {
       return {
         success: false,
         message: error.response?.data?.message || error.message || 'Failed to create transaction',
-        error: error.response?.data?.error || error.message
+        error: error.response?.data?.error || error.message,
+        errors: error.response?.data?.errors
       };
     }
   },
@@ -154,7 +160,8 @@ export const transactionService = {
       return {
         success: false,
         message: error.response?.data?.message || error.message || 'Failed to update transaction',
-        error: error.response?.data?.error || error.message
+        error: error.response?.data?.error || error.message,
+        errors: error.response?.data?.errors
       };
     }
   },
@@ -241,8 +248,11 @@ export const transactionService = {
       };
     } catch (error: any) {
       console.error('Error uploading transaction images:', error);
+      // Carry the reason through so the form can say WHY the proof was not saved instead of
+      // silently saving the transaction without it.
       return {
         success: false,
+        message: error.response?.data?.message || error.message || 'Failed to upload the payment proof image',
       };
     }
   },

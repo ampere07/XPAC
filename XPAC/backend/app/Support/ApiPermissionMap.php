@@ -187,6 +187,10 @@ final class ApiPermissionMap
         // ── Dashboards ───────────────────────────────────────────────────────
         ['dashboard/counts',             'dashboard', 'dashboard'],
         ['monitor/*',                    'live-monitor', 'live-monitor'],
+        // The approval queue's lists. Approving a listed record is the owning
+        // endpoint's act (transactions/*/approve, job-orders/*/approve) and
+        // keeps that endpoint's key.
+        ['for-approval/*',               'for-approval', 'for-approval'],
 
         // ── Reference data ───────────────────────────────────────────────────
         // Read by everyone (form dropdowns, detail panes); written from the
@@ -464,6 +468,8 @@ final class ApiPermissionMap
 
         // Prepaid Override: raised from the customer pane, decided on the
         // Prepaid Override page (SuperAdmin alone today).
+        // Customer Images page: read-only.
+        ['customer-images*',             'customer-images', 'customer-images'],
         ['prepaid-overrides/*/status',   ['prepaid-override', 'customer.prepaid-override'], 'prepaid-override.approve'],
         ['prepaid-overrides*',           ['prepaid-override', 'customer.prepaid-override', 'customer'], ['customer.prepaid-override', 'prepaid-override.approve']],
 
@@ -483,6 +489,10 @@ final class ApiPermissionMap
         ['soa/*/generate-pdf',           ['soa', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['soa', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS]],
         ['soa/*',                        ['soa', 'customer', 'customer-bills', 'customer-dashboard'], ['soa', 'customer-bills', 'customer-dashboard']],
         ['invoice-records',              ['invoice', 'customer', 'customer-bills', 'customer-dashboard'], 'invoice'],
+        // invoices/{id}/generate-pdf: the paid invoice PDF, a POST the customer
+        // makes from the portal's Bills page, like soa/{id}/generate-pdf above.
+        // It only renders a PDF and stores its link.
+        ['invoices/*/generate-pdf',      ['invoice', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], ['invoice', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS]],
         // invoices/by-account/{accountNo} and invoices/{id} — both read by the
         // overlays' CustomerDetails / InvoiceDetails panes.
         ['invoices/*',                   ['invoice', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'invoice'],
@@ -511,6 +521,8 @@ final class ApiPermissionMap
         // A customer pays their own bill from the portal; an administrator
         // takes a payment from the Payment Portal page. Both are signed in.
         ['payments/*',                   null, null],
+        // Billing → Finance: read-only totals over transactions and portal logs.
+        ['finance/*',                    'finance', 'finance'],
 
         // ── Network operations ───────────────────────────────────────────────
         ['smart-olt/validate-sn',        null, null],

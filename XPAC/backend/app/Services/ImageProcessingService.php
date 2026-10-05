@@ -329,8 +329,9 @@ class ImageProcessingService
             'speed_test_image' => 'speedtest_image_url',
             'proof_image' => 'proof_image_url',
             'house_front_image' => 'house_front_picture_url',
+            'other_photos_image' => 'other_photos_url',
         ];
-        
+
         return $mapping[$queueFieldName] ?? $queueFieldName;
     }
 

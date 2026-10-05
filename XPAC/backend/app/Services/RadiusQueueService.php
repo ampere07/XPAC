@@ -4,7 +4,6 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Http;
 use App\Services\ManualRadiusOperationsService;
 use App\Models\RadiusConfig;
 use Carbon\Carbon;
@@ -273,6 +272,25 @@ class RadiusQueueService
                 }
                 return true;
 
+            // Removing a pulled-out customer's username. Queued by CustomerPurgeService when
+            // RADIUS could not be confirmed at purge time; the customer's records are already
+            // deleted, so this is the only thing left to finish. "Not found" counts as done.
+            case 'delete_user':
+                $radius = app(RadiusReconciliationService::class);
+                $orgId = isset($params['organization_id']) ? ((int) $params['organization_id'] ?: null) : null;
+                $errors = [];
+                foreach ((array) ($params['usernames'] ?? [$params['username'] ?? '']) as $username) {
+                    $outcome = $radius->deleteUserFromAllServers((string) $username, $orgId);
+                    if (!$outcome['success']) {
+                        $errors[] = implode(' | ', $outcome['errors']) ?: "RADIUS delete of '{$username}' returned failure";
+                    }
+                }
+                if ($errors !== []) {
+                    $errorMessage = implode(' | ', $errors);
+                    return false;
+                }
+                return true;
+
             default:
                 $errorMessage = "Unknown operation: {$operation}";
                 $this->writeLog("  [ERROR] " . $errorMessage);
@@ -281,7 +299,7 @@ class RadiusQueueService
     }
 
     /**
-     * Retry create_user (the direct HTTP PUT used by JobOrderController)
+     * Retry create_user (the account JobOrderController creates on approval)
      */
     private function retryCreateUser(array $params): bool
     {
@@ -308,7 +326,7 @@ class RadiusQueueService
                 return false;
             }
             $this->writeLog("  [RADIUS] create_user targeting city-mapped server (Config #{$config->id} | {$config->ip}) for '{$username}'");
-            return $this->putCreateUser($config, $resolver, $username, $password, $group);
+            return $this->putCreateUser($config, $username, $password, $group);
         }
 
         // No city recorded on the queued item: fall back to the ordered configs and stop
@@ -321,7 +339,7 @@ class RadiusQueueService
         }
 
         foreach ($radiusConfigs as $config) {
-            if ($this->putCreateUser($config, $resolver, $username, $password, $group)) {
+            if ($this->putCreateUser($config, $username, $password, $group)) {
                 return true;
             }
         }
@@ -331,35 +349,28 @@ class RadiusQueueService
     }
 
     /**
-     * PUT a create_user request to a single RADIUS config, trying the configured protocol
-     * first then the alternate. Returns true on the first successful server.
+     * Create the account on a single RADIUS config over the native RouterOS API.
+     *
+     * RouterosApiService::addUser() is read-then-write: an account that is already on the
+     * device is reported as success and left untouched, so replaying a queued create after
+     * a partial outage cannot produce a second copy of the subscriber.
      */
-    private function putCreateUser(RadiusConfig $config, RadiusServerResolver $resolver, string $username, string $password, string $group): bool
+    private function putCreateUser(RadiusConfig $config, string $username, string $password, string $group): bool
     {
-        foreach ($resolver->baseUrlsFor($config) as $baseUrl) {
-            $radiusUrl = $baseUrl . '/rest/user-manage/user';
-            $this->writeLog("  [RADIUS] PUT {$radiusUrl} | User: {$username} | Group: {$group}");
+        $target = $config->ip . ' (Config #' . $config->id . ')';
+        $this->writeLog("  [RADIUS] API create_user at {$target} | User: {$username} | Group: {$group}");
 
-            try {
-                $response = Http::withOptions(['verify' => false, 'timeout' => 5])
-                    ->withBasicAuth($config->username, $config->password)
-                    ->put($radiusUrl, [
-                        'name'     => $username,
-                        'group'    => $group,
-                        'password' => $password,
-                    ]);
+        try {
+            $api = app(RouterosApiService::class);
 
-                $statusCode = $response->status();
-
-                if ($statusCode === 204 || $response->successful()) {
-                    $this->writeLog("  [RADIUS] ✓ create_user SUCCESS (HTTP {$statusCode}) at {$baseUrl}");
-                    return true;
-                }
-
-                $this->writeLog("  [RADIUS] ✗ create_user FAILED (HTTP {$statusCode}) at {$baseUrl} - " . $response->body());
-            } catch (\Exception $e) {
-                $this->writeLog("  [RADIUS] ✗ create_user EXCEPTION at {$baseUrl}: " . $e->getMessage());
+            if ($api->addUser($config, $username, $password, $group)) {
+                $this->writeLog("  [RADIUS] ✓ create_user SUCCESS at {$target}");
+                return true;
             }
+
+            $this->writeLog("  [RADIUS] ✗ create_user FAILED at {$target} - " . $api->getLastError());
+        } catch (\Throwable $e) {
+            $this->writeLog("  [RADIUS] ✗ create_user EXCEPTION at {$target}: " . $e->getMessage());
         }
 
         return false;
