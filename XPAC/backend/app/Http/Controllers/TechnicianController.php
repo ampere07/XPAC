@@ -12,7 +12,7 @@ class TechnicianController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $query = Technician::query();
 
@@ -52,14 +52,14 @@ class TechnicianController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $technician = Technician::create([
                 'first_name' => $request->first_name,
                 'middle_initial' => $request->middle_initial,
                 'last_name' => $request->last_name,
                 'updated_at' => now(),
-                'updated_by' => $request->updated_by ?? ($user->email_address ?? 'system'),
+                'updated_by' => $request->updated_by ?? $user->email_address,
                 'organization_id' => $organizationId
             ]);
 
@@ -95,7 +95,7 @@ class TechnicianController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $technician = Technician::findOrFail($id);
 
@@ -112,7 +112,7 @@ class TechnicianController extends Controller
 
             $technician->update($updateData + [
                 'updated_at' => now(),
-                'updated_by' => $request->updated_by ?? ($user->email_address ?? 'system')
+                'updated_by' => $request->updated_by ?? $user->email_address
             ]);
 
             return response()->json([
@@ -133,7 +133,7 @@ class TechnicianController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $technician = Technician::findOrFail($id);
 

@@ -16,7 +16,7 @@ class RoleController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $query = Role::withCount(['users']);
 
@@ -71,7 +71,7 @@ class RoleController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             // The signed-in user's organisation, not the payload's: `+` keeps
             // the left-hand value, so an organization_id in the request used to
@@ -86,8 +86,8 @@ class RoleController extends Controller
             }
 
             $role = Role::create($this->onlyExistingColumns($payload + [
-                'created_by_user_id' => $user->id ?? 1,
-                'updated_by_user_id' => $user->id ?? 1,
+                'created_by_user_id' => $user->id,
+                'updated_by_user_id' => $user->id,
                 'organization_id' => $organizationId,
                 // Saved with the per-action checkboxes on screen, so the list
                 // below is exactly what was chosen and is read as written.
@@ -324,7 +324,7 @@ class RoleController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $role = Role::findOrFail($id);
 
@@ -356,7 +356,7 @@ class RoleController extends Controller
             }
 
             $role->update($this->onlyExistingColumns($updateData + [
-                'updated_by_user_id' => $user->id ?? 1,
+                'updated_by_user_id' => $user->id,
                 // Whatever generation this row was saved under before, it has
                 // now been through the modal that shows every action, so the
                 // stored list stops being grandfathered.
@@ -389,7 +389,7 @@ class RoleController extends Controller
         }
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $role = Role::findOrFail($id);
 

@@ -13,7 +13,7 @@ class OrganizationController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $query = Organization::with(['users']);
 
@@ -60,7 +60,7 @@ class OrganizationController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $organization = Organization::create([
                 'organization_name' => $request->organization_name,
@@ -100,7 +100,7 @@ class OrganizationController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $organization = Organization::with(['users'])->findOrFail($id);
 
@@ -144,7 +144,7 @@ class OrganizationController extends Controller
 
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $organization = Organization::findOrFail($id);
 
@@ -191,7 +191,7 @@ class OrganizationController extends Controller
     {
         try {
             $user = auth()->user();
-            $organizationId = $user ? $user->organization_id : null;
+            $organizationId = $user->organization_id;
 
             $organization = Organization::findOrFail($id);
 

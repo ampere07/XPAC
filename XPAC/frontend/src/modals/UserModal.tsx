@@ -88,6 +88,10 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
     };
     fetchPalette();
 
+    const reportLoadFailure = (reason: string) => {
+      setErrors(prev => ({ ...prev, general: `Could not load roles, teams and organizations: ${reason}` }));
+    };
+
     const loadData = async () => {
       try {
         const [rolesRes, agentsRes, organizationsRes] = await Promise.all([
@@ -95,11 +99,16 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
           agentService.getAllAgents(),
           organizationService.getAllOrganizations()
         ]);
-        if (rolesRes.success) setRoles(rolesRes.data || []);
-        if (agentsRes.success) setAgents(agentsRes.data || []);
-        if (organizationsRes.success) setOrganizations(organizationsRes.data || []);
-      } catch (err) {
-        console.error('Failed to load modal data:', err);
+        const failed = [rolesRes, agentsRes, organizationsRes].find(res => !res.success);
+        if (failed) {
+          reportLoadFailure(failed.message);
+          return;
+        }
+        setRoles(rolesRes.data || []);
+        setAgents(agentsRes.data || []);
+        setOrganizations(organizationsRes.data || []);
+      } catch (err: any) {
+        reportLoadFailure(err.response?.data?.message || err.message);
       }
     };
     if (isOpen) loadData();
