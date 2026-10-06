@@ -405,7 +405,7 @@ class BillingGenerationController extends Controller
             }
 
             if ($request->has('account_id')) {
-                $query->where('account_no', $request->account_id);
+                $query->where('account_no', \Illuminate\Support\Facades\DB::table('billing_accounts')->where('id', $request->account_id)->value('account_no') ?? '');
             }
 
             if ($request->has('status')) {
@@ -458,7 +458,7 @@ class BillingGenerationController extends Controller
             }
 
             if ($request->has('account_id')) {
-                $query->where('account_no', $request->account_id);
+                $query->where('account_no', \Illuminate\Support\Facades\DB::table('billing_accounts')->where('id', $request->account_id)->value('account_no') ?? '');
             }
 
             if ($request->has('date_from') && $request->has('date_to')) {

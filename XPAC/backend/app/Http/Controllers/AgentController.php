@@ -55,7 +55,7 @@ class AgentController extends Controller
             $agent = Agent::create([
                 'team_name' => $request->team_name,
                 'created_at' => now(),
-                'created_by' => $request->created_by ?? ($user->email_address ?? 'system'),
+                'created_by' => $request->created_by ?? $user->email_address,
                 'organization_id' => $organizationId
             ]);
 

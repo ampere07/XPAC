@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info } from 'lucide-react';
-import { update } from '../services/discountService';
+import { Mail, ExternalLink, Check, ChevronLeft, ChevronRight, Maximize2, X, Info, Trash2, AlertTriangle } from 'lucide-react';
+import { update, remove } from '../services/discountService';
+import { isSuperAdminUser } from '../utils/agentAccess';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, convertCustomerDataToBillingDetail } from '../services/customerDetailService';
 import { BillingDetailRecord } from '../types/billing';
@@ -65,17 +66,22 @@ interface DiscountDetailsProps {
   discountRecord: DiscountRecord;
   onClose?: () => void;
   onApproveSuccess?: () => void;
+  onDeleteSuccess?: () => void;
   onViewCustomer?: (accountNo: string) => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
 
-const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onViewCustomer, onPrevious, onNext }) => {
+const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClose, onApproveSuccess, onDeleteSuccess, onViewCustomer, onPrevious, onNext }) => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
   const [showApproveButton, setShowApproveButton] = useState<boolean>(false);
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
   const [isApproving, setIsApproving] = useState<boolean>(false);
+  const canDeleteDiscount = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
@@ -217,6 +223,37 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
     setShowConfirmModal(false);
   };
 
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeleting) return;
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!discountRecord.id) {
+      setDeleteError('This discount has no ID, so it cannot be deleted.');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError('');
+
+    try {
+      await remove(parseInt(discountRecord.id));
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The discount could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className={`flex flex-col relative md:border-l overflow-hidden ${
       isMobile ? 'fixed inset-0 z-[9999] w-screen h-[100dvh] max-h-[100dvh]' : 'h-full'
@@ -304,6 +341,20 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
             >
               <Check size={16} />
               <span>Approve</span>
+            </button>
+          )}
+          {canDeleteDiscount && (
+            <button
+              onClick={openDeleteModal}
+              disabled={isDeleting}
+              className={`p-2 rounded transition-colors disabled:opacity-50 ${isDarkMode
+                ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700'
+                : 'text-gray-600 hover:text-red-600 hover:bg-gray-200'
+                }`}
+              title="Delete Discount"
+              aria-label="Delete Discount"
+            >
+              <Trash2 size={18} />
             </button>
           )}
           {onClose && (
@@ -480,6 +531,114 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({ discountRecord, onClo
           </div>
         </div>
       </div>
+
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeDeleteModal}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-discount-title"
+            onClick={(e) => e.stopPropagation()}
+            className={`rounded-lg p-6 max-w-md w-full mx-4 border ${isDarkMode
+              ? 'bg-gray-800 border-gray-700'
+              : 'bg-white border-gray-200'
+              }`}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-3">
+                <div className={`p-2 rounded-full ${isDarkMode ? 'bg-red-900 bg-opacity-40' : 'bg-red-100'}`}>
+                  <Trash2 size={20} className="text-red-500" />
+                </div>
+                <h2 id="delete-discount-title" className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Delete Discount?
+                </h2>
+              </div>
+              <button
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                aria-label="Close"
+                className={`transition-colors disabled:opacity-50 ${isDarkMode
+                  ? 'text-gray-400 hover:text-white'
+                  : 'text-gray-600 hover:text-gray-900'
+                  }`}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mb-6 space-y-4">
+              <p className={isDarkMode ? 'text-gray-300' : 'text-gray-700'}>
+                This permanently removes the discount from the database. It cannot be undone.
+              </p>
+              <div className={`p-4 rounded border space-y-2 ${isDarkMode
+                ? 'bg-gray-900 border-gray-700'
+                : 'bg-gray-100 border-gray-200'
+                }`}>
+                <div className="flex justify-between">
+                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-600'}>Account No:</span>
+                  <span className={isDarkMode ? 'text-white' : 'text-gray-900'}>{discountRecord.accountNo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-600'}>Customer:</span>
+                  <span className={isDarkMode ? 'text-white' : 'text-gray-900'}>{discountRecord.fullName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-600'}>Amount:</span>
+                  <span className={isDarkMode ? 'text-white' : 'text-gray-900'}>₱{discountRecord.discountAmount.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className={isDarkMode ? 'text-gray-400' : 'text-gray-600'}>Status:</span>
+                  <span className={isDarkMode ? 'text-white' : 'text-gray-900'}>{discountRecord.discountStatus}</span>
+                </div>
+              </div>
+              {String(discountRecord.discountStatus ?? '').toLowerCase() === 'used' && (
+                <div className={`flex items-start space-x-2 p-3 rounded border text-sm ${isDarkMode
+                  ? 'bg-yellow-900 bg-opacity-30 border-yellow-700 text-yellow-200'
+                  : 'bg-yellow-50 border-yellow-300 text-yellow-800'
+                  }`}>
+                  <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                  <span>This discount was already taken off a bill. Deleting it removes the record only; that bill keeps the discount.</span>
+                </div>
+              )}
+              {deleteError && (
+                <p role="alert" className={`text-sm ${isDarkMode ? 'text-red-400' : 'text-red-600'}`}>
+                  {deleteError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className={`flex-1 px-4 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
+                  ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                  : 'bg-gray-300 hover:bg-gray-400 text-gray-900'
+                  }`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center text-white bg-red-600 hover:bg-red-700"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} className="mr-2" />
+                    Delete Discount
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showConfirmModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

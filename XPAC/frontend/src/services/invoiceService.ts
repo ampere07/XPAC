@@ -75,21 +75,6 @@ export const invoiceService = {
     }
   },
 
-  async getInvoicesByAccount(accountId: number, fast: boolean = true): Promise<InvoiceRecord[]> {
-    try {
-      const response = await apiClient.get<InvoiceResponse>('/billing-generation/invoices', {
-        params: { account_id: accountId, fast: fast ? '1' : '0' }
-      });
-      if (response.data.success) {
-        return response.data.data;
-      }
-      throw new Error(response.data.message || 'Failed to fetch invoices');
-    } catch (error) {
-      console.error('Error fetching invoice records by account:', error);
-      throw error;
-    }
-  },
-
   async getInvoicesByAccountNo(accountNo: string, fast: boolean = true): Promise<InvoiceRecord[]> {
     try {
       const response = await apiClient.get<InvoiceResponse>('/billing-generation/invoices', {

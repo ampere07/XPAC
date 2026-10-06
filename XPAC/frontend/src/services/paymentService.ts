@@ -10,6 +10,11 @@ const getApiBaseUrl = (): string => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+export interface AvailableDiscount {
+  checkout: number;
+  discountsOnFile: number;
+}
+
 export interface PlanChangeQuote {
   status: string;
   /** false when the account is outside the never-paid prepaid onboarding window. */
@@ -101,7 +106,7 @@ export const paymentService = {
    * Disclosure only — the server re-derives and applies it at checkout, so a failure here just
    * means the screen shows no discount (returns 0).
    */
-  getAvailableDiscount: async (accountNo: string): Promise<number> => {
+  getAvailableDiscount: async (accountNo: string): Promise<AvailableDiscount> => {
     try {
       const authData = localStorage.getItem('authData');
       let token = '';
@@ -109,7 +114,7 @@ export const paymentService = {
         token = JSON.parse(authData).token || '';
       }
 
-      const response = await axios.post<{ status: string; discount_amount?: number }>(
+      const response = await axios.post<{ status: string; discount_amount?: number; discounts_only?: number }>(
         `${API_BASE_URL}/payments/available-discount`,
         { account_no: accountNo },
         {
@@ -123,10 +128,13 @@ export const paymentService = {
         }
       );
 
-      return Number(response.data.discount_amount) || 0;
+      return {
+        checkout: Number(response.data.discount_amount) || 0,
+        discountsOnFile: Number(response.data.discounts_only) || 0,
+      };
     } catch (error: any) {
       console.error('Get available discount error:', error.response?.data || error.message);
-      return 0;
+      return { checkout: 0, discountsOnFile: 0 };
     }
   },
 

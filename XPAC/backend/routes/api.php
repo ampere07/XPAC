@@ -46,9 +46,10 @@ use App\Http\Controllers\TechInOutController;
 use App\Http\Controllers\Api\PaymentPortalLogsController;
 use App\Http\Controllers\CommissionController;
 
-Route::apiResource('technicians', TechnicianController::class);
-Route::apiResource('agents', AgentController::class);
-Route::apiResource('roles', RoleController::class);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('technicians', TechnicianController::class);
+    Route::apiResource('agents', AgentController::class);
+});
 Route::get('/tech-in-out/status', [TechInOutController::class, 'getStatus']);
 Route::post('/tech-in-out/time-in', [TechInOutController::class, 'timeIn']);
 Route::post('/tech-in-out/time-out', [TechInOutController::class, 'timeOut']);
@@ -1588,7 +1589,7 @@ Route::get('/auth/session', function (Request $request) {
 });
 
 // User Management Routes
-Route::prefix('users')->middleware('ensure.database.tables')->group(function () {
+Route::prefix('users')->middleware(['auth:sanctum', 'ensure.database.tables'])->group(function () {
     Route::get('/', [UserController::class , 'index']);
     Route::post('/', [UserController::class , 'store']);
     // The mobile app registers its own Expo token here. Declared above /{id} so the
@@ -1605,7 +1606,7 @@ Route::prefix('users')->middleware('ensure.database.tables')->group(function () 
 });
 
 // Organization Management Routes
-Route::prefix('organizations')->middleware('ensure.database.tables')->group(function () {
+Route::prefix('organizations')->middleware(['auth:sanctum', 'ensure.database.tables'])->group(function () {
     Route::get('/', [OrganizationController::class , 'index']);
     Route::post('/', [OrganizationController::class , 'store']);
     Route::get('/{id}', [OrganizationController::class , 'show']);
@@ -1657,7 +1658,7 @@ Route::get('/smart-olt/validate-sn', [\App\Http\Controllers\SmartOltController::
 
 
 // Group Management Routes
-Route::prefix('groups')->middleware('ensure.database.tables')->group(function () {
+Route::prefix('groups')->middleware(['auth:sanctum', 'ensure.database.tables'])->group(function () {
     Route::get('/', [GroupController::class , 'index']);
     Route::post('/', [GroupController::class , 'store']);
     Route::get('/{id}', [GroupController::class , 'show']);
@@ -1667,7 +1668,7 @@ Route::prefix('groups')->middleware('ensure.database.tables')->group(function ()
 });
 
 // Role Management Routes
-Route::prefix('roles')->middleware('ensure.database.tables')->group(function () {
+Route::prefix('roles')->middleware(['auth:sanctum', 'ensure.database.tables'])->group(function () {
     Route::get('/', [RoleController::class , 'index']);
     Route::post('/', [RoleController::class , 'store']);
     Route::get('/{id}', [RoleController::class , 'show']);

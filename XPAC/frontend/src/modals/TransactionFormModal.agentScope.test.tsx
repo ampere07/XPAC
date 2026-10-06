@@ -34,7 +34,7 @@ jest.mock('../services/paymentMethodService', () => ({
   paymentMethodService: { getAll: () => Promise.resolve({ success: true, data: [{ id: 1, payment_method: 'Cash' }] }) },
 }));
 jest.mock('../services/planService', () => ({ planService: { getAllPlans: () => Promise.resolve([]) } }));
-jest.mock('../services/paymentService', () => ({ paymentService: { getAvailableDiscount: () => Promise.resolve(0) } }));
+jest.mock('../services/paymentService', () => ({ paymentService: { getAvailableDiscount: () => Promise.resolve({ checkout: 0, discountsOnFile: 0 }) } }));
 jest.mock('../services/imageSettingsService', () => ({
   getActiveImageSize: () => Promise.resolve(null),
   resizeImage: (file: File) => Promise.resolve(file),

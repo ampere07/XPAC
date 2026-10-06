@@ -31,6 +31,8 @@ interface InvoiceRecord {
     id: number;
     invoice_date?: string;
     invoice_balance?: number;
+    discounts?: number | string | null;
+    rebate?: number | string | null;
     due_date?: string;
     status?: string;
     print_link?: string;
