@@ -145,6 +145,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
   const [isDarkMode, setIsDarkMode] = useState(localStorage.getItem('theme') === 'dark');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
 
+  const submittingRef = useRef(false);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
@@ -439,8 +440,28 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
     }
   };
 
+  // True once a new LCPNAP with this exact name and coordinates is on the server — i.e.
+  // this save landed even though the response never arrived (timeout) or a second
+  // in-flight save of the same form reported "already exists".
+  const isSavedOnServer = async (): Promise<boolean> => {
+    try {
+      const res = await apiClient.get<ApiResponse<any[]>>('/lcpnap', { params: { search: formData.lcpnap_name, limit: 10 } });
+      const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+      return rows.some((row: any) =>
+        (row.lcpnap_name || '').toLowerCase() === formData.lcpnap_name.toLowerCase() &&
+        (row.coordinates || '').trim() === formData.coordinates.trim()
+      );
+    } catch {
+      return false;
+    }
+  };
+
   const handleSubmit = async () => {
+    // Synchronous guard: `loading` only disables the button after a re-render, so a
+    // quick double click used to send two saves of the same LCPNAP.
+    if (submittingRef.current) return;
     if (!validateForm()) return;
+    submittingRef.current = true;
 
     setLoading(true);
     setShowLoadingModal(true);
@@ -518,7 +539,12 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
         submitData.append('_method', 'PUT');
       }
 
-      const response = await apiClient.post<ApiResponse>(endpoint, submitData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Three images go to Google Drive before the row is saved; the default 60s
+      // timeout gave up while the server was still saving.
+      const response = await apiClient.post<ApiResponse>(endpoint, submitData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000,
+      });
 
       const data = response.data;
       console.log('Response data:', data);
@@ -551,11 +577,29 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
       console.error('Full error:', error);
 
       clearInterval(progressInterval);
-      setShowLoadingModal(false);
 
       // Prefer the backend's message (e.g. duplicate LCPNAP) over the generic axios message
       const responseData = error?.response?.data;
       let message: string | undefined = responseData?.message || responseData?.error;
+
+      // A timeout or "already exists" on a new LCPNAP may mean this very save landed.
+      const isTimeoutOrNetwork = !error?.response;
+      const isDuplicate = error?.response?.status === 422 && (message || '').toLowerCase().includes('already exists');
+      if (!editData && (isTimeoutOrNetwork || isDuplicate) && await isSavedOnServer()) {
+        setLoadingPercentage(100);
+        setShowLoadingModal(false);
+        setResultType('success');
+        setResultMessage('LCP/NAP location created successfully');
+        setShowResultModal(true);
+        setTimeout(() => {
+          setShowResultModal(false);
+          onSave();
+          handleClose();
+        }, 2000);
+        return;
+      }
+
+      setShowLoadingModal(false);
 
       // If the backend returned field validation errors, surface the first one
       if (responseData?.errors) {
@@ -586,6 +630,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({
       setShowResultModal(true);
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 

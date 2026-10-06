@@ -27,6 +27,11 @@ export interface NavBadgeCounts {
    * 0 for anyone who cannot open the page.
    */
   for_approval: number;
+  /**
+   * Transaction revert requests still Pending a decision. Not part of `total` — the bell already
+   * lists them in its feed. 0 for anyone who cannot open Revert Requests.
+   */
+  transaction_revert: number;
 }
 
 export const EMPTY_NAV_BADGE_COUNTS: NavBadgeCounts = {
@@ -38,6 +43,7 @@ export const EMPTY_NAV_BADGE_COUNTS: NavBadgeCounts = {
   prepaid_override: 0,
   total: 0,
   for_approval: 0,
+  transaction_revert: 0,
 };
 
 /**
@@ -68,8 +74,8 @@ export const getNavBadgeCounts = async (): Promise<NavBadgeCounts> => {
 };
 
 /**
- * Fired after a Prepaid Override request is submitted or decided, or a record is approved from
- * For Approval, so the sidebar badges refresh at once.
+ * Fired after a Prepaid Override or transaction revert request is submitted or decided, or a
+ * record is approved from For Approval, so the sidebar badges refresh at once.
  */
 export const NAV_BADGES_CHANGED_EVENT = "nav-badges-changed";
 

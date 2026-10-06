@@ -29,8 +29,8 @@ export const canApproveTransaction = (
   can: (permission: string) => boolean
 ): boolean => can('transaction-list.approve') && (status || '').toLowerCase() === 'pending';
 
-/** The signed-in user's email, recorded as the approver. */
-const currentUserEmail = (): string => {
+/** The signed-in user's email, recorded as the approver. Also used by the For Approval batch approve. */
+export const currentUserEmail = (): string => {
   try {
     const authData = localStorage.getItem('authData');
     if (authData) {

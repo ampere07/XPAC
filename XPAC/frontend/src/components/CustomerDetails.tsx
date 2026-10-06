@@ -80,6 +80,26 @@ const formatDateTime = (dateString: string | null | undefined): string => {
   }
 };
 
+/**
+ * Days of prepaid service left, counted as the Customer page and the restriction cron count them:
+ * whole calendar days, with the expiry date itself as the last day. 0 when the period is over or
+ * has not started.
+ */
+const prepaidDaysLeft = (raw?: string | null): number => {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw ?? '').trim());
+  if (!parts) return 0;
+
+  // Local midnight on both sides so the subtraction is a pure date difference.
+  const expiry = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (isNaN(expiry.getTime())) return 0;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Rounded because a DST boundary makes a "day" 23 or 25 hours long.
+  return Math.max(0, Math.round((expiry.getTime() - today.getTime()) / 86400000) + 1);
+};
+
 interface OnlineStatusRecord {
   id: string;
   status: string;
@@ -342,6 +362,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   }, [ipSchemeMenu]);
 
   const [showTransactModal, setShowTransactModal] = useState(false);
+  const [showRemainingDaysModal, setShowRemainingDaysModal] = useState(false);
   const [showTransactionFormModal, setShowTransactionFormModal] = useState(false);
   const [showStaggeredInstallationModal, setShowStaggeredInstallationModal] = useState(false);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
@@ -637,6 +658,19 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
     () => String(billingRecord.generationType ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'prepaid',
     [billingRecord.generationType]
   );
+
+  /*
+   * A prepaid account that is neither expired nor restricted still has service it paid for, so
+   * Transact asks before taking another payment. Restricted on either side counts — billing
+   * status or RADIUS session. Expired, restricted and postpaid accounts go straight to the usual
+   * transaction confirmation.
+   */
+  const remainingPrepaidDays = useMemo(() => {
+    if (!isPrepaidAccount) return 0;
+    const isRestricted = [billingRecord.status, billingRecord.onlineStatus]
+      .some(s => String(s ?? '').trim().toLowerCase() === 'restricted');
+    return isRestricted ? 0 : prepaidDaysLeft(billingRecord.prepaidExpiration);
+  }, [isPrepaidAccount, billingRecord.status, billingRecord.onlineStatus, billingRecord.prepaidExpiration]);
 
   // Resolve user IDs for Created By / Updated By fields
   useEffect(() => {
@@ -1476,7 +1510,20 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
   };
 
   const handleTransactClick = () => {
+    if (remainingPrepaidDays > 0) {
+      setShowRemainingDaysModal(true);
+      return;
+    }
     setShowTransactModal(true);
+  };
+
+  const handleRemainingDaysContinue = () => {
+    setShowRemainingDaysModal(false);
+    setShowTransactModal(true);
+  };
+
+  const handleRemainingDaysCancel = () => {
+    setShowRemainingDaysModal(false);
   };
 
   const handleTransactConfirm = () => {
@@ -2424,6 +2471,17 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               ))}
             </div>
           </div>
+
+          <TransactConfirmationModal
+            isOpen={showRemainingDaysModal}
+            onConfirm={handleRemainingDaysContinue}
+            onCancel={handleRemainingDaysCancel}
+            warning
+            title="Customer Still Has Remaining Days"
+            message={`This customer still has active/remaining days (${remainingPrepaidDays} ${remainingPrepaidDays === 1 ? 'day' : 'days'} left, until ${formatDate(billingRecord.prepaidExpiration)}). Do you want to continue with this transaction?`}
+            confirmLabel="Continue"
+            description={`${billingRecord.customerName} - Account: ${billingRecord.applicationId}`}
+          />
 
           <TransactConfirmationModal
             isOpen={showTransactModal}

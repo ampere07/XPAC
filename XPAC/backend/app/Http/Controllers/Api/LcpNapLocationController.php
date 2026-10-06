@@ -232,8 +232,11 @@ class LcpNapLocationController extends Controller
                 $existingQuery->whereNull('organization_id');
             }
             
+            // A row that holds only the name (no location, coordinates or images) is
+            // a leftover from an interrupted save, not a real LCPNAP. It is completed
+            // by this request instead of blocking the name forever.
             $existing = $existingQuery->first();
-            if ($existing) {
+            if ($existing && !$this->isIncompleteLcpnap($existing)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'A LCPNAP with this name already exists in your organization'
@@ -271,7 +274,7 @@ class LcpNapLocationController extends Controller
                 );
             }
 
-            $lcpnap = new LCPNAPLocation();
+            $lcpnap = $existing ?: new LCPNAPLocation();
             $lcpnap->lcpnap_name = $request->lcpnap_name;
             $lcpnap->reading_image_url = $readingImageUrl;
             $lcpnap->street = $request->street;
@@ -300,7 +303,25 @@ class LcpNapLocationController extends Controller
                 'message' => 'LCPNAP location added successfully',
                 'data' => $lcpnap
             ], 201);
-            
+
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Two saves of the same name in flight at once (double tap, or a retry
+            // after a client timeout) both pass the existence check above; the
+            // unique index stops the second. The first one was saved.
+            if (($e->errorInfo[1] ?? null) === 1062) {
+                Log::warning('LCPNAP Store duplicate (concurrent save)', ['name' => $request->lcpnap_name]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A LCPNAP with this name already exists in your organization'
+                ], 422);
+            }
+
+            Log::error('LCPNAP Store Error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error adding LCPNAP location: ' . $e->getMessage()
+            ], 500);
         } catch (\Exception $e) {
             Log::error('LCPNAP Store Error: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
@@ -547,6 +568,21 @@ class LcpNapLocationController extends Controller
                 'message' => 'Error getting statistics: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * True when the row carries nothing but its name: no location, coordinates,
+     * port total or images. Every real save fills these in.
+     */
+    private function isIncompleteLcpnap(LCPNAPLocation $lcpnap): bool
+    {
+        foreach (['street', 'barangay', 'city', 'coordinates', 'image1_url', 'image2_url', 'reading_image_url'] as $field) {
+            if (trim((string) $lcpnap->{$field}) !== '') {
+                return false;
+            }
+        }
+
+        return empty($lcpnap->port_total);
     }
 
     private function uploadImageToDrive($file, $folderId, $filePrefix)

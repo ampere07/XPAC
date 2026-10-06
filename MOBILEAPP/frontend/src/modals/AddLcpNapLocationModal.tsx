@@ -237,6 +237,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
 
   const webViewRef = useRef<WebView>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const submittingRef = useRef(false);
 
   const primaryColor = colorPalette?.primary || '#7c3aed';
   const [isContentReady, setIsContentReady] = useState(false);
@@ -437,7 +438,35 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
     setErrors(prev => prev[field] ? { ...prev, [field]: '' } : prev);
   }, []);
 
+  // A row with only its name (no location, coordinates or images) is a leftover from
+  // an interrupted save; the server completes it, so it does not count as taken.
+  const isCompleteLcpnap = (row: any) =>
+    ['street', 'barangay', 'city', 'coordinates', 'image1_url', 'image2_url', 'reading_image_url']
+      .some(field => String(row?.[field] ?? '').trim() !== '') || !!row?.port_total;
+
+  const findLcpnapByName = async (): Promise<any[]> => {
+    const res = await getAllLCPNAPs(formData.lcpnap_name, 1, 10);
+    if (!res.success || !Array.isArray(res.data)) return [];
+    return res.data.filter((item: any) => (item.lcpnap_name || '').toLowerCase() === formData.lcpnap_name.toLowerCase());
+  };
+
+  // True once a new LCPNAP with this exact name and coordinates is on the server — i.e.
+  // this save landed even though the response never arrived (timeout) or a second
+  // in-flight save of the same form reported "already exists".
+  const isSavedOnServer = async (): Promise<boolean> => {
+    try {
+      const rows = await findLcpnapByName();
+      return rows.some((row: any) => (row.coordinates || '').trim() === formData.coordinates.trim());
+    } catch {
+      return false;
+    }
+  };
+
   const handleSubmit = async () => {
+    // Synchronous guard: `loading` only disables the button after a re-render, so a
+    // quick double tap used to send two saves of the same LCPNAP.
+    if (submittingRef.current) return;
+
     const newErrors: Record<string, string> = {};
     if (!formData.lcpnap_name.trim()) newErrors.lcpnap_name = 'Required';
     if (!formData.street.trim()) newErrors.street = 'Required';
@@ -457,6 +486,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
       return;
     }
 
+    submittingRef.current = true;
     setLoading(true);
     setShowLoadingModal(true);
     setLoadingPercentage(0);
@@ -469,20 +499,16 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
       // Check for duplicate lcpnap_name before submitting (skip if editing the same record)
       if (!editData || editData.lcpnap_name !== formData.lcpnap_name) {
         try {
-          const existingRes = await getAllLCPNAPs(formData.lcpnap_name, 1, 10);
-          if (existingRes.success && Array.isArray(existingRes.data)) {
-            const duplicate = existingRes.data.find(
-              (item: any) => (item.lcpnap_name || '').toLowerCase() === formData.lcpnap_name.toLowerCase()
-            );
-            if (duplicate) {
-              if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-              setShowLoadingModal(false);
-              setLoading(false);
-              setResultType('error');
-              setResultMessage(`LCPNAP Name "${formData.lcpnap_name}" already exists.`);
-              setShowResultModal(true);
-              return;
-            }
+          // Name-only leftovers are skipped: the server completes them on save.
+          const duplicate = (await findLcpnapByName()).find(isCompleteLcpnap);
+          if (duplicate) {
+            if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+            setShowLoadingModal(false);
+            setLoading(false);
+            setResultType('error');
+            setResultMessage(`LCPNAP Name "${formData.lcpnap_name}" already exists.`);
+            setShowResultModal(true);
+            return;
           }
         } catch (checkErr) {
           // If the check fails, proceed with submission and let the server validate
@@ -516,7 +542,12 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
       const method = editData ? 'post' : 'post'; // Using POST with _method PUT for multipart compatibility if needed
       if (editData) submitData.append('_method', 'PUT');
 
-      const response = await apiClient.post<ApiResponse>(url, submitData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Three images go to Google Drive before the row is saved; the default 60s
+      // timeout gave up while the server was still saving.
+      const response = await apiClient.post<ApiResponse>(url, submitData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000,
+      });
 
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
       if (!response.data.success) throw new Error(response.data.message || 'Failed to save');
@@ -536,11 +567,29 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
 
     } catch (error: any) {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-      setShowLoadingModal(false);
-      setResultType('error');
 
       const data = error?.response?.data;
       const message = data?.message || error?.message || 'Failed to save';
+
+      // A timeout or "already exists" on a new LCPNAP may mean this very save landed.
+      const isTimeoutOrNetwork = !error?.response;
+      const isDuplicate = message.toLowerCase().includes('already exist');
+      if (!editData && (isTimeoutOrNetwork || isDuplicate) && await isSavedOnServer()) {
+        setLoadingPercentage(100);
+        setShowLoadingModal(false);
+        setResultType('success');
+        setResultMessage('LCP/NAP location created successfully');
+        setShowResultModal(true);
+        setTimeout(() => {
+          setShowResultModal(false);
+          if (onSave) onSave();
+          onClose();
+        }, 2000);
+        return;
+      }
+
+      setShowLoadingModal(false);
+      setResultType('error');
 
       if (message.toLowerCase().includes('already exist') || message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('existing')) {
         setResultMessage(`LCPNAP Name ${formData.lcpnap_name} already existing`);
@@ -557,6 +606,7 @@ const AddLcpNapLocationModal: React.FC<AddLcpNapLocationModalProps> = ({ isOpen,
       setShowResultModal(true);
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 

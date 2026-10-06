@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 
 interface TransactConfirmationModalProps {
@@ -8,6 +9,12 @@ interface TransactConfirmationModalProps {
   amount?: string;
   description?: string;
   billingRecord?: any;
+  /** Overrides for reusing this modal as a different confirmation; defaults are the transaction ones. */
+  title?: string;
+  message?: string;
+  confirmLabel?: string;
+  /** Adds a warning icon to the title. */
+  warning?: boolean;
 }
 
 const TransactConfirmationModal: React.FC<TransactConfirmationModalProps> = ({
@@ -16,7 +23,11 @@ const TransactConfirmationModal: React.FC<TransactConfirmationModalProps> = ({
   onCancel,
   amount,
   description,
-  billingRecord
+  billingRecord,
+  title = 'Confirm Transaction',
+  message = 'Are you sure you want to proceed with this transaction?',
+  confirmLabel = 'Confirm Transaction',
+  warning = false
 }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -55,13 +66,14 @@ const TransactConfirmationModal: React.FC<TransactConfirmationModalProps> = ({
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
       <div className={`rounded-lg border shadow-xl p-8 max-w-md w-full mx-4 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
         }`}>
-        <div className="mb-4">
+        <div className="mb-4 flex items-center gap-2">
+          {warning && <AlertTriangle size={22} className="text-amber-500 flex-shrink-0" />}
           <h3 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>Confirm Transaction</h3>
+            }`}>{title}</h3>
         </div>
         <div className={`mb-6 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
           }`}>
-          <p className="whitespace-pre-line">Are you sure you want to proceed with this transaction?</p>
+          <p className="whitespace-pre-line">{message}</p>
           {description && <p className="mt-1 text-sm opacity-75">{description}</p>}
         </div>
         <div className="flex items-center justify-end gap-3">
@@ -89,7 +101,7 @@ const TransactConfirmationModal: React.FC<TransactConfirmationModalProps> = ({
               e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
             }}
           >
-            Confirm Transaction
+            {confirmLabel}
           </button>
         </div>
       </div>

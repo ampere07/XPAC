@@ -13,9 +13,11 @@ class DataLogsController extends Controller
     {
         try {
             // Base query for Details Update Logs
+            // account_id is the billing account's id; the viewer shows its account_no instead.
             $detailsQuery = DB::table('details_update_logs')
                 ->leftJoin('users as cu', 'details_update_logs.created_by_user_id', '=', 'cu.id')
                 ->leftJoin('users as uu', 'details_update_logs.updated_by_user_id', '=', 'uu.id')
+                ->leftJoin('billing_accounts as ba', 'details_update_logs.account_id', '=', 'ba.id')
                 ->select([
                     DB::raw("'Details Update Log' as log_type"),
                     'details_update_logs.id',
@@ -25,9 +27,11 @@ class DataLogsController extends Controller
                     'details_update_logs.updated_at',
                     'cu.email_address as created_by',
                     'uu.email_address as updated_by',
+                    'ba.account_no',
                 ]);
 
-            // Base query for Audit Trail Logs
+            // Base query for Audit Trail Logs. No account column; account_no is read from the
+            // JSON below where the entry carries one.
             $auditQuery = DB::table('audit_trail_logs')
                 ->select([
                     DB::raw("'Audit Trail Log' as log_type"),
@@ -38,6 +42,7 @@ class DataLogsController extends Controller
                     'audit_trail_logs.updated_at',
                     'audit_trail_logs.created_by_user as created_by',
                     'audit_trail_logs.updated_by_user as updated_by',
+                    DB::raw('NULL as account_no'),
                 ]);
 
             // Combine based on log_type filter
@@ -65,6 +70,7 @@ class DataLogsController extends Controller
                       ->orWhere('combined.new_details', 'like', "%{$search}%")
                       ->orWhere('combined.created_by', 'like', "%{$search}%")
                       ->orWhere('combined.updated_by', 'like', "%{$search}%")
+                      ->orWhere('combined.account_no', 'like', "%{$search}%")
                       ->orWhere('combined.id', '=', $search);
                 });
             }
@@ -148,8 +154,13 @@ class DataLogsController extends Controller
                     $cleanType = ($record->log_type === 'Details Update Log') ? 'Account Details' : 'System Activity';
                 }
 
+                // The billing account's number, or the one the entry recorded itself when it has
+                // no account link (an account since deleted, or an audit trail entry).
+                $accountNo = $record->account_no ?: ($oldData['account_no'] ?? $newData['account_no'] ?? null);
+
                 return [
                     'id' => (string)$record->id,
+                    'account_no' => is_scalar($accountNo) && $accountNo !== '' ? (string) $accountNo : null,
                     'log_type' => $cleanType,
                     'old_details' => $record->old_details,
                     'new_details' => $record->new_details,
