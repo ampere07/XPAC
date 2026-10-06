@@ -983,6 +983,10 @@ const Discounts: React.FC = () => {
               discountRecord={selectedDiscount}
               onClose={() => setSelectedDiscount(null)}
               onApproveSuccess={handleRefresh}
+              onDeleteSuccess={() => {
+                setSelectedDiscount(null);
+                handleRefresh();
+              }}
               onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
               onNext={
                 currentDiscountIndex < filteredDiscountRecords.length - 1
@@ -1008,6 +1012,11 @@ const Discounts: React.FC = () => {
                 onApproveSuccess={() => {
                   handleRefresh();
                   setDetailModalOpen(false);
+                }}
+                onDeleteSuccess={() => {
+                  setDetailModalOpen(false);
+                  setSelectedDiscount(null);
+                  handleRefresh();
                 }}
                 onPrevious={currentDiscountIndex > 0 ? handlePreviousRecord : undefined}
                 onNext={
