@@ -272,8 +272,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     setAvailableDiscount(0);
     if (!isOpen || !isPrepaid || !formData.accountNo) return;
     let cancelled = false;
-    paymentService.getAvailableDiscount(formData.accountNo).then(amount => {
-      if (!cancelled) setAvailableDiscount(amount);
+    paymentService.getAvailableDiscount(formData.accountNo).then(discount => {
+      if (!cancelled) setAvailableDiscount(discount.checkout);
     });
     return () => { cancelled = true; };
   }, [isOpen, isPrepaid, formData.accountNo]);

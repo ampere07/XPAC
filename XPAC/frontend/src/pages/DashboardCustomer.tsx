@@ -214,6 +214,20 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         return () => { cancelled = true; };
     }, [customerDetail?.billingAccount?.generation_type]);
 
+    const [postpaidDiscountsOnFile, setPostpaidDiscountsOnFile] = useState<number>(0);
+    const billingAccountNo = customerDetail?.billingAccount?.accountNo;
+    const isPostpaidAccount = String(customerDetail?.billingAccount?.generation_type ?? '')
+        .toLowerCase().replace(/[^a-z]/g, '') !== 'prepaid';
+    useEffect(() => {
+        setPostpaidDiscountsOnFile(0);
+        if (!billingAccountNo || !isPostpaidAccount) return;
+        let cancelled = false;
+        paymentService.getAvailableDiscount(billingAccountNo).then(discount => {
+            if (!cancelled) setPostpaidDiscountsOnFile(discount.discountsOnFile);
+        });
+        return () => { cancelled = true; };
+    }, [billingAccountNo, isPostpaidAccount, invoiceRecords]);
+
     if (isLoading && !customerDetail) return <div className="p-8 flex justify-center bg-gray-50 min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div></div>;
 
     const getStatusColor = (status: string) => {
@@ -345,6 +359,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const convenienceFeeLabel = String(Number(convenienceFeePercentage));
 
     // Due Date: read from the latest invoice's due_date (not recalculated from billingDay)
+    const latestBillDiscount = Math.round(
+        (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
+    ) / 100;
+    const formatCentavoPeso = (value: number) =>
+        `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
     let dueDateString = 'Upon Receipt';
     if (invoiceRecords && invoiceRecords.length > 0) {
         const latestInvoice = invoiceRecords[0]; // already sorted by date descending from the store
@@ -456,7 +476,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         // Re-read every time: a discount may have been added (or spent) since the page loaded.
         setAvailableDiscount(0);
         if (isPrepaid) {
-            paymentService.getAvailableDiscount(accountNo).then(setAvailableDiscount);
+            paymentService.getAvailableDiscount(accountNo).then(discount => setAvailableDiscount(discount.checkout));
         }
 
         // Resolve up front whether this is an unpaid first bill that can be re-priced. Without
@@ -823,6 +843,17 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                 </>
                             )}
                         </div>
+
+                        {isPostpaidAccount && (latestBillDiscount > 0 || postpaidDiscountsOnFile > 0) && (
+                            <div className="text-white text-sm -mt-4 mb-8 space-y-1 opacity-90">
+                                {latestBillDiscount > 0 && (
+                                    <p>Latest bill: {formatCentavoPeso(latestBillDiscount)} discount / rebate applied</p>
+                                )}
+                                {postpaidDiscountsOnFile > 0 && (
+                                    <p>{formatCentavoPeso(postpaidDiscountsOnFile)} discount on file — comes off your next bill</p>
+                                )}
+                            </div>
+                        )}
 
                         <div className="flex justify-center space-x-4">
                             <button
