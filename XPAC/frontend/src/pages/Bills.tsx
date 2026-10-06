@@ -234,13 +234,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
 
             if (response.data.success && response.data.pdf_url) {
                 try {
-                    const storedUser = localStorage.getItem('authData');
-                    if (storedUser) {
-                        const parsedUser = JSON.parse(storedUser);
-                        if (parsedUser.username) {
-                            await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
-                        }
-                    }
+                    await refreshCustomerData();
                 } catch (refreshErr) {
                     console.error('Failed to refresh data after invoice PDF generation:', refreshErr);
                 }
