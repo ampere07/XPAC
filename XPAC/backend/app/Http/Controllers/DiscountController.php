@@ -263,19 +263,20 @@ class DiscountController extends Controller
 
     public function destroy(string $id): JsonResponse
     {
+        if (!\App\Support\AgentAccess::isSuperAdmin(auth()->user())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete a discount.'
+            ], 403);
+        }
+
         try {
-            $discount = Discount::findOrFail($id);
-
-            $authUser = auth()->user();
-            $organizationId = $authUser ? $authUser->organization_id : null;
-            $roleId = $authUser ? $authUser->role_id : null;
-            $isSuperAdmin = !$authUser || $roleId == 7 || !$organizationId;
-
-            if (!$isSuperAdmin && $organizationId && $discount->organization_id !== $organizationId) {
+            $discount = Discount::find($id);
+            if (!$discount) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Unauthorized to delete this discount record'
-                ], 403);
+                    'message' => 'Discount not found. It may have been deleted already.'
+                ], 404);
             }
 
             DB::beginTransaction();
