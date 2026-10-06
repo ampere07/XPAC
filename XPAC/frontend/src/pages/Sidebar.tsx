@@ -210,7 +210,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
       return { channel, event };
     });
 
-    // Prepaid Override has no broadcast; its pages fire this after a submit or a decision.
+    // Prepaid Override and revert requests have no broadcast (only an approved revert sends
+    // transaction-updated); they fire this after a submit or a decision.
     window.addEventListener(NAV_BADGES_CHANGED_EVENT, load);
 
     return () => {
@@ -236,7 +237,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
         { id: 'customer', label: 'Customer', icon: User, exceptRoles: [ROLE.HEAD_TECH] },
         // Badge: transactions awaiting approval or processing (Pending / QUEUED).
         { id: 'transaction-list', label: 'Transaction List', icon: Receipt, badge: navBadges.transaction },
-        { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw },
+        // Badge: revert requests still Pending a decision.
+        { id: 'transactions-revert', label: 'Revert Requests', icon: RefreshCw, badge: navBadges.transaction_revert },
         // Approval queue for manual changes to a prepaid customer's expiry. The date is no longer
         // editable on the customer form, so this is where every adjustment is reviewed.
         // TimerReset rather than Clock — Overdue two rows down already owns Clock in this menu.

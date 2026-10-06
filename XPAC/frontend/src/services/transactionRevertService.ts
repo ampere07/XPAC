@@ -1,4 +1,5 @@
 import apiClient from '../config/api';
+import { notifyNavBadgesChanged } from './navBadgeService';
 
 interface ApiResponse<T = any> {
     success?: boolean;
@@ -81,6 +82,8 @@ export const transactionRevertService = {
     createRevertRequest: async (payload: CreateTransactionRevertPayload): Promise<{ success: boolean; message?: string; data?: TransactionRevert }> => {
         try {
             const response = await apiClient.post<ApiResponse>('/transaction-reverts', payload);
+            // Here rather than in each caller: nothing is broadcast for a new request.
+            notifyNavBadgesChanged();
             return {
                 success: true,
                 message: response.data.message || 'Revert request submitted successfully',
@@ -137,6 +140,8 @@ export const transactionRevertService = {
                 status,
                 updated_by: updatedBy
             });
+            // A rejection is not broadcast either, so refresh the Revert Requests badge here.
+            notifyNavBadgesChanged();
             return {
                 success: true,
                 message: response.data.message || 'Status updated successfully',

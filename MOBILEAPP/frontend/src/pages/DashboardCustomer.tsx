@@ -270,8 +270,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // wrong, not just cosmetic: the server reads "paid for the plan in force while a different one
     // is queued" as backing out of the switch (PrepaidPlanChangeService::handleSettledPayment) and
     // would silently cancel the plan the customer already bought.
-    const queuedPlan = pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null;
-    const lockedPlan = queuedPlan ?? currentPlan;
+    // A function of the list so Pay Now can resolve it from a list it had to wait for.
+    const lockedPlanFrom = (list: Plan[]): Plan | null =>
+        (pendingPlanId ? list.find(p => p.id === Number(pendingPlanId)) : undefined)
+        ?? list.find(p => p.name === extractPlanName(planName))
+        ?? null;
+    const lockedPlan = lockedPlanFrom(plans);
     const selectablePlans = lockedPlan ? [lockedPlan] : [];
 
     // Postpaid -> prepaid costs the outstanding balance plus one period of the current plan; the
@@ -340,22 +344,27 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     // Gated on a ref, not on plans.length: an empty or all-zero-price response would otherwise
     // leave the guard false and re-trigger this effect forever.
     const plansRequestedRef = React.useRef(false);
+    // The request itself, so Pay Now can wait for it when tapped before it arrives. Opening
+    // without it leaves no plan selected, and with no plan there is no amount and no discount.
+    const plansPromiseRef = React.useRef<Promise<Plan[]> | null>(null);
     useEffect(() => {
         // Every account, not only prepaid: a postpaid customer switching to prepaid at Pay Now
         // pays one period of their current plan, so its price has to be known.
         if (!customerDetail || plansRequestedRef.current) return;
         plansRequestedRef.current = true;
-        let cancelled = false;
-        (async () => {
-            setIsLoadingPlans(true);
-            try {
-                const fetched = await planService.getAllPlans();
-                if (!cancelled) setPlans(fetched.filter(p => Number(p.price) > 0));
-            } finally {
-                if (!cancelled) setIsLoadingPlans(false);
-            }
-        })();
-        return () => { cancelled = true; };
+        setIsLoadingPlans(true);
+        plansPromiseRef.current = planService.getAllPlans()
+            .then(fetched => fetched.filter(p => Number(p.price) > 0))
+            .catch(err => {
+                console.error('Failed to load plans:', err);
+                return [] as Plan[];
+            });
+        // Not dropped when customerDetail refreshes mid-request: the ref above means the list is
+        // never asked for again, so a discarded response would leave the picker empty for good.
+        plansPromiseRef.current.then(loaded => {
+            setPlans(loaded);
+            setIsLoadingPlans(false);
+        });
     }, [customerDetail]);
 
     // Format a stored date string ('YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', or ISO) to
@@ -609,7 +618,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         if (isPrepaid) {
             // Locked — prepaid customers cannot change plan at Pay Now. A queued switch wins over
             // the plan in force (see lockedPlan): the customer already bought it.
-            preselectedPlan = lockedPlan;
+            // `plans` can still be empty when Pay Now is tapped straight after load, so wait for
+            // the request rather than open with no plan, no amount and no discount.
+            const loadedPlans = plans.length > 0 ? plans : (await plansPromiseRef.current) ?? [];
+            preselectedPlan = lockedPlanFrom(loadedPlans);
             setSelectedPlanId(preselectedPlan?.id ?? null);
             setPaymentAmount(Number(preselectedPlan?.price ?? 0));
             setAdvanceMonths(1);

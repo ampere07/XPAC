@@ -93,6 +93,8 @@ class NavBadgeCountController extends Controller
                     // done job orders the badges above already include, so the bell would count
                     // each of them twice.
                     'for_approval' => $this->forApprovalCount(),
+                    // Also beside the total: the bell already lists revert requests in its feed.
+                    'transaction_revert' => $this->transactionRevertCount($organizationId),
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -112,6 +114,7 @@ class NavBadgeCountController extends Controller
                     'prepaid_override' => 0,
                     'total' => 0,
                     'for_approval' => 0,
+                    'transaction_revert' => 0,
                 ],
             ]);
         }
@@ -134,6 +137,34 @@ class NavBadgeCountController extends Controller
             return app(ForApprovalQueueService::class)->counts($user)['total'];
         } catch (\Throwable $e) {
             Log::warning('[NAV BADGES] For Approval count failed: ' . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Revert requests still Pending a decision. 0 for a user who cannot open Revert Requests,
+     * without querying.
+     *
+     * Scoped by the rule TransactionRevertController::index() lists them by — the organization's
+     * own rows only, NULL excluded — rather than countWhere()'s, so the badge never counts a
+     * request the page will not show.
+     */
+    private function transactionRevertCount(?int $organizationId): int
+    {
+        if (!Permissions::allows(auth()->user(), 'transactions-revert')) {
+            return 0;
+        }
+
+        try {
+            $query = DB::table('transaction_revert')->whereRaw('LOWER(TRIM(status)) = ?', ['pending']);
+
+            if ($organizationId !== null) {
+                $query->where('organization_id', $organizationId);
+            }
+
+            return (int) $query->count();
+        } catch (\Throwable $e) {
+            Log::warning('[NAV BADGES] Count failed for transaction_revert: ' . $e->getMessage());
             return 0;
         }
     }

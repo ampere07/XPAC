@@ -599,7 +599,7 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
                           <tr
                             key={idx}
                             className={`cursor-pointer transition-all ${isDarkMode ? "hover:bg-gray-800" : "hover:bg-gray-100"} shadow-sm`}
-                            onClick={() => handleCustomerClick(customer.id || customer.account_no)}
+                            onClick={() => handleCustomerClick(customer.account_no)}
                           >
                             <td className={`px-3 py-2 font-mono ${isDarkMode ? "text-gray-300" : "text-gray-700"}`}>{customer.account_no}</td>
                             <td className={`px-3 py-2 ${isDarkMode ? "text-white" : "text-gray-900"}`}>{customer.full_name}</td>

@@ -200,24 +200,28 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // Gated on a ref, not on plans.length: an empty or all-zero-price response would otherwise
     // leave the guard false and re-trigger this effect forever.
     const plansRequestedRef = useRef(false);
+    // The request itself, so Pay Now can wait for it when it gets there first (auto-opened from
+    // Bills, or clicked straight after load). Opening without it leaves no plan selected, and with
+    // no plan there is no amount and no discount.
+    const plansPromiseRef = useRef<Promise<Plan[]> | null>(null);
     useEffect(() => {
         // Every account, not only prepaid: a postpaid customer switching to prepaid at Pay Now
         // pays one period of their current plan, so its price has to be known.
         if (!customerDetail?.billingAccount || plansRequestedRef.current) return;
         plansRequestedRef.current = true;
-        let cancelled = false;
-        (async () => {
-            setIsLoadingPlans(true);
-            try {
-                const fetched = await planService.getAllPlans();
-                if (!cancelled) setPlans(fetched.filter(p => Number(p.price) > 0));
-            } catch (err) {
+        setIsLoadingPlans(true);
+        plansPromiseRef.current = planService.getAllPlans()
+            .then(fetched => fetched.filter(p => Number(p.price) > 0))
+            .catch(err => {
                 console.error('Failed to load plans:', err);
-            } finally {
-                if (!cancelled) setIsLoadingPlans(false);
-            }
-        })();
-        return () => { cancelled = true; };
+                return [] as Plan[];
+            });
+        // Not dropped when this effect re-runs: the ref above means the list is never asked for
+        // again, so a discarded response would leave the picker empty for good.
+        plansPromiseRef.current.then(loaded => {
+            setPlans(loaded);
+            setIsLoadingPlans(false);
+        });
     }, [customerDetail?.billingAccount?.generation_type]);
 
     if (isLoading && !customerDetail) return <div className="p-8 flex justify-center bg-gray-50 min-h-screen"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div></div>;
@@ -275,8 +279,12 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // wrong, not just cosmetic: the server reads "paid for the plan in force while a different one
     // is queued" as backing out of the switch (PrepaidPlanChangeService::handleSettledPayment) and
     // would silently cancel the plan the customer already bought.
-    const queuedPlan = pendingPlanId ? plans.find(p => p.id === Number(pendingPlanId)) || null : null;
-    const lockedPlan = queuedPlan ?? currentPlan;
+    // A function of the list so Pay Now can resolve it from a list it had to wait for.
+    const lockedPlanFrom = (list: Plan[]): Plan | null =>
+        (pendingPlanId ? list.find(p => p.id === Number(pendingPlanId)) : undefined)
+        ?? list.find(p => p.name === extractPlanName(planName))
+        ?? null;
+    const lockedPlan = lockedPlanFrom(plans);
     const selectablePlans = lockedPlan ? [lockedPlan] : [];
     const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
 
@@ -448,7 +456,10 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         let preselected: Plan | null = null;
         if (isPrepaid) {
             // Locked — prepaid customers cannot change plan at Pay Now. See lockedPlan.
-            preselected = lockedPlan;
+            // `plans` can be empty here, or stale when auto-opened from Bills, so wait for the
+            // request rather than open with no plan, no amount and no discount.
+            const loadedPlans = plans.length > 0 ? plans : (await plansPromiseRef.current) ?? [];
+            preselected = lockedPlanFrom(loadedPlans);
             setSelectedPlanId(preselected?.id ?? null);
             setPaymentAmount(Number(preselected?.price ?? 0));
             setAdvanceMonths(1);
