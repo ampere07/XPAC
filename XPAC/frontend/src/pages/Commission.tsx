@@ -156,6 +156,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
                 <div className="flex items-center gap-2">
                     <span>Show</span>
                     <select
+                        aria-label="Items per page"
                         value={itemsPerPage}
                         onChange={(e) => setItemsPerPage(Number(e.target.value))}
                         className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -186,6 +187,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
                 </button>
 
                 <button
+                    aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -203,6 +205,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
                 </div>
 
                 <button
+                    aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -813,6 +816,7 @@ const Commission: React.FC = () => {
                             <div className="relative">
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                                 <input
+                                    aria-label="From"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -823,6 +827,7 @@ const Commission: React.FC = () => {
                             <div className="relative">
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                                 <input
+                                    aria-label="To"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}
@@ -1022,6 +1027,7 @@ const Commission: React.FC = () => {
                             <div>
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                                 <input
+                                    aria-label="From"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -1032,6 +1038,7 @@ const Commission: React.FC = () => {
                             <div>
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                                 <input
+                                    aria-label="To"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}

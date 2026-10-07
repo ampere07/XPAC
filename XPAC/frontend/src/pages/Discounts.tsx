@@ -867,6 +867,7 @@ const Discounts: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={createdDateFrom}
                   onChange={(e) => setCreatedDateFrom(e.target.value)}
@@ -880,6 +881,7 @@ const Discounts: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={createdDateTo}
                   onChange={(e) => setCreatedDateTo(e.target.value)}
@@ -926,6 +928,7 @@ const Discounts: React.FC = () => {
           {locationItems.regions.map((region: any) => (
             <div key={region.id}>
               <button
+                aria-label={`Show ${region.name}`}
                 onClick={() => setSelectedLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
@@ -939,6 +942,7 @@ const Discounts: React.FC = () => {
               >
                 <div className="flex items-center flex-1">
                   <button
+                    aria-label={`${expandedLocations.has(region.id) ? 'Collapse' : 'Expand'} ${region.name}`}
                     onClick={(e) => toggleLocationExpansion(e, region.id)}
                     className="p-1 mr-1"
                   >
@@ -970,6 +974,7 @@ const Discounts: React.FC = () => {
               {expandedLocations.has(region.id) && region.cities.map((city: any) => (
                 <div key={city.id}>
                   <button
+                    aria-label={`Show ${city.name}`}
                     onClick={() => setSelectedLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
@@ -983,6 +988,7 @@ const Discounts: React.FC = () => {
                   >
                     <div className="flex items-center flex-1">
                       <button
+                        aria-label={`${expandedLocations.has(city.id) ? 'Collapse' : 'Expand'} ${city.name}`}
                         onClick={(e) => toggleLocationExpansion(e, city.id)}
                         className="p-1 mr-1"
                       >
@@ -1007,6 +1013,7 @@ const Discounts: React.FC = () => {
                   {/* Barangay Level */}
                   {expandedLocations.has(city.id) && city.barangays.map((barangay: any) => (
                     <button
+                      aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
                       onClick={() => setSelectedLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1291,6 +1298,8 @@ const Discounts: React.FC = () => {
                     <div>
                       {sortedDiscountRecords.map((record) => (
                         <div
+                          role="button"
+                          aria-label={`Open ${record.accountNo}`}
                           key={record.id}
                           onClick={() => handleRecordClick(record)}
                           className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -1359,6 +1368,7 @@ const Discounts: React.FC = () => {
                                 <span>{column.label}</span>
                                 {(hoveredColumn === column.key || sortColumn === column.key) && (
                                   <button
+                                    aria-label={`Sort by ${column.label}`}
                                     onClick={() => handleSort(column.key)}
                                     className="ml-2 transition-colors"
                                   >

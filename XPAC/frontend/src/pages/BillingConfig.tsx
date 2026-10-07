@@ -774,6 +774,7 @@ const BillingConfig: React.FC = () => {
                       Advance Generation Day
                     </label>
                     <input
+                      aria-label="Advance Generation Day"
                       type="number"
                       value={billingConfigInput.advance_generation_day}
                       onChange={(e) => handleBillingConfigInputChange('advance_generation_day', e.target.value)}
@@ -798,6 +799,7 @@ const BillingConfig: React.FC = () => {
                       Due Date Day
                     </label>
                     <input
+                      aria-label="Due Date Day"
                       type="number"
                       value={billingConfigInput.due_date_day}
                       onChange={(e) => handleBillingConfigInputChange('due_date_day', e.target.value)}
@@ -822,6 +824,7 @@ const BillingConfig: React.FC = () => {
                       Disconnection Day
                     </label>
                     <input
+                      aria-label="Disconnection Day"
                       type="number"
                       value={billingConfigInput.disconnection_day}
                       onChange={(e) => handleBillingConfigInputChange('disconnection_day', e.target.value)}
@@ -846,6 +849,7 @@ const BillingConfig: React.FC = () => {
                       Overdue Day
                     </label>
                     <input
+                      aria-label="Overdue Day"
                       type="number"
                       value={billingConfigInput.overdue_day}
                       onChange={(e) => handleBillingConfigInputChange('overdue_day', e.target.value)}
@@ -870,6 +874,7 @@ const BillingConfig: React.FC = () => {
                       Disconnection Notice
                     </label>
                     <input
+                      aria-label="Disconnection Notice"
                       type="number"
                       value={billingConfigInput.disconnection_notice}
                       onChange={(e) => handleBillingConfigInputChange('disconnection_notice', e.target.value)}
@@ -896,6 +901,7 @@ const BillingConfig: React.FC = () => {
                     <div className="relative">
                       <span className={`absolute left-3 top-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>₱</span>
                       <input
+                        aria-label="Disconnection Fee"
                         type="number"
                         step="0.01"
                         value={billingConfigInput.disconnection_fee}
@@ -921,6 +927,7 @@ const BillingConfig: React.FC = () => {
                       Pullout Day
                     </label>
                     <input
+                      aria-label="Pullout Day"
                       type="number"
                       value={billingConfigInput.pullout_day}
                       onChange={(e) => handleBillingConfigInputChange('pullout_day', e.target.value)}
@@ -946,6 +953,7 @@ const BillingConfig: React.FC = () => {
                     </label>
                     <div className="relative">
                       <input
+                        aria-label="Convenience Fee (%)"
                         type="number"
                         step="0.01"
                         value={billingConfigInput.convenience_fee_percentage}
@@ -973,6 +981,7 @@ const BillingConfig: React.FC = () => {
                       Prepaid Pre-Expiry Notice (Days)
                     </label>
                     <input
+                      aria-label="Prepaid Pre-Expiry Notice (Days)"
                       type="number"
                       value={billingConfigInput.prepaid_pre_expiry_days}
                       onChange={(e) => handleBillingConfigInputChange('prepaid_pre_expiry_days', e.target.value)}

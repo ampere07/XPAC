@@ -88,13 +88,14 @@ const ExpensesLogDetails: React.FC<ExpensesLogDetailsProps> = ({
           {formatDate(expenseRecord.date)}
         </h1>
         <div className="flex items-center space-x-2">
-          <button className={`p-2 rounded transition-colors ${isDarkMode
+          <button aria-label="Delete expense" className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
               : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
             }`}>
             <Trash2 size={18} />
           </button>
           <button
+            aria-label="Edit expense"
             className="p-2 rounded transition-colors text-white"
             style={{
               backgroundColor: colorPalette?.primary || '#7c3aed'
@@ -110,25 +111,25 @@ const ExpensesLogDetails: React.FC<ExpensesLogDetailsProps> = ({
           >
             <Edit size={18} />
           </button>
-          <button className={`p-2 rounded transition-colors ${isDarkMode
+          <button aria-label="Previous expense" className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
               : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
             }`}>
             <ChevronLeft size={18} />
           </button>
-          <button className={`p-2 rounded transition-colors ${isDarkMode
+          <button aria-label="Next expense" className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
               : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
             }`}>
             <ChevronRightNav size={18} />
           </button>
-          <button className={`p-2 rounded transition-colors ${isDarkMode
+          <button aria-label="Expand details" className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
               : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
             }`}>
             <Maximize2 size={18} />
           </button>
-          <button className={`p-2 rounded transition-colors ${isDarkMode
+          <button aria-label="Close" className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
               : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
             }`}>

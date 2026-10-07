@@ -926,6 +926,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
         <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
           }`}>
           <input
+            aria-label={`${label}`}
             type="file"
             accept="image/*"
             onChange={(e) => {
@@ -1446,6 +1447,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   />
                   {(formData.referredBy || referredBySearch) && (
                     <button
+                      aria-label="Clear referred by"
                       type="button"
                       onClick={() => {
                         // Clearing must drop the id too, or save writes the old
@@ -1460,6 +1462,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                     </button>
                   )}
                   <button
+                    aria-label={isReferredByOpen ? 'Close referred by list' : 'Open referred by list'}
                     type="button"
                     onClick={() => setIsReferredByOpen(!isReferredByOpen)}
                     className={`ml-2 transition-transform duration-200 ${isReferredByOpen ? 'rotate-180' : ''}`}
@@ -1484,6 +1487,8 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                           const fullName = `${agent.first_name || ''} ${agent.middle_initial || ''} ${agent.last_name || ''}`.replace(/\s+/g, ' ').trim();
                           return (
                             <div
+                              role="option"
+                              aria-label={`Select ${agent.username}`}
                               key={agent.id}
                               className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.referredBy === fullName ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                               onClick={() => {
@@ -1527,6 +1532,8 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
                 {isReferredByOpen && (
                   <div
+                    role="button"
+                    aria-label="Close list"
                     className="fixed inset-0 z-40 bg-transparent"
                     onClick={() => {
                       setIsReferredByOpen(false);
@@ -1543,7 +1550,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Date Installed<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <input type="date" value={formData.dateInstalled} onChange={(e) => handleInputChange('dateInstalled', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.dateInstalled ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <input aria-label="Date Installed" type="date" value={formData.dateInstalled} onChange={(e) => handleInputChange('dateInstalled', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.dateInstalled ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`} />
                     <Calendar className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
@@ -1561,7 +1568,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Usage Type<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.usageType} onChange={(e) => handleInputChange('usageType', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.usageType ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Usage Type" value={formData.usageType} onChange={(e) => handleInputChange('usageType', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.usageType ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value=""></option>
@@ -1590,7 +1597,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>First Name<span className="text-red-500">*</span></label>
-              <input type="text" value={formData.firstName} onChange={(e) => handleInputChange('firstName', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.firstName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="First Name" type="text" value={formData.firstName} onChange={(e) => handleInputChange('firstName', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.firstName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
@@ -1600,6 +1607,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Middle Initial</label>
               <input
+                aria-label="Middle Initial"
                 type="text"
                 value={formData.middleInitial}
                 onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -1616,7 +1624,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Last Name<span className="text-red-500">*</span></label>
-              <input type="text" value={formData.lastName} onChange={(e) => handleInputChange('lastName', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.lastName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="Last Name" type="text" value={formData.lastName} onChange={(e) => handleInputChange('lastName', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.lastName ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
@@ -1625,7 +1633,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Contact Number<span className="text-red-500">*</span></label>
-              <input type="text" value={formData.contactNumber} onChange={(e) => handleInputChange('contactNumber', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.contactNumber ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="Contact Number" type="text" value={formData.contactNumber} onChange={(e) => handleInputChange('contactNumber', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.contactNumber ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.contactNumber && <p className="text-red-500 text-xs mt-1">{errors.contactNumber}</p>}
@@ -1634,14 +1642,14 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Second Contact Number</label>
-              <input type="text" value={formData.secondContactNumber} onChange={(e) => handleInputChange('secondContactNumber', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
+              <input aria-label="Second Contact Number" type="text" value={formData.secondContactNumber} onChange={(e) => handleInputChange('secondContactNumber', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
                 }`} />
             </div>
 
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Applicant Email Address<span className="text-red-500">*</span></label>
-              <input type="email" value={formData.email} onChange={(e) => handleInputChange('email', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.email ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="Applicant Email Address" type="email" value={formData.email} onChange={(e) => handleInputChange('email', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.email ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
@@ -1650,7 +1658,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Address<span className="text-red-500">*</span></label>
-              <input type="text" value={formData.address} onChange={(e) => handleInputChange('address', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.address ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="Address" type="text" value={formData.address} onChange={(e) => handleInputChange('address', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${errors.address ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.address && <p className="text-red-500 text-xs mt-1">{errors.address}</p>}
@@ -1660,7 +1668,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Region<span className="text-red-500">*</span></label>
               <div className="relative">
-                <select value={formData.region} onChange={(e) => handleInputChange('region', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.region ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                <select aria-label="Region" value={formData.region} onChange={(e) => handleInputChange('region', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.region ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                   } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                   }`}>
                   <option value="">Select Region</option>
@@ -1684,6 +1692,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 }`}>City<span className="text-red-500">*</span></label>
               <div className="relative">
                 <select
+                  aria-label="City"
                   value={formData.city}
                   onChange={(e) => handleInputChange('city', e.target.value)}
                   disabled={!formData.region}
@@ -1712,6 +1721,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 }`}>Barangay<span className="text-red-500">*</span></label>
               <div className="relative">
                 <select
+                  aria-label="Barangay"
                   value={formData.barangay}
                   onChange={(e) => handleInputChange('barangay', e.target.value)}
                   disabled={!formData.city}
@@ -1760,7 +1770,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Choose Plan<span className="text-red-500">*</span></label>
               <div className="relative">
-                <select value={formData.choosePlan} onChange={(e) => handleInputChange('choosePlan', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.choosePlan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                <select aria-label="Choose Plan" value={formData.choosePlan} onChange={(e) => handleInputChange('choosePlan', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.choosePlan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                   } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                   }`}>
                   <option value="">Select Plan</option>
@@ -1789,7 +1799,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Status<span className="text-red-500">*</span></label>
               <div className="relative">
-                <select value={formData.status} onChange={(e) => handleInputChange('status', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.status ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                <select aria-label="Status" value={formData.status} onChange={(e) => handleInputChange('status', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.status ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                   } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                   }`}>
                   <option value="Confirmed">Confirmed</option>
@@ -1833,7 +1843,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Router Model<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.routerModel} onChange={(e) => handleInputChange('routerModel', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.routerModel ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Router Model" value={formData.routerModel} onChange={(e) => handleInputChange('routerModel', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.routerModel ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value=""></option>
@@ -1858,7 +1868,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 <div>
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Modem SN<span className="text-red-500">*</span></label>
-                  <input type="text" value={formData.modemSN} onChange={(e) => handleInputChange('modemSN', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.modemSN ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  <input aria-label="Modem SN" type="text" value={formData.modemSN} onChange={(e) => handleInputChange('modemSN', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.modemSN ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                     } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     }`} />
                   {errors.modemSN && (
@@ -1873,7 +1883,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>IP<span className="text-red-500">*</span></label>
-                    <input type="text" value={formData.ip} onChange={(e) => handleInputChange('ip', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.ip ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <input aria-label="IP" type="text" value={formData.ip} onChange={(e) => handleInputChange('ip', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.ip ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`} />
                     {errors.ip && (
@@ -1889,7 +1899,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">Port Label Image<span className="text-red-500">*</span></label>
                     <div className="relative w-full h-32 bg-gray-800 border border-gray-700 rounded flex items-center justify-center cursor-pointer hover:bg-gray-750">
-                      <input type="file" accept="image/*" onChange={(e) => e.target.files && handleImageUpload('portLabelImage', e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer" />
+                      <input aria-label="Port Label Image" type="file" accept="image/*" onChange={(e) => e.target.files && handleImageUpload('portLabelImage', e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer" />
                       {formData.portLabelImage ? (
                         <div className="text-green-500 flex items-center"><Camera className="mr-2" size={20} />Image uploaded</div>
                       ) : (
@@ -1930,6 +1940,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                         className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                       />
                       <button
+                        aria-label={isLcpnapOpen ? 'Close LCP/NAP list' : 'Open LCP/NAP list'}
                         type="button"
                         onClick={() => setIsLcpnapOpen(!isLcpnapOpen)}
                         className={`ml-2 transition-transform duration-200 ${isLcpnapOpen ? 'rotate-180' : ''}`}
@@ -1950,6 +1961,8 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                             .filter(ln => ln.lcpnap_name.toLowerCase().includes((formData.lcpnap || '').toLowerCase()))
                             .map((lcpnap) => (
                               <div
+                                role="option"
+                                aria-label={`Select ${lcpnap.lcpnap_name}`}
                                 key={lcpnap.id}
                                 className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode
                                   ? 'hover:bg-gray-700 text-gray-200'
@@ -1980,6 +1993,8 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                     {/* Click outside to close */}
                     {isLcpnapOpen && (
                       <div
+                        role="button"
+                        aria-label="Close list"
                         className="fixed inset-0 z-40 bg-transparent"
                         onClick={() => {
                           setIsLcpnapOpen(false);
@@ -1999,7 +2014,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>PORT<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.port} onChange={(e) => handleInputChange('port', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.port ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="PORT" value={formData.port} onChange={(e) => handleInputChange('port', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.port ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="">Select PORT</option>
@@ -2033,7 +2048,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>VLAN<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.vlan} onChange={(e) => handleInputChange('vlan', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.vlan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="VLAN" value={formData.vlan} onChange={(e) => handleInputChange('vlan', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none ${errors.vlan ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="">Select VLAN</option>
@@ -2062,7 +2077,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Username<span className="text-red-500">*</span></label>
-              <input type="text" value={formData.username} onChange={(e) => handleInputChange('username', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.username ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+              <input aria-label="Username" type="text" value={formData.username} onChange={(e) => handleInputChange('username', e.target.value)} className={`w-full px-3 py-2 border rounded ${errors.username ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                 } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                 }`} />
               {errors.username && <p className="text-red-500 text-xs mt-1">{errors.username}</p>}
@@ -2074,7 +2089,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit By<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_by ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Visit By" value={formData.visit_by} onChange={(e) => handleInputChange('visit_by', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_by ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="">Select Visit By</option>
@@ -2100,7 +2115,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_with ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Visit With" value={formData.visit_with} onChange={(e) => handleInputChange('visit_with', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_with ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="">Select Visit With</option>
@@ -2127,7 +2142,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Visit With(Other)<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_with_other ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Visit With(Other)" value={formData.visit_with_other} onChange={(e) => handleInputChange('visit_with_other', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.visit_with_other ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="">Select Visit With(Other)</option>
@@ -2158,7 +2173,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Onsite Status<span className="text-red-500">*</span></label>
                   <div className="relative">
-                    <select value={formData.onsiteStatus} onChange={(e) => handleInputChange('onsiteStatus', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.onsiteStatus ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <select aria-label="Onsite Status" value={formData.onsiteStatus} onChange={(e) => handleInputChange('onsiteStatus', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.onsiteStatus ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`}>
                       <option value="In Progress">In Progress</option>
@@ -2176,7 +2191,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>Onsite Remarks<span className="text-red-500">*</span></label>
-                    <textarea value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded resize-none focus:outline-none focus:border-orange-500 ${errors.onsiteRemarks ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                    <textarea aria-label="Onsite Remarks" value={formData.onsiteRemarks} onChange={(e) => handleInputChange('onsiteRemarks', e.target.value)} rows={3} className={`w-full px-3 py-2 border rounded resize-none focus:outline-none focus:border-orange-500 ${errors.onsiteRemarks ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                       } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                       }`} />
                     {errors.onsiteRemarks && (
@@ -2262,7 +2277,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div className="pt-4 border-t border-gray-700">
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Modified By<span className="text-red-500">*</span></label>
-              <input type="email" value={formData.modifiedBy} readOnly className={`w-full px-3 py-2 border rounded cursor-not-allowed ${isDarkMode ? 'bg-gray-700 border-gray-700 text-gray-400' : 'bg-gray-100 border-gray-200 text-gray-500'
+              <input aria-label="Modified By" type="email" value={formData.modifiedBy} readOnly className={`w-full px-3 py-2 border rounded cursor-not-allowed ${isDarkMode ? 'bg-gray-700 border-gray-700 text-gray-400' : 'bg-gray-100 border-gray-200 text-gray-500'
                 }`} />
             </div>
 
@@ -2270,7 +2285,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Modified Date<span className="text-red-500">*</span></label>
               <div className="relative">
-                <input type="text" value={formData.modifiedDate} readOnly className={`w-full px-3 py-2 border rounded cursor-not-allowed pr-10 ${isDarkMode ? 'bg-gray-700 border-gray-700 text-gray-400' : 'bg-gray-100 border-gray-200 text-gray-500'
+                <input aria-label="Modified Date" type="text" value={formData.modifiedDate} readOnly className={`w-full px-3 py-2 border rounded cursor-not-allowed pr-10 ${isDarkMode ? 'bg-gray-700 border-gray-700 text-gray-400' : 'bg-gray-100 border-gray-200 text-gray-500'
                   }`} />
                 <Calendar className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                   }`} size={20} />
@@ -2280,7 +2295,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Contract Link</label>
-              <input type="text" value={formData.contractLink} onChange={(e) => handleInputChange('contractLink', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
+              <input aria-label="Contract Link" type="text" value={formData.contractLink} onChange={(e) => handleInputChange('contractLink', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
                 }`} />
             </div>
 
@@ -2289,12 +2304,12 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 }`}>Contract Template<span className="text-red-500">*</span></label>
               <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                 }`}>
-                <input type="number" value={formData.contractTemplate} onChange={(e) => handleInputChange('contractTemplate', e.target.value)} className={`flex-1 px-3 py-2 bg-transparent focus:outline-none ${isDarkMode ? 'text-white' : 'text-gray-900'
+                <input aria-label="Contract Template" type="number" value={formData.contractTemplate} onChange={(e) => handleInputChange('contractTemplate', e.target.value)} className={`flex-1 px-3 py-2 bg-transparent focus:outline-none ${isDarkMode ? 'text-white' : 'text-gray-900'
                   }`} />
                 <div className="flex">
-                  <button type="button" onClick={() => handleNumberChange('contractTemplate', false)} className={`px-3 py-2 border-l transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'
+                  <button aria-label="Decrease contract template" type="button" onClick={() => handleNumberChange('contractTemplate', false)} className={`px-3 py-2 border-l transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'
                     }`}><Minus size={16} /></button>
-                  <button type="button" onClick={() => handleNumberChange('contractTemplate', true)} className={`px-3 py-2 border-l transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'
+                  <button aria-label="Increase contract template" type="button" onClick={() => handleNumberChange('contractTemplate', true)} className={`px-3 py-2 border-l transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'
                     }`}><Plus size={16} /></button>
                 </div>
               </div>
@@ -2305,7 +2320,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Assigned Email<span className="text-red-500">*</span></label>
               <div className="relative">
-                <select value={formData.assignedEmail} onChange={(e) => handleInputChange('assignedEmail', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.assignedEmail ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                <select aria-label="Assigned Email" value={formData.assignedEmail} onChange={(e) => handleInputChange('assignedEmail', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.assignedEmail ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                   } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                   }`}>
                   <option value="">Select Assigned Email</option>
@@ -2332,6 +2347,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                       <div className="flex-1">
                         <div className="relative">
                           <select
+                            aria-label="Items"
                             value={item.itemId}
                             onChange={(e) => handleItemChange(index, 'itemId', e.target.value)}
                             className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'
@@ -2371,6 +2387,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
 
                       {orderItems.length > 1 && item.itemId && (
                         <button
+                          aria-label="Remove item"
                           type="button"
                           onClick={() => handleRemoveItem(index)}
                           className="p-2 text-red-500 hover:text-red-400 transition-colors"
@@ -2395,7 +2412,7 @@ const JobOrderEditFormModal: React.FC<JobOrderEditFormModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Status Remarks<span className="text-red-500">*</span></label>
                 <div className="relative">
-                  <select value={formData.statusRemarks} onChange={(e) => handleInputChange('statusRemarks', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.statusRemarks ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
+                  <select aria-label="Status Remarks" value={formData.statusRemarks} onChange={(e) => handleInputChange('statusRemarks', e.target.value)} className={`w-full px-3 py-2 border rounded appearance-none focus:outline-none focus:border-orange-500 ${errors.statusRemarks ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                     } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     }`}>
                     <option value="">Select Status Remarks</option>

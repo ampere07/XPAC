@@ -411,6 +411,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                 )}
               </button>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
               >
@@ -428,6 +429,8 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               <div className="relative" ref={accountDropdownRef}>
                 {/* Custom Searchable Dropdown */}
                 <div
+                  role="button"
+                  aria-label="Account No."
                   className={`w-full px-3 py-2 border rounded cursor-pointer ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                     } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
                     }`}
@@ -486,6 +489,8 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
 
                           return (
                             <div
+                              role="option"
+                              aria-label={`Select account ${accountNumber}`}
                               key={account.id}
                               className={`px-3 py-2 cursor-pointer ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
                                 } ${formData.accountNo === accountNumber
@@ -532,6 +537,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Discount Status"
                   value={formData.status}
                   onChange={(e) => handleInputChange('status', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 cursor-pointer ${isDarkMode
@@ -557,6 +563,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               <div className="flex items-center">
                 <div className="flex-1 relative">
                   <input
+                    aria-label="Discount Amount"
                     type="text"
                     value={`₱ ${formData.discountAmount}`}
                     onChange={(e) => handleInputChange('discountAmount', e.target.value.replace('₱ ', '').replace(/[^0-9.]/g, ''))}
@@ -567,6 +574,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                 </div>
                 <div className="flex flex-col">
                   <button
+                    aria-label="Decrease discount amount"
                     type="button"
                     onClick={() => handleDiscountAmountChange('decrease')}
                     className={`px-3 py-1 border border-l-0 text-sm ${isDarkMode
@@ -577,6 +585,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                     <Minus size={16} />
                   </button>
                   <button
+                    aria-label="Increase discount amount"
                     type="button"
                     onClick={() => handleDiscountAmountChange('increase')}
                     className={`px-3 py-1 border border-l-0 border-t-0 rounded-r text-sm ${isDarkMode
@@ -598,6 +607,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Processed By"
                   value={formData.processedByUserId || ''}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -628,6 +638,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Approved By"
                   value={formData.approvedByUserId || ''}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -656,6 +667,7 @@ const DiscountFormModal: React.FC<DiscountFormModalProps> = ({
                 Remarks
               </label>
               <textarea
+                aria-label="Remarks"
                 value={formData.remarks}
                 onChange={(e) => handleInputChange('remarks', e.target.value)}
                 rows={4}

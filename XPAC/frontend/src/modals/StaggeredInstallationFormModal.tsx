@@ -430,6 +430,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
                 {loading ? 'Saving...' : 'Save'}
               </button>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
               >
@@ -445,6 +446,8 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
               </label>
               <div className="relative" ref={accountDropdownRef}>
                 <div
+                  role="button"
+                  aria-label="Account No."
                   className={`w-full px-3 py-2 border rounded cursor-pointer ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'} ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
                   onClick={() => setIsAccountDropdownOpen(!isAccountDropdownOpen)}
                 >
@@ -491,6 +494,8 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
 
                           return (
                             <div
+                              role="option"
+                              aria-label={`Select account ${accountNumber}`}
                               key={account.id}
                               className={`px-3 py-2 cursor-pointer ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${formData.accountNo === accountNumber ? (isDarkMode ? 'bg-gray-700' : 'bg-gray-100') : ''}`}
                               onClick={() => {
@@ -534,6 +539,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Full Name</label>
               <input
+                aria-label="Full Name"
                 type="text"
                 value={formData.fullName}
                 readOnly
@@ -544,6 +550,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Contact Number</label>
               <input
+                aria-label="Contact Number"
                 type="text"
                 value={formData.contactNo}
                 readOnly
@@ -554,6 +561,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Email Address</label>
               <input
+                aria-label="Email Address"
                 type="email"
                 value={formData.emailAddress}
                 readOnly
@@ -564,6 +572,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Address</label>
               <input
+                aria-label="Address"
                 type="text"
                 value={formData.address}
                 readOnly
@@ -574,6 +583,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Plan</label>
               <input
+                aria-label="Plan"
                 type="text"
                 value={formData.plan}
                 readOnly
@@ -584,6 +594,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Staggered Install No.</label>
               <input
+                aria-label="Staggered Install No."
                 type="text"
                 value={formData.staggeredInstallNo}
                 readOnly
@@ -595,6 +606,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Staggered Date</label>
               <div className="relative">
                 <input
+                  aria-label="Staggered Date"
                   type="text"
                   value={formData.staggeredDate}
                   onChange={(e) => handleInputChange('staggeredDate', e.target.value)}
@@ -607,6 +619,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Staggered Balance</label>
               <input
+                aria-label="Staggered Balance"
                 type="text"
                 value={`₱ ${formData.staggeredBalance}`}
                 onChange={(e) => handleInputChange('staggeredBalance', e.target.value.replace('₱ ', '').replace(/[^0-9.]/g, ''))}
@@ -617,6 +630,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Months to Pay</label>
               <input
+                aria-label="Months to Pay"
                 type="number"
                 min="0"
                 value={formData.monthsToPay}
@@ -628,6 +642,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Monthly Payment</label>
               <input
+                aria-label="Monthly Payment"
                 type="text"
                 value={`₱ ${formData.monthlyPayment}`}
                 readOnly
@@ -640,6 +655,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Modified By</label>
               <div className="relative">
                 <select
+                  aria-label="Modified By"
                   value={formData.modifiedBy}
                   onChange={(e) => handleInputChange('modifiedBy', e.target.value)}
                   disabled={loadingUsers}
@@ -661,6 +677,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Modified Date</label>
               <div className="relative">
                 <input
+                  aria-label="Modified Date"
                   type="text"
                   value={formData.modifiedDate}
                   readOnly
@@ -673,6 +690,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>User Email</label>
               <input
+                aria-label="User Email"
                 type="email"
                 value={formData.userEmail}
                 readOnly
@@ -683,6 +701,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Remarks</label>
               <textarea
+                aria-label="Remarks"
                 value={formData.remarks}
                 onChange={(e) => handleInputChange('remarks', e.target.value)}
                 rows={3}
@@ -693,6 +712,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Barangay</label>
               <input
+                aria-label="Barangay"
                 type="text"
                 value={formData.barangay}
                 readOnly
@@ -703,6 +723,7 @@ const StaggeredInstallationFormModal: React.FC<StaggeredInstallationFormModalPro
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>City</label>
               <input
+                aria-label="City"
                 type="text"
                 value={formData.city}
                 readOnly

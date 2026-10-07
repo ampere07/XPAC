@@ -8,7 +8,8 @@ import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import { planService, Plan } from '../services/planService';
-import { paymentService } from '../services/paymentService';
+import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
+import PaymentTotalBreakdown, { postpaidBalanceLines } from '../components/PaymentTotalBreakdown';
 import { API_BASE_URL } from '../config/api';
 import { useBillingStore } from '../store/billingStore';
 import { createAgentReferralMatcher, getStoredAgentIdentity } from '../utils/agentReferral';
@@ -267,23 +268,18 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // file -> ₱900 collected. At least ₱1.00 is always charged (CheckoutDiscountService::
   // applicableAmount). This is the preview; approval spends them and credits the account the full
   // plan price (TransactionController::creditPrepaidCheckoutDiscounts).
-  const [availableDiscount, setAvailableDiscount] = useState<number>(0);
-  useEffect(() => {
-    setAvailableDiscount(0);
-    if (!isOpen || !isPrepaid || !formData.accountNo) return;
-    let cancelled = false;
-    paymentService.getAvailableDiscount(formData.accountNo).then(discount => {
-      if (!cancelled) setAvailableDiscount(discount.checkout);
-    });
-    return () => { cancelled = true; };
-  }, [isOpen, isPrepaid, formData.accountNo]);
+  const accountDiscounts = useAccountDiscounts(formData.accountNo, isOpen);
+  const availableDiscount = accountDiscounts.checkout;
 
-  const selectedPlanPrice = Number(plans.find(p => p.id === formData.selectedPlanId)?.price ?? 0);
+  const selectedPlan = plans.find(p => p.id === formData.selectedPlanId);
+  const selectedPlanPrice = Number(selectedPlan?.price ?? 0);
   const discountAmount = showPlanPicker && selectedPlanPrice > 1 && availableDiscount > 0
     ? Math.round(Math.min(availableDiscount, selectedPlanPrice - 1) * 100) / 100
     : 0;
   const netPlanAmount = Math.round((selectedPlanPrice - discountAmount) * 100) / 100;
-
+  const postpaidBalance = parseFloat(formData.accountBalance) || 0;
+  const receivedAmount = parseFloat(formData.receivedPayment) || 0;
+  const balanceAfterPayment = Math.round((postpaidBalance - receivedAmount) * 100) / 100;
   // Take the discount off the amount the plan price was filled in with. Only while the field
   // still holds the full price (prefilled, untouched), and never on an edit, so a typed amount or
   // a recorded transaction is not changed behind the cashier's back.
@@ -1044,6 +1040,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             {!showAccountPicker ? (
               <div className="relative">
                 <select
+                  aria-label="Account No."
                   value={formData.accountNo}
                   onChange={(e) => handleInputChange('accountNo', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.accountNo ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -1084,6 +1081,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                       visibleAccounts.map(o => (
                         <button
                           key={o.accountNo}
+                          aria-label={`Select account ${o.label}`}
                           type="button"
                           // onMouseDown, not onClick: it fires before the input's blur closes the list.
                           onMouseDown={(e) => { e.preventDefault(); handlePickAccount(o.accountNo); }}
@@ -1112,6 +1110,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Full Name
             </label>
             <input
+              aria-label="Full Name"
               type="text"
               value={formData.fullName}
               readOnly
@@ -1127,6 +1126,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               ContactNo
             </label>
             <input
+              aria-label="ContactNo"
               type="text"
               value={formData.contactNo}
               readOnly
@@ -1147,6 +1147,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               <>
                 <div className="relative">
                   <select
+                    aria-label="Plan"
                     value={formData.selectedPlanId ?? ''}
                     disabled={isLoadingPlans || plans.length === 0}
                     onChange={(e) => {
@@ -1190,12 +1191,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                   </select>
                   <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
                 </div>
-                {discountAmount > 0 && (
-                  <p className="text-xs mt-1 font-medium text-green-500">
-                    ₱{selectedPlanPrice.toFixed(2)} plan − ₱{discountAmount.toFixed(2)} discount / rebate = ₱{netPlanAmount.toFixed(2)} to collect.
-                    The discount is applied on approval and the account is credited the full plan price.
-                  </p>
-                )}
                 {billingRecord?.pendingPlanId ? (
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`}>
                     A plan change is already scheduled
@@ -1248,6 +1243,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               </>
             ) : (
               <input
+                aria-label="Plan"
                 type="text"
                 value={formData.plan}
                 readOnly
@@ -1265,6 +1261,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Account Balance<span className="text-red-500">*</span>
             </label>
             <input
+              aria-label="Account Balance"
               type="text"
               value={`₱ ${formData.accountBalance}`}
               readOnly
@@ -1282,6 +1279,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             </label>
             <div className="relative">
               <input
+                aria-label="Payment Date"
                 type="date"
                 value={formData.paymentDate}
                 onChange={(e) => handleInputChange('paymentDate', e.target.value)}
@@ -1305,6 +1303,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 {label}{required && <span className="text-red-500">*</span>}
               </label>
               <input
+                aria-label={`${label} amount`}
                 type="text"
                 inputMode="decimal"
                 value={`₱ ${formData[field]}`}
@@ -1332,6 +1331,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             <div className="flex items-center">
               <div className="flex-1 relative">
                 <input
+                  aria-label="Received Payment"
                   type="text"
                   value={`₱ ${formData.receivedPayment}`}
                   readOnly={isAgentSplit}
@@ -1353,6 +1353,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               {!isAgentSplit && (
               <div className="flex flex-col">
                 <button
+                  aria-label="Increase received payment"
                   type="button"
                   onClick={() => handleReceivedPaymentChange('increase')}
                   className={`px-3 py-1 border text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
@@ -1361,6 +1362,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                   <Plus size={16} />
                 </button>
                 <button
+                  aria-label="Decrease received payment"
                   type="button"
                   onClick={() => handleReceivedPaymentChange('decrease')}
                   className={`px-3 py-1 border rounded-r text-sm transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-white border-gray-700' : 'bg-gray-200 hover:bg-gray-300 text-gray-900 border-gray-300'
@@ -1374,6 +1376,35 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             {errors.receivedPayment && <p className="text-red-500 text-xs mt-1">{errors.receivedPayment}</p>}
           </div>
 
+          {!isPrepaid && formData.accountNo && (
+            <PaymentTotalBreakdown
+              lines={[
+                ...postpaidBalanceLines(postpaidBalance, accountDiscounts.latestBillTotal, accountDiscounts.latestBillDiscount),
+                ...(receivedAmount > 0 ? [{ label: 'Received payment', amount: -receivedAmount }] : []),
+              ]}
+              totalLabel="Balance after payment"
+              total={balanceAfterPayment}
+              notes={[
+                ...(balanceAfterPayment < 0 ? [`₱${Math.abs(balanceAfterPayment).toFixed(2)} overpayment stays on the account as credit.`] : []),
+                ...(accountDiscounts.discountsOnFile > 0 ? [`₱${accountDiscounts.discountsOnFile.toFixed(2)} discount on file — comes off the next bill, not this payment.`] : []),
+              ]}
+              isDarkMode={isDarkMode}
+            />
+          )}
+
+          {showPlanPicker && selectedPlan && (
+            <PaymentTotalBreakdown
+              lines={[
+                { label: `${selectedPlan.name} plan`, amount: selectedPlanPrice },
+                ...(discountAmount > 0 ? [{ label: 'Discount / rebate', amount: -discountAmount, isDiscount: true }] : []),
+              ]}
+              totalLabel="To collect"
+              total={netPlanAmount}
+              notes={discountAmount > 0 ? ['The discount is applied on approval and the account is credited the full plan price.'] : []}
+              isDarkMode={isDarkMode}
+            />
+          )}
+
           {/* Processed By */}
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -1384,6 +1415,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               // Technicians pick who collected the payment from the technicians table.
               <div className="relative">
                 <select
+                  aria-label="Processed By"
                   value={formData.processedBy}
                   onChange={(e) => handleInputChange('processedBy', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -1402,6 +1434,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               </div>
             ) : (
               <input
+                aria-label="Processed By"
                 type="text"
                 value={formData.processedBy}
                 readOnly
@@ -1420,6 +1453,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             </label>
             <div className="relative">
               <select
+                aria-label="Payment Method"
                 value={formData.paymentMethod}
                 onChange={(e) => handleInputChange('paymentMethod', e.target.value)}
                 className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.paymentMethod ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
@@ -1445,6 +1479,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Reference No.<span className="text-red-500">*</span>
             </label>
             <input
+              aria-label="Reference No."
               type="text"
               value={formData.referenceNo}
               onChange={(e) => handleInputChange('referenceNo', e.target.value)}
@@ -1462,6 +1497,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               OR No.<span className="text-red-500">*</span>
             </label>
             <input
+              aria-label="OR No."
               type="text"
               value={formData.orNo}
               onChange={(e) => handleInputChange('orNo', e.target.value)}
@@ -1485,6 +1521,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 const isSelected = formData.transactionType === type;
                 return (
                   <button
+                    aria-label={`Set transaction type ${type}`}
                     key={type}
                     type="button"
                     onClick={() => handleTransactionTypeChange(type)}
@@ -1531,6 +1568,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               Remarks
             </label>
             <textarea
+              aria-label="Remarks"
               value={formData.remarks}
               onChange={(e) => handleInputChange('remarks', e.target.value)}
               rows={3}
@@ -1548,6 +1586,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             <div className={`relative w-full border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
               } ${errors.image ? 'border-red-500' : ''} ${imagePreview ? 'h-auto' : 'h-48'}`}>
               <input
+                aria-label="Payment Proof Image"
                 type="file"
                 accept="image/*"
                 onChange={handleImageUpload}

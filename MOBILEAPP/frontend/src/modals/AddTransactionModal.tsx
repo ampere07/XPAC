@@ -14,6 +14,7 @@ import { planService, Plan } from '../services/planService';
 import { settingsColorPaletteService } from '../services/settingsColorPaletteService';
 import { SearchablePicker, SearchablePickerTrigger } from '../components/SearchablePicker';
 import ImagePreview from '../components/ImagePreview';
+import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
 
 /**
  * A technician recording a payment from the Transaction List — the mobile counterpart of the
@@ -117,6 +118,20 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
   const showPlanPicker = isPrepaid && transactionType === 'Top Up';
   const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
+  const accountDiscounts = useAccountDiscounts(account?.accountNo, isOpen);
+  const planPrice = Number(selectedPlan?.price ?? 0);
+  const planDiscount = showPlanPicker && planPrice > 1 && accountDiscounts.checkout > 0
+    ? Math.round(Math.min(accountDiscounts.checkout, planPrice - 1) * 100) / 100
+    : 0;
+  const netPlanAmount = Math.round((planPrice - planDiscount) * 100) / 100;
+
+  useEffect(() => {
+    if (planDiscount <= 0) return;
+    const fullPrice = planPrice.toFixed(2);
+    const takeDiscountOff = (amount: string) => (amount === fullPrice ? netPlanAmount.toFixed(2) : amount);
+    if (isAgentUser) setCollectedPayment(takeDiscountOff);
+    else setReceivedPayment(takeDiscountOff);
+  }, [planDiscount, planPrice, netPlanAmount, isAgentUser, receivedPayment, collectedPayment]);
 
   const accountOptions = useMemo(() => accountRecords
     .filter(r => !!r.accountNo)
@@ -374,10 +389,26 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
               value={selectedPlan ? `${selectedPlan.name} - P${Number(selectedPlan.price).toFixed(2)}` : ''}
               placeholder="Select the plan this payment buys" onPress={() => openPicker('plan')} error={errors.plan} />
           )}
+          {planDiscount > 0 && (
+            <Text style={{ fontSize: 12, fontWeight: '500', color: '#16a34a', marginTop: -8, marginBottom: 14 }}>
+              P{planPrice.toFixed(2)} plan − P{planDiscount.toFixed(2)} discount / rebate = P{netPlanAmount.toFixed(2)} to collect.
+              The discount is applied on approval and the account is credited the full plan price.
+            </Text>
+          )}
 
           {isAgentUser && input('Collected Payment', collectedPayment, setCollectedPayment, 'collectedPayment', { keyboardType: 'decimal-pad', placeholder: '0.00' })}
           {isAgentUser && input('Agent Collected', agentCollected, setAgentCollected, 'agentCollected', { keyboardType: 'decimal-pad', placeholder: '0.00', optional: true })}
           {input(isAgentUser ? 'Received Payment (Collected + Agent)' : 'Received Payment', receivedPayment, setReceivedPayment, 'receivedPayment', { keyboardType: 'decimal-pad', placeholder: '0.00', readOnly: isAgentUser })}
+          {account && !isPrepaid && accountDiscounts.latestBillDiscount > 0 && (
+            <Text style={{ fontSize: 12, fontWeight: '500', color: '#16a34a', marginTop: -8, marginBottom: 6 }}>
+              Latest bill: P{accountDiscounts.latestBillDiscount.toFixed(2)} discount / rebate applied, already taken off the balance being paid.
+            </Text>
+          )}
+          {account && !isPrepaid && accountDiscounts.discountsOnFile > 0 && (
+            <Text style={{ fontSize: 12, fontWeight: '500', color: '#16a34a', marginTop: -2, marginBottom: 14 }}>
+              P{accountDiscounts.discountsOnFile.toFixed(2)} discount on file — comes off the next bill, not this payment.
+            </Text>
+          )}
 
           <View style={{ marginBottom: 14 }}>
             <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Payment Date<Text style={{ color: '#ef4444' }}> *</Text></Text>

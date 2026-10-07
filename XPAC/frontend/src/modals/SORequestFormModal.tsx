@@ -434,6 +434,7 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
                 Ticket ID<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Ticket ID"
                 type="text"
                 value={formData.ticketId}
                 readOnly
@@ -448,6 +449,7 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
                 Account No.<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Account No."
                 type="text"
                 value={formData.accountNo}
                 readOnly
@@ -469,6 +471,7 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
                 Username<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Username"
                 type="text"
                 value={formData.username}
                 readOnly
@@ -486,6 +489,7 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Concern"
                   value={formData.concern}
                   onChange={(e) => handleInputChange('concern', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-red-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'

@@ -2,10 +2,15 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 
 class Discount extends Model
 {
+    public const STATUSES = ['Pending', 'Unused', 'Used', 'Permanent', 'Monthly'];
+
     protected $table = 'discounts';
 
     protected $fillable = [
@@ -30,6 +35,32 @@ class Discount extends Model
         'used_date' => 'datetime',
         'processed_date' => 'datetime'
     ];
+
+    public static function canonicalStatus(?string $stored): ?string
+    {
+        if ($stored === null) {
+            return null;
+        }
+
+        $trimmed = trim($stored);
+        foreach (self::STATUSES as $status) {
+            if (strcasecmp($trimmed, $status) === 0) {
+                return $status;
+            }
+        }
+
+        return $trimmed;
+    }
+
+    protected function status(): Attribute
+    {
+        return Attribute::make(get: fn (?string $value) => self::canonicalStatus($value));
+    }
+
+    public function scopeWithStatus(Builder $query, array $statuses): Builder
+    {
+        return $query->whereIn(DB::raw('TRIM(status)'), $statuses);
+    }
 
     public function billingAccount()
     {

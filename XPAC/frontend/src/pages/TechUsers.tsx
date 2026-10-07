@@ -126,6 +126,7 @@ const TechUsers: React.FC = () => {
                     <div className="flex items-center gap-2">
                         <span>Show</span>
                         <select
+                            aria-label="Items per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -157,6 +158,7 @@ const TechUsers: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            aria-label="Refresh technicians"
                             onClick={() => refreshTechnicians()}
                             className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
                         >
@@ -164,6 +166,7 @@ const TechUsers: React.FC = () => {
                         </button>
                         {actions.canCreate && (
                         <button
+                            aria-label="Add technician"
                             onClick={() => { setSelectedTech(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
                             style={{ backgroundColor: colorPalette?.primary || '#3b82f6' }}
@@ -229,6 +232,7 @@ const TechUsers: React.FC = () => {
                                             <div className="flex items-center justify-end gap-2">
                                                 {actions.canEdit && (
                                                 <button
+                                                    aria-label="Edit technician"
                                                     onClick={() => { setSelectedTech(tech); setShowModal(true); }}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                 >
@@ -237,6 +241,7 @@ const TechUsers: React.FC = () => {
                                                 )}
                                                 {actions.canDelete && (
                                                 <button
+                                                    aria-label="Delete"
                                                     onClick={() => handleDeleteTech(tech.id)}
                                                     className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                 >

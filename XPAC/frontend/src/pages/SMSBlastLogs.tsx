@@ -274,6 +274,7 @@ const SMSBlastLogs: React.FC = () => {
           }`}>
           <div className="absolute top-4 right-4 z-10">
             <button
+              aria-label="Close"
               onClick={handleCloseDetails}
               className={`transition-colors rounded p-1 ${isDarkMode
                 ? 'text-gray-400 hover:text-white bg-gray-800'

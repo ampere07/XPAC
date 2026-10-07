@@ -17,9 +17,12 @@ import {
   Info,
   CircleArrowRight,
   Loader,
+  Trash2,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { update } from '../services/discountService';
+import { update, remove } from '../services/discountService';
+import { usePermissions } from '../hooks/usePermissions';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 
@@ -80,6 +83,7 @@ interface DiscountDetailsProps {
   discountRecord: DiscountRecord;
   onClose?: () => void;
   onApproveSuccess?: () => void;
+  onDeleteSuccess?: () => void;
   onViewCustomer?: (accountNo: string) => void;
   onPrevious?: () => void;
   onNext?: () => void;
@@ -89,6 +93,7 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
   discountRecord,
   onClose,
   onApproveSuccess,
+  onDeleteSuccess,
   onViewCustomer,
   onPrevious,
   onNext,
@@ -99,6 +104,11 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
   const [isApproving, setIsApproving] = useState<boolean>(false);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const { isSuperAdmin } = usePermissions();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+  const isUsedDiscount = String(discountRecord.discountStatus ?? '').toLowerCase() === 'used';
 
   const primary = colorPalette?.primary || '#7c3aed';
 
@@ -167,6 +177,38 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
       );
     } finally {
       setIsApproving(false);
+    }
+  };
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeleting) return;
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!discountRecord.id) {
+      setDeleteError('This discount has no ID, so it cannot be deleted.');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await remove(parseInt(discountRecord.id));
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(
+        error.response?.data?.message || error.message || 'The discount could not be deleted. Please try again.'
+      );
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -266,6 +308,17 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
             >
               <Check size={14} color="#ffffff" />
               <Text style={{ color: '#ffffff', fontSize: 13 }}>Approve</Text>
+            </TouchableOpacity>
+          )}
+          {isSuperAdmin && (
+            <TouchableOpacity
+              onPress={openDeleteModal}
+              disabled={isDeleting}
+              accessibilityRole="button"
+              accessibilityLabel="Delete Discount"
+              style={{ padding: 8, opacity: isDeleting ? 0.5 : 1 }}
+            >
+              <Trash2 size={18} color="#6b7280" />
             </TouchableOpacity>
           )}
           {onClose && (
@@ -422,6 +475,26 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
           </View>
         ) : null}
       </ScrollView>
+
+      <ConfirmDeleteModal
+        visible={showDeleteModal}
+        title="Delete Discount?"
+        description="This permanently removes the discount from the database. It cannot be undone."
+        details={[
+          { label: 'Account No:', value: discountRecord.accountNo },
+          { label: 'Customer:', value: discountRecord.fullName },
+          { label: 'Amount:', value: `₱${discountRecord.discountAmount.toFixed(2)}` },
+          { label: 'Status:', value: discountRecord.discountStatus },
+        ]}
+        warning={isUsedDiscount
+          ? 'This discount was already taken off a bill. Deleting it removes the record only; that bill keeps the discount.'
+          : undefined}
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Discount"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Confirm Approve Modal */}
       <Modal visible={showConfirmModal} transparent animationType="fade">

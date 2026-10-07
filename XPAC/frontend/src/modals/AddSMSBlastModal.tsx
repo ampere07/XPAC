@@ -356,6 +356,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                 {loading ? 'Saving...' : 'Save'}
                             </button>
                             <button
+                                aria-label="Close"
                                 onClick={onClose}
                                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                                     }`}
@@ -520,6 +521,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                                         />
                                         <button
+                                            aria-label="Close"
                                             type="button"
                                             onClick={() => {
                                                 if (isLcpnapOpen) {
@@ -547,6 +549,8 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                                     .filter(item => item.lcpnap_name.toLowerCase().includes(lcpnapSearch.toLowerCase()))
                                                     .map((item) => (
                                                         <div
+                                                            role="option"
+                                                            aria-label={`Select ${item.lcpnap_name}`}
                                                             key={item.id}
                                                             className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                                                             onClick={() => {
@@ -562,7 +566,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                         </div>
                                     )}
                                     {isLcpnapOpen && (
-                                        <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpnapOpen(false); setLcpnapSearch(''); }} />
+                                        <div role="button" aria-label="Close" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpnapOpen(false); setLcpnapSearch(''); }} />
                                     )}
                                 </div>
                                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -591,6 +595,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                                         />
                                         <button
+                                            aria-label="Close"
                                             type="button"
                                             onClick={() => {
                                                 if (isLcpOpen) {
@@ -618,6 +623,8 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                                     .filter(item => item.lcp_name.toLowerCase().includes(lcpSearch.toLowerCase()))
                                                     .map((item) => (
                                                         <div
+                                                            role="option"
+                                                            aria-label={`Select ${item.lcp_name}`}
                                                             key={item.id}
                                                             className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                                                             onClick={() => {
@@ -633,7 +640,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                         </div>
                                     )}
                                     {isLcpOpen && (
-                                        <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpOpen(false); setLcpSearch(''); }} />
+                                        <div role="button" aria-label="Close list" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsLcpOpen(false); setLcpSearch(''); }} />
                                     )}
                                 </div>
                                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -662,6 +669,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
                                         />
                                         <button
+                                            aria-label="Close"
                                             type="button"
                                             onClick={() => {
                                                 if (isBarangayOpen) {
@@ -689,6 +697,8 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                                     .filter(item => item.barangay.toLowerCase().includes(barangaySearch.toLowerCase()))
                                                     .map((item) => (
                                                         <div
+                                                            role="option"
+                                                            aria-label={`Select ${item.barangay}`}
                                                             key={item.id}
                                                             className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'} ${formData.selectedId === item.id ? (isDarkMode ? 'bg-orange-600/20 text-orange-400' : 'bg-orange-50 text-orange-600') : ''}`}
                                                             onClick={() => {
@@ -704,7 +714,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                         </div>
                                     )}
                                     {isBarangayOpen && (
-                                        <div className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsBarangayOpen(false); setBarangaySearch(''); }} />
+                                        <div role="button" aria-label="Close list" className="fixed inset-0 z-40 bg-transparent" onClick={() => { setIsBarangayOpen(false); setBarangaySearch(''); }} />
                                     )}
                                 </div>
                                 {errors.selectedId && <p className="text-red-500 text-xs mt-1">{errors.selectedId}</p>}
@@ -719,6 +729,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                 </label>
                                 <div className="flex items-center">
                                     <input
+                                        aria-label="Billing Day"
                                         type="number"
                                         value={formData.billingDay}
                                         onChange={(e) => handleInputChange('billingDay', parseInt(e.target.value) || 0)}
@@ -730,6 +741,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                     />
                                     <div className="flex flex-col ml-1">
                                         <button
+                                            aria-label="Decrease billing day"
                                             type="button"
                                             onClick={() => {
                                                 const newVal = Math.max(0, (formData.billingDay || 0) - 1);
@@ -741,6 +753,7 @@ const AddSMSBlastModal: React.FC<AddSMSBlastModalProps> = ({
                                             <Minus size={14} />
                                         </button>
                                         <button
+                                            aria-label="Increase billing day"
                                             type="button"
                                             onClick={() => {
                                                 const newVal = (formData.billingDay || 0) + 1;

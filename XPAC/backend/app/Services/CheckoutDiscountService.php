@@ -33,7 +33,7 @@ class CheckoutDiscountService
     public function available(string $accountNo): array
     {
         $discounts = Discount::where('account_no', $accountNo)
-            ->whereIn('status', self::ELIGIBLE_STATUSES)
+            ->withStatus(self::ELIGIBLE_STATUSES)
             ->get()
             ->filter(fn (Discount $d) => $this->isSpendable($d));
 

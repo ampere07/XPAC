@@ -7,7 +7,10 @@ import {
   Modal,
   ActivityIndicator,
 } from 'react-native';
-import { X, Info, ChevronDown, ChevronRight } from 'lucide-react-native';
+import { X, Info, ChevronDown, ChevronRight, Trash2 } from 'lucide-react-native';
+import { invoiceService } from '../services/invoiceService';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
+import { usePermissions } from '../hooks/usePermissions';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { relatedDataService } from '../services/relatedDataService';
 
@@ -48,6 +51,7 @@ interface InvoiceDetailsProps {
   invoiceRecord: InvoiceRecord;
   onViewCustomer?: (accountNo: string) => void;
   onClose?: () => void;
+  onDeleteSuccess?: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
@@ -99,6 +103,7 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({
   invoiceRecord,
   onViewCustomer,
   onClose,
+  onDeleteSuccess,
   onPrevious,
   onNext,
 }) => {
@@ -109,6 +114,34 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({
   const [expandedModal, setExpandedModal] = useState(false);
   const [fullRelatedStaggered, setFullRelatedStaggered] = useState<StaggeredPayment[]>([]);
   const [loadingStaggered, setLoadingStaggered] = useState(false);
+  const { isSuperAdmin } = usePermissions();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await invoiceService.deleteInvoice(Number(invoiceRecord.id));
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The invoice could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const primary = colorPalette?.primary || '#7c3aed';
 
@@ -172,11 +205,24 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({
             {invoiceRecord.invoiceNo || invoiceRecord.id}
           </Text>
         </View>
-        {onClose && (
-          <TouchableOpacity onPress={onClose} style={{ padding: 6 }}>
-            <X size={18} color="#6b7280" />
-          </TouchableOpacity>
-        )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          {isSuperAdmin && (
+            <TouchableOpacity
+              onPress={openDeleteModal}
+              disabled={isDeleting}
+              accessibilityRole="button"
+              accessibilityLabel="Delete Invoice"
+              style={{ padding: 6, opacity: isDeleting ? 0.5 : 1 }}
+            >
+              <Trash2 size={18} color="#6b7280" />
+            </TouchableOpacity>
+          )}
+          {onClose && (
+            <TouchableOpacity onPress={onClose} style={{ padding: 6 }}>
+              <X size={18} color="#6b7280" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
@@ -336,6 +382,26 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({
           )}
         </View>
       </ScrollView>
+
+      <ConfirmDeleteModal
+        visible={showDeleteModal}
+        title="Delete Invoice?"
+        description="This permanently removes the invoice record from the database. It cannot be undone."
+        details={[
+          { label: 'Invoice No:', value: String(invoiceRecord.invoiceNo || invoiceRecord.id) },
+          { label: 'Account No:', value: invoiceRecord.accountNo },
+          { label: 'Customer:', value: invoiceRecord.fullName },
+          { label: 'Invoice Date:', value: invoiceRecord.invoiceDate || '-' },
+          { label: 'Total Amount:', value: `₱${Number(invoiceRecord.totalAmountDue || 0).toFixed(2)}` },
+          { label: 'Status:', value: invoiceRecord.invoiceStatus || 'Unpaid' },
+        ]}
+        warning="Only the invoice record is removed. The account balance, the statement of account, and any discounts, rebates or payments applied to this bill stay as they are."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Invoice"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Expanded Staggered Modal */}
       <Modal visible={expandedModal} animationType="slide" presentationStyle="pageSheet">

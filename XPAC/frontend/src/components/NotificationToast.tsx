@@ -104,6 +104,8 @@ const NotificationToast: React.FC<ToastProps> = ({
                         {getIcon()}
                     </div>
                     <div
+                        role="button"
+                        aria-label={`Open ${title}`}
                         className="flex-1 min-w-0 pt-1 cursor-pointer group"
                         onClick={() => {
                             if (onClick) onClick();

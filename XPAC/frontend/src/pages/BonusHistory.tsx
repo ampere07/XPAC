@@ -338,6 +338,7 @@ const BonusHistory: React.FC = () => {
                             <div className="relative">
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                                 <input
+                                    aria-label="From"
                                     type="date"
                                     value={dateFrom}
                                     onChange={(e) => setDateFrom(e.target.value)}
@@ -348,6 +349,7 @@ const BonusHistory: React.FC = () => {
                             <div className="relative">
                                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                                 <input
+                                    aria-label="To"
                                     type="date"
                                     value={dateTo}
                                     onChange={(e) => setDateTo(e.target.value)}
@@ -446,6 +448,7 @@ const BonusHistory: React.FC = () => {
                                 <div>
                                     <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                                     <input
+                                        aria-label="From"
                                         type="date"
                                         value={dateFrom}
                                         onChange={(e) => setDateFrom(e.target.value)}
@@ -456,6 +459,7 @@ const BonusHistory: React.FC = () => {
                                 <div>
                                     <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                                     <input
+                                        aria-label="To"
                                         type="date"
                                         value={dateTo}
                                         onChange={(e) => setDateTo(e.target.value)}

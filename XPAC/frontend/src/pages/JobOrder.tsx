@@ -1964,6 +1964,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={dateInstalledFrom}
                   onChange={(e) => setDateInstalledFrom(e.target.value)}
@@ -1977,6 +1978,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={dateInstalledTo}
                   onChange={(e) => setDateInstalledTo(e.target.value)}
@@ -2045,6 +2047,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
               return (
                 <div key={status.id}>
                   <button
+                    aria-label={`Show ${status.name}`}
                     onClick={() => {
                       setSelectedLocation(status.id);
                       if (isMobile) {
@@ -2072,6 +2075,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                         </span>
                       )}
                       <button
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${status.name}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setExpandedStatuses(prev => {
@@ -2099,6 +2103,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                     return (
                       <div key={billing.id}>
                         <button
+                          aria-label={`Show ${billing.name}`}
                           onClick={() => {
                             setSelectedLocation(billing.id);
                             if (isMobile) {
@@ -2123,6 +2128,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                               {billing.count}
                             </span>
                             <button
+                              aria-label={`${isBillingExpanded ? 'Collapse' : 'Expand'} ${billing.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedStatuses(prev => {
@@ -2148,6 +2154,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                           const isBrgySelected = selectedLocation === brgy.id;
                           return (
                             <button
+                              aria-label={`Show ${brgy.name}`}
                               key={brgy.id}
                               onClick={() => {
                                 setSelectedLocation(brgy.id);
@@ -2306,7 +2313,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                       <>
                         {/* Mobile Overlay */}
                         <div className="md:hidden fixed inset-0 z-50">
-                          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setFilterDropdownOpen(false)} />
+                          <div role="button" aria-label="Close" className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setFilterDropdownOpen(false)} />
                           <div className={`absolute inset-x-4 top-20 bottom-4 border rounded shadow-lg flex flex-col ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                             }`}>
                             <div className={`p-3 border-b flex items-center justify-between ${isDarkMode ? 'border-gray-700' : 'border-gray-200'
@@ -2316,6 +2323,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                                 Column Visibility
                               </span>
                               <button
+                                aria-label="Close"
                                 onClick={() => setFilterDropdownOpen(false)}
                                 className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}
                               >
@@ -2601,6 +2609,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
                       <button
+                        aria-label={`Remove ${key} filter`}
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -2677,6 +2686,8 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                   <div className="space-y-0">
                     {paginatedJobOrders.map((jobOrder) => (
                       <div
+                        role="button"
+                        aria-label={`Open ${getClientFullName(jobOrder)}`}
                         key={jobOrder.id}
                         onClick={() => window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder)}
                         className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -2760,6 +2771,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                                 <span>{column.label}</span>
                                 {(hoveredColumn === column.key || sortColumn === column.key) && (
                                   <button
+                                    aria-label={`Sort by ${column.label}`}
                                     onClick={() => handleSort(column.key)}
                                     className="ml-2 transition-colors"
                                   >
@@ -2868,6 +2880,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                   <div className="flex items-center gap-2">
                     <span className="hidden sm:inline">Show</span>
                     <select
+                      aria-label="Items per page"
                       value={itemsPerPage}
                       onChange={(e) => setItemsPerPage(Number(e.target.value))}
                       className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -2900,6 +2913,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                   </button>
 
                   <button
+                    aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-2 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -2915,6 +2929,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                   </span>
 
                   <button
+                    aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages || totalPages <= 1}
                     className={`px-2 py-1 rounded text-sm transition-colors ${currentPage === totalPages || totalPages <= 1
@@ -2985,6 +3000,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                 Download
               </h2>
               <button
+                aria-label="Close"
                 onClick={() => setIsDownloadModalOpen(false)}
                 className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
               >

@@ -503,6 +503,7 @@ const DataLogs: React.FC = () => {
 
           {/* Log Type select filter */}
           <select
+            aria-label="Filter by log type"
             value={logTypeFilter}
             onChange={(e) => setLogTypeFilter(e.target.value)}
             className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-all cursor-pointer focus:outline-none flex-shrink-0 ${logTypeFilter !== 'all'
@@ -682,6 +683,7 @@ const DataLogs: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span>Show</span>
                 <select
+                  aria-label="Items per page"
                   value={itemsPerPage}
                   onChange={(e) => {
                     setItemsPerPage(Number(e.target.value));
@@ -865,6 +867,7 @@ const DetailsCompareModal: React.FC<DetailsCompareModalProps> = ({
             </h3>
           </div>
           <button
+            aria-label="Close"
             onClick={onClose}
             className={`p-2 rounded-xl transition-all ${
               isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-950'

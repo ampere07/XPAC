@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  X, ExternalLink, Edit, Settings, CircleArrowRight, Loader
+  X, ExternalLink, Edit, Settings, CircleArrowRight, Loader, Trash2
 } from 'lucide-react';
 import ServiceOrderEditModal from '../modals/ServiceOrderEditModal';
-import { getRelatedDetailsUpdateLogs } from '../services/serviceOrderService';
+import { getRelatedDetailsUpdateLogs, deleteServiceOrder } from '../services/serviceOrderService';
+import { isSuperAdminUser } from '../utils/agentAccess';
+import ConfirmDeleteDialog from './ConfirmDeleteDialog';
 import RelatedDataTable from './RelatedDataTable';
 import { relatedDataColumns } from '../config/relatedDataColumns';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
@@ -95,10 +97,11 @@ interface ServiceOrderDetailsProps {
   };
   onClose: () => void;
   onRefresh?: () => void;
+  onDeleteSuccess?: () => void;
   isMobile?: boolean;
 }
 
-const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder, onClose, onRefresh, isMobile = false }) => {
+const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder, onClose, onRefresh, onDeleteSuccess, isMobile = false }) => {
   // service_orders stores the actor as an email string, so names come from the shared
   // (cached) user directory rather than a per-record lookup.
   const userDirectory = useUserDirectory();
@@ -305,6 +308,35 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
 
 
   const { can } = usePermissions();
+  const canDeleteServiceOrder = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteServiceOrder(serviceOrder.id);
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The service order could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
 
   // One answer for every role, from config/permissions.ts: the seeded role's
   // table (as the web draws it) or a custom role's server-resolved list.
@@ -566,6 +598,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
             {displayText}
           </span>
           <button
+            aria-label="Open url"
             className={`flex-shrink-0 ${isDarkMode ? 'text-white' : 'text-gray-900'
               }`}
             onClick={() => window.open(url, '_blank')}
@@ -1119,6 +1152,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
                         }`}
                     >
                       <input
+                        aria-label={`Show ${getFieldLabel(fieldKey)}`}
                         type="checkbox"
                         checked={fieldVisibility[fieldKey]}
                         onChange={() => toggleFieldVisibility(fieldKey)}
@@ -1137,6 +1171,18 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
               </div>
             )}
           </div>
+
+          {canDeleteServiceOrder && (
+            <button
+              onClick={openDeleteModal}
+              disabled={isDeleting}
+              className={`disabled:opacity-50 ${isDarkMode ? 'hover:text-red-400 text-gray-400' : 'hover:text-red-600 text-gray-600'}`}
+              title="Delete Service Order"
+              aria-label="Delete Service Order"
+            >
+              <Trash2 size={18} />
+            </button>
+          )}
 
           <button
             onClick={onClose}
@@ -1214,6 +1260,7 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
               </span>
             </div>
             <button
+              aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
             >
@@ -1333,6 +1380,26 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({ serviceOrder,
           isTech={isTechEditMode}
         />
       )}
+
+      <ConfirmDeleteDialog
+        isOpen={showDeleteModal}
+        isDarkMode={isDarkMode}
+        title="Delete Service Order?"
+        description="This permanently removes the service order record from the database. It cannot be undone."
+        details={[
+          { label: 'Ticket ID:', value: String(serviceOrder.ticketId || serviceOrder.id) },
+          { label: 'Account No:', value: serviceOrder.accountNumber || '-' },
+          { label: 'Customer:', value: serviceOrder.fullName || '-' },
+          { label: 'Concern:', value: serviceOrder.concern || '-' },
+          { label: 'Visit Status:', value: serviceOrder.visitStatus || '-' },
+        ]}
+        warning="Only the service order record is removed. Inventory items and service charges logged against it stay in their own records with no ticket linked, and nothing the order already changed on the customer's account or connection is undone."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Service Order"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
       
       {/* Not Found Modal */}
       <React.Suspense fallback={null}>

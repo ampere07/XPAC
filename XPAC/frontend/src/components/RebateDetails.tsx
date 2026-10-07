@@ -343,7 +343,7 @@ const RebateDetails: React.FC<RebateDetailsProps> = ({ rebate, onClose, onViewCu
                 <div className={`flex-1 capitalize flex items-center ${isDarkMode ? 'text-white' : 'text-gray-900'
                   }`}>
                   {rebate.rebate_type}
-                  <button className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
+                  <button aria-label="Rebate type info" className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
                     <Info size={16} />
                   </button>
                 </div>
@@ -391,7 +391,7 @@ const RebateDetails: React.FC<RebateDetailsProps> = ({ rebate, onClose, onViewCu
                 <div className={`flex-1 flex items-center ${isDarkMode ? 'text-white' : 'text-gray-900'
                   }`}>
                   {rebate.created_by || '-'}
-                  <button className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
+                  <button aria-label="More info" className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
                     <Info size={16} />
                   </button>
                 </div>
@@ -405,7 +405,7 @@ const RebateDetails: React.FC<RebateDetailsProps> = ({ rebate, onClose, onViewCu
                   }`}>
                   {rebate.modified_by || '-'}
                   {rebate.modified_by && (
-                    <button className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
+                    <button aria-label="More info" className={isDarkMode ? 'ml-2 text-gray-400 hover:text-white' : 'ml-2 text-gray-600 hover:text-gray-900'}>
                       <Info size={16} />
                     </button>
                   )}

@@ -501,6 +501,7 @@ const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onClose, on
       {label(text, options.required)}
       <div className="relative">
         <select
+          aria-label={`Select ${text}`}
           value={String(form[field] ?? '')}
           onChange={e => set(field, e.target.value)}
           onFocus={focusOn}
@@ -578,6 +579,7 @@ const AddCustomerModal: React.FC<AddCustomerModalProps> = ({ isOpen, onClose, on
               )}
             </button>
             <button
+              aria-label="Close"
               onClick={onClose}
               disabled={submitting}
               className={`disabled:opacity-50 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}

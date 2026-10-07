@@ -85,6 +85,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         <div className="flex items-center gap-2">
           <span>Show</span>
           <select
+            aria-label="Items per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -114,6 +115,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </button>
 
         <button
+          aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -131,6 +133,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </div>
 
         <button
+          aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1422,7 +1425,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
       case 'or_no':
         return transaction.or_no || '-';
       case 'reference_no':
-        return transaction.reference_no || '-';
+        return transaction.reference_no ? <button type="button" className="text-left" aria-label={`Open ${transaction.reference_no}`}>{transaction.reference_no}</button> : '-';
       case 'remarks':
         return <span className="max-w-xs truncate block">{transaction.remarks || 'No remarks'}</span>;
       case 'status':
@@ -1523,6 +1526,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={processedDateFrom}
                   onChange={(e) => setProcessedDateFrom(e.target.value)}
@@ -1536,6 +1540,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={processedDateTo}
                   onChange={(e) => setProcessedDateTo(e.target.value)}
@@ -1634,6 +1639,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               )}
             </div>
             <select
+              aria-label="Filter by payment method"
               value={paymentMethodFilter}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => setPaymentMethodFilter(e.target.value)}
@@ -1683,6 +1689,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           {locationItems.regions.map((region: any) => (
             <div key={region.id}>
               <button
+                aria-label={`Show ${region.name}`}
                 onClick={() => setSelectedLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
@@ -1696,6 +1703,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               >
                 <div className="flex items-center flex-1">
                   <button
+                    aria-label={`${expandedLocations.has(region.id) ? 'Collapse' : 'Expand'} ${region.name}`}
                     onClick={(e) => toggleLocationExpansion(e, region.id)}
                     className="p-1 mr-1"
                   >
@@ -1727,6 +1735,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               {expandedLocations.has(region.id) && region.cities.map((city: any) => (
                 <div key={city.id}>
                   <button
+                    aria-label={`Show ${city.name}`}
                     onClick={() => setSelectedLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
@@ -1740,6 +1749,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   >
                     <div className="flex items-center flex-1">
                       <button
+                        aria-label={`${expandedLocations.has(city.id) ? 'Collapse' : 'Expand'} ${city.name}`}
                         onClick={(e) => toggleLocationExpansion(e, city.id)}
                         className="p-1 mr-1"
                       >
@@ -1759,6 +1769,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   {/* Barangay Level */}
                   {expandedLocations.has(city.id) && city.barangays.map((barangay: any) => (
                     <button
+                      aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
                       onClick={() => setSelectedLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -2064,6 +2075,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                     <span className="opacity-70 mr-1">{label}:</span>
                     <span className="truncate max-w-[150px]">{displayValue}</span>
                     <button
+                      aria-label={`Remove ${key} filter`}
                       onClick={() => removeFilter(key)}
                       className={`ml-1 p-0.5 rounded-full transition-colors`}
                       onMouseEnter={(e) => {
@@ -2130,6 +2142,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                         {isBatchApproveMode && (
                           <th className={`px-4 py-3 text-left ${isDarkMode ? 'text-gray-400 bg-gray-800' : 'text-gray-600 bg-gray-100'}`}>
                             <input
+                              aria-label="Select all transactions"
                               type="checkbox"
                               checked={
                                 selectedTransactionIds.length > 0 &&
@@ -2189,6 +2202,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                               {isBatchApproveMode && (
                                 <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                                   <input
+                                    aria-label={`Select transaction ${transaction.id}`}
                                     type="checkbox"
                                     checked={isSelected}
                                     onChange={() => toggleTransactionSelection(transaction.id)}
@@ -2408,7 +2422,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
           >
             <div className={`flex items-center justify-between px-5 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <h3 className="text-lg font-semibold">Collector Filter</h3>
-              <button type="button" onClick={() => setIsCollectorModalOpen(false)} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900'}>
+              <button aria-label="Close" type="button" onClick={() => setIsCollectorModalOpen(false)} className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900'}>
                 <X size={20} />
               </button>
             </div>
@@ -2437,6 +2451,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                       if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No agents or technicians found</p>;
                       return shown.map(c => (
                         <button
+                          aria-label={`Select collector ${c.label}`}
                           key={`${c.role}:${c.value}`}
                           type="button"
                           onClick={() => { setDraftCollector(c); setIsCollectorListOpen(false); setCollectorQuery(''); }}
@@ -2461,6 +2476,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date From</label>
                     <input
+                      aria-label="Date From"
                       type="date"
                       value={draftDateFrom}
                       max={draftDateTo || undefined}
@@ -2471,6 +2487,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   <div>
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date To</label>
                     <input
+                      aria-label="Date To"
                       type="date"
                       value={draftDateTo}
                       min={draftDateFrom || undefined}

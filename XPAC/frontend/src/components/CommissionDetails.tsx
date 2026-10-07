@@ -214,7 +214,7 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
                             <ChevronRight size={18} />
                         </button>
                     </div>
-                    <button onClick={onClose} className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}>
+                    <button aria-label="Close" onClick={onClose} className={isDarkMode ? 'hover:text-white text-gray-400' : 'hover:text-gray-900 text-gray-600'}>
                         <X size={18} />
                     </button>
                 </div>
@@ -265,7 +265,7 @@ const CommissionDetails: React.FC<CommissionDetailsProps> = ({
                                                 <p className="text-sm text-red-500 italic">Failed to load image. <a href={payout.proof_of_payment} target="_blank" rel="noreferrer" className="underline">Open link</a></p>
                                             )}
                                             {proofImageSrc && !proofImageLoading && (
-                                                <div className="relative group cursor-pointer" onClick={() => window.open(payout.proof_of_payment!, '_blank')}>
+                                                <div role="button" aria-label="Open proof of payment" className="relative group cursor-pointer" onClick={() => window.open(payout.proof_of_payment!, '_blank')}>
                                                     <img src={proofImageSrc} alt="Proof" className="max-w-full rounded border border-inherit" />
                                                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded">
                                                         <ExternalLink size={20} className="text-white" />

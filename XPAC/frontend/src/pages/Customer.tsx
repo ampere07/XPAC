@@ -120,6 +120,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         <div className="flex items-center gap-2">
           <span>Show</span>
           <select
+            aria-label="Items per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode
@@ -152,6 +153,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </button>
 
         <button
+          aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -169,6 +171,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </div>
 
         <button
+          aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1941,6 +1944,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
             return (
               <div key={status.id}>
                 <button
+                  aria-label={`Show ${status.name}`}
                   onClick={() => setSelectedLocation(status.id)}
                   className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                     }`}
@@ -1962,6 +1966,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                       {status.count}
                     </span>
                     <button
+                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${status.name}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setExpandedLocations(prev => {
@@ -1990,6 +1995,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     return (
                       <div key={session.id}>
                         <button
+                          aria-label={`Show ${session.name}`}
                           onClick={() => setSelectedLocation(session.id)}
                           className={`w-full flex items-center justify-between pl-8 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
                           style={isSessionSelected ? {
@@ -2005,6 +2011,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               {session.count}
                             </span>
                             <button
+                              aria-label={`${isSessionExpanded ? 'Collapse' : 'Expand'} ${session.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedLocations(prev => {
@@ -2032,6 +2039,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                           return (
                             <div key={billing.id}>
                               <button
+                                aria-label={`Show ${billing.name}`}
                                 onClick={() => setSelectedLocation(billing.id)}
                                 className={`w-full flex items-center justify-between pl-12 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'}`}
                                 style={isBillingSelected ? {
@@ -2047,6 +2055,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                     {billing.count}
                                   </span>
                                   <button
+                                    aria-label={`${isBillingExpanded ? 'Collapse' : 'Expand'} ${billing.name}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setExpandedLocations(prev => {
@@ -2072,6 +2081,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                 const isBrgySelected = selectedLocation === brgy.id;
                                 return (
                                   <button
+                                    aria-label={`Show ${brgy.name}`}
                                     key={brgy.id}
                                     onClick={() => setSelectedLocation(brgy.id)}
                                     className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-600 hover:bg-gray-800' : 'text-gray-500 hover:bg-gray-100'}`}
@@ -2101,6 +2111,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     return (
                       <div key={billing.id}>
                         <button
+                          aria-label={`Show ${billing.name}`}
                           onClick={() => setSelectedLocation(billing.id)}
                           className={`w-full flex items-center justify-between pl-10 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
                             }`}
@@ -2117,6 +2128,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               {billing.count}
                             </span>
                             <button
+                              aria-label={`${isBillingExpanded ? 'Collapse' : 'Expand'} ${billing.name}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setExpandedLocations(prev => {
@@ -2142,6 +2154,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                           const isBrgySelected = selectedLocation === brgy.id;
                           return (
                             <button
+                              aria-label={`Show ${brgy.name}`}
                               key={brgy.id}
                               onClick={() => setSelectedLocation(brgy.id)}
                               className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
@@ -2467,6 +2480,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
                       <button
+                        aria-label={`Remove ${key} filter`}
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -2532,6 +2546,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                         <div>
                           {paginatedRecords.map((record) => (
                             <div
+                              role="button"
+                              aria-label={`Open ${record.applicationId}`}
                               key={record.id}
                               onClick={() => handleRecordClick(record)}
                               className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode
@@ -2653,6 +2669,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                     <span>{column.label}</span>
                                     {(hoveredColumn === column.key || sortColumn === column.key) && (
                                       <button
+                                        aria-label={`Sort by ${column.label}`}
                                         onClick={() => handleSort(column.key)}
                                         className="ml-2 transition-colors"
                                       >

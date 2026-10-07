@@ -336,6 +336,7 @@ const UsageTypeList: React.FC = () => {
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           {actions.canEdit && (
           <button
+            aria-label={`Edit ${usageType.usage_name}`}
             onClick={(e) => { e.stopPropagation(); handleEdit(usageType); }}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-800'
@@ -347,6 +348,7 @@ const UsageTypeList: React.FC = () => {
           )}
           {actions.canDelete && (
           <button
+            aria-label={`Delete ${usageType.usage_name}`}
             onClick={(e) => { e.stopPropagation(); handleDelete(usageType); }}
             disabled={deletingItems.has(usageType.id)}
             className={`p-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode
@@ -458,6 +460,7 @@ const UsageTypeList: React.FC = () => {
             <div className="flex items-center gap-2">
               <span>Show</span>
               <select
+                aria-label="Items per page"
                 value={itemsPerPage}
                 onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                 className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -489,6 +492,7 @@ const UsageTypeList: React.FC = () => {
             </button>
 
             <button
+              aria-label="Previous page"
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -506,6 +510,7 @@ const UsageTypeList: React.FC = () => {
             </div>
 
             <button
+              aria-label="Next page"
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
               className={`p-1.5 rounded transition-colors ${currentPage === totalPages

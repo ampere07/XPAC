@@ -449,6 +449,7 @@ const CommissionPayoutForm: React.FC<{
                     <div className="flex-1">
                         <label className={labelClass}>Start Date</label>
                         <input
+                            aria-label="Start Date"
                             type="date"
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
@@ -458,6 +459,7 @@ const CommissionPayoutForm: React.FC<{
                     <div className="flex-1">
                         <label className={labelClass}>End Date</label>
                         <input
+                            aria-label="End Date"
                             type="date"
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
@@ -578,6 +580,7 @@ const CommissionPayoutForm: React.FC<{
                         onClick={() => fileInputRef.current?.click()}
                     >
                         <input
+                            aria-label="Proof of Payment"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

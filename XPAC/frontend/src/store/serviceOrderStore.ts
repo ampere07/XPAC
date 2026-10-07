@@ -180,6 +180,7 @@ interface ServiceOrderState {
     refreshServiceOrders: () => Promise<void>;
     silentRefresh: (assignedEmail?: string, accountNo?: string) => Promise<void>;
     fetchUpdates: (assignedEmail?: string, accountNo?: string) => Promise<void>;
+    removeServiceOrderRecord: (id: string) => void;
 }
 
 export const useServiceOrderStore = create<ServiceOrderState>((set, get) => ({
@@ -357,8 +358,15 @@ export const useServiceOrderStore = create<ServiceOrderState>((set, get) => ({
         await get().fetchServiceOrders(true, true, assignedEmail, accountNo);
     },
 
+    removeServiceOrderRecord: (id: string) => {
+        set((state) => ({
+            serviceOrders: state.serviceOrders.filter((serviceOrder) => serviceOrder.id !== id),
+            totalCount: Math.max(0, state.totalCount - 1)
+        }));
+    },
+
     fetchUpdates: async (assignedEmail?: string, accountNo?: string) => {
-        const { serviceOrders, lastUpdated } = get();
+        const { lastUpdated } = get();
         
         // Use provided email or fallback to auto-detection
         let fetchEmail = assignedEmail;
@@ -390,23 +398,24 @@ export const useServiceOrderStore = create<ServiceOrderState>((set, get) => ({
                 
                 // Merge updates into existing serviceOrders
                 // We overwrite existing items with same ID and prepend/append new ones
-                const mergedOrders = [...serviceOrders];
-                
-                updatedTransformed.forEach((newOrder: ServiceOrder) => {
-                    const existingIndex = mergedOrders.findIndex(o => o.id === newOrder.id);
-                    if (existingIndex !== -1) {
-                        mergedOrders[existingIndex] = newOrder;
-                    } else {
-                        // Prepend new orders (assuming they are latest)
-                        mergedOrders.unshift(newOrder);
-                    }
-                });
+                set((state) => {
+                    const mergedOrders = [...state.serviceOrders];
 
-                set({ 
-                    serviceOrders: mergedOrders,
-                    lastUpdated: new Date(),
-                    totalCount: result.pagination?.total || (get().totalCount + updatedTransformed.filter((n: ServiceOrder) => !serviceOrders.find(o => o.id === n.id)).length),
-                    isFullyLoaded: true // If we're getting updates, we must have finished initial load
+                    updatedTransformed.forEach((newOrder: ServiceOrder) => {
+                        const existingIndex = mergedOrders.findIndex(o => o.id === newOrder.id);
+                        if (existingIndex !== -1) {
+                            mergedOrders[existingIndex] = newOrder;
+                        } else {
+                            mergedOrders.unshift(newOrder);
+                        }
+                    });
+
+                    return {
+                        serviceOrders: mergedOrders,
+                        lastUpdated: new Date(),
+                        totalCount: result.pagination?.total || (state.totalCount + updatedTransformed.filter((n: ServiceOrder) => !state.serviceOrders.find(o => o.id === n.id)).length),
+                        isFullyLoaded: true
+                    };
                 });
             } else {
                 set({ lastUpdated: new Date() });

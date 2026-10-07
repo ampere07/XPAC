@@ -629,6 +629,7 @@ const ApplicationForm: React.FC<ApplicationFormProps> = ({ onClose, onSubmitted 
                         <div>
                             <label className={labelClass}>Referred By</label>
                             <input
+                                aria-label="Referred By"
                                 type="text"
                                 value={formData.referred_by}
                                 readOnly

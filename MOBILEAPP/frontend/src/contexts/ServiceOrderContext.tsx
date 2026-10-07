@@ -84,6 +84,7 @@ interface ServiceOrderContextType {
     error: string | null;
     refreshServiceOrders: () => Promise<void>;
     silentRefresh: () => Promise<void>;
+    removeServiceOrderRecord: (id: string) => void;
     fetchNextPage: () => Promise<void>;
     setSearchQuery: (query: string) => void;
     searchQuery: string;
@@ -270,6 +271,10 @@ export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ chil
         await fetchServiceOrders(1, true, true);
     }, [fetchServiceOrders]);
 
+    const removeServiceOrderRecord = useCallback((id: string) => {
+        setServiceOrders(prev => prev.filter(order => String(order.id) !== id));
+    }, []);
+
     const fetchNextPage = useCallback(async () => {
         if (!paginationRef.current.hasMore || fetchingRef.current) return;
         await fetchServiceOrders(paginationRef.current.page + 1, true, false);
@@ -299,6 +304,7 @@ export const ServiceOrderProvider: React.FC<ServiceOrderProviderProps> = ({ chil
                 error,
                 refreshServiceOrders,
                 silentRefresh,
+                removeServiceOrderRecord,
                 fetchNextPage,
                 setSearchQuery: handleSearch,
                 searchQuery,

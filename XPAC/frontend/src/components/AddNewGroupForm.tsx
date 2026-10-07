@@ -238,6 +238,7 @@ const AddNewGroupForm: React.FC<AddNewGroupFormProps> = ({ onCancel, onGroupCrea
                   Organization (Optional)
                 </label>
                 <select
+                  aria-label="Organization"
                   name="org_id"
                   value={formData.org_id || ''}
                   onChange={handleInputChange}

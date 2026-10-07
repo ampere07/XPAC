@@ -547,6 +547,8 @@ const EmailTemplates: React.FC = () => {
           ) : (
             templates.map((template) => (
               <div
+                role="button"
+                aria-label={`Open ${template.Template_Code}`}
                 key={template.Template_Code}
                 onClick={() => handleTemplateSelect(template)}
                 className={`p-3 mb-2 rounded cursor-pointer transition-colors ${selectedTemplate?.Template_Code === template.Template_Code
@@ -819,6 +821,7 @@ const EmailTemplates: React.FC = () => {
                 {isCreating || isEditing ? (
                   <div className="space-y-2">
                     <select
+                      aria-label="Template code"
                       value={formData.Template_Code}
                       onChange={(e) => handleInputChange('Template_Code', e.target.value)}
                       className={`w-full px-3 py-2 text-sm border rounded ${isDarkMode
@@ -1608,6 +1611,7 @@ const EmailTemplates: React.FC = () => {
                 {borderModal.side} Border
               </h3>
               <button
+                aria-label="Close"
                 onClick={() => setBorderModal(null)}
                 className={`p-1 rounded-full hover:bg-opacity-10 ${isDarkMode ? 'hover:bg-white' : 'hover:bg-black'}`}
               >
@@ -1622,6 +1626,7 @@ const EmailTemplates: React.FC = () => {
               <div>
                 <label className="block text-xs font-medium mb-1 opacity-70">Style (Pattern)</label>
                 <select
+                  aria-label="Style (Pattern)"
                   value={borderModal.style}
                   onChange={(e) => setBorderModal({ ...borderModal, style: e.target.value })}
                   className={`w-full px-2 py-1.5 text-sm border rounded ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'}`}
@@ -1638,6 +1643,7 @@ const EmailTemplates: React.FC = () => {
                 <label className="block text-xs font-medium mb-1 opacity-70">Color</label>
                 <div className="flex gap-2">
                   <input
+                    aria-label="Color"
                     type="color"
                     value={borderModal.color.startsWith('#') ? borderModal.color : '#000000'}
                     onChange={(e) => setBorderModal({ ...borderModal, color: e.target.value })}
@@ -1657,6 +1663,7 @@ const EmailTemplates: React.FC = () => {
                 <label className="block text-xs font-medium mb-1 opacity-70">Width</label>
                 <div className="flex items-center gap-2">
                   <input
+                    aria-label="Width"
                     type="range"
                     min="0"
                     max="10"

@@ -167,6 +167,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
           <div className="flex items-center gap-2">
             <span>Show</span>
             <select
+              aria-label="Items per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -200,6 +201,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
             </div>
             <div className="flex items-center gap-2">
               <button
+                aria-label="Refresh users"
                 onClick={() => refreshUsers()}
                 className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
               >
@@ -228,6 +230,7 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
             />
             {!agentOnly && (
               <select
+                aria-label="Filter by user type"
                 value={userTypeFilter}
                 onChange={(e) => setUserTypeFilter(e.target.value as any)}
                 onFocus={() => setIsFilterFocused(true)}
@@ -265,6 +268,8 @@ const UserManagement: React.FC<{ agentOnly?: boolean }> = ({ agentOnly = false }
             <div className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-100'}`}>
               {paginatedUsers.map((user) => (
                 <div
+                  role="button"
+                  aria-label={`Open ${user.username}`}
                   key={user.id}
                   onClick={() => { setSelectedUser(user); if (window.innerWidth < 768) setMobileView('details'); }}
                   className={`flex items-center p-4 cursor-pointer transition-all hover:pl-6 border-l-4 ${selectedUser?.id === user.id

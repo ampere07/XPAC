@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use App\Events\WorkOrderUpdated;
 use App\Models\ActivityLog;
+use App\Support\AgentAccess;
 use Illuminate\Support\Facades\Auth;
 
 class WorkOrderApiController extends Controller
@@ -491,6 +492,13 @@ class WorkOrderApiController extends Controller
 
     public function destroy($id)
     {
+        if (!AgentAccess::isSuperAdmin(Auth::user())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete a work order.'
+            ], 403);
+        }
+
         try {
             $query = WorkOrder::query();
             $currentUser = Auth::user();
@@ -505,17 +513,18 @@ class WorkOrderApiController extends Controller
             if (!$workOrder) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Work order not found'
+                    'message' => 'Work order not found. It may have been deleted already.'
                 ], 404);
             }
-            
+
+            $snapshot = $workOrder->toArray();
             $workOrder->delete();
 
             ActivityLog::log(
                 'Work Order Deleted',
                 "Work Order #{$id} deleted.",
                 'warning',
-                ['resource_type' => 'WorkOrder', 'resource_id' => $id]
+                ['resource_type' => 'WorkOrder', 'resource_id' => $id, 'additional_data' => $snapshot]
             );
 
             event(new WorkOrderUpdated(['action' => 'deleted', 'work_order_id' => $id]));

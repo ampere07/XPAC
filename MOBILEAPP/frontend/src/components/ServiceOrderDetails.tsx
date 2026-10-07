@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, ScrollView, Modal, Linking, Platform, useWindowDimensions, StyleSheet, Alert, DeviceEventEmitter } from 'react-native';
-import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin } from 'lucide-react-native';
+import { X, ExternalLink, Edit, ChevronLeft, Play, Square, MapPin, Trash2 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ContactActions from './common/ContactActions';
 import ServiceOrderEditModal from '../modals/ServiceOrderEditModal';
@@ -13,7 +13,9 @@ import { useUserDirectory } from '../hooks/useUserDirectory';
 import { resolveUserDisplayName } from '../utils/userDisplay';
 import { useWorkOrderStore } from '../store/workOrderStore';
 import { formatToGMT8MySQL } from '../utils/dateUtils';
-import { updateServiceOrder } from '../services/serviceOrderService';
+import { updateServiceOrder, deleteServiceOrder } from '../services/serviceOrderService';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
+import { usePermissions } from '../hooks/usePermissions';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 import { techInOutService } from '../services/techInOutService';
 import dayjs from 'dayjs';
@@ -95,6 +97,7 @@ interface ServiceOrderDetailsProps {
     referredBy?: string;
   };
   onClose: () => void;
+  onDeleteSuccess?: () => void;
   isMobile?: boolean;
   userRoleProp?: string;
   userRoleIdProp?: number | null;
@@ -317,6 +320,7 @@ const getFieldLabel = (fieldKey: string): string => {
 const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
   serviceOrder,
   onClose,
+  onDeleteSuccess,
   isMobile: propIsMobile = false,
   userRoleProp,
   userRoleIdProp
@@ -359,6 +363,34 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
 
   const [isStarted, setIsStarted] = useState(checkIsStarted((serviceOrder as any).start_time));
   const [isEnded, setIsEnded] = useState(checkIsStarted((serviceOrder as any).end_time));
+  const { isSuperAdmin } = usePermissions();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteServiceOrder(String(serviceOrder.id));
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The service order could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -965,6 +997,17 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
         </View>
 
         <View style={styles.headerActions}>
+          {isSuperAdmin && (
+            <Pressable
+              onPress={openDeleteModal}
+              disabled={isDeleting}
+              accessibilityRole="button"
+              accessibilityLabel="Delete Service Order"
+              style={{ padding: 6, opacity: isDeleting ? 0.5 : 1 }}
+            >
+              <Trash2 size={20} color="#6b7280" />
+            </Pressable>
+          )}
           {/* Start Timer Button */}
           {((!isStarted || (['reschedule'].includes(((serviceOrder as any).visitStatus || '').toLowerCase().trim() || ((serviceOrder as any).visit_status || '').toLowerCase().trim() || '') && isStarted && isEnded))) && 
            ['in progress', 'inprogress', 'reschedule'].includes(((serviceOrder as any).visitStatus || '').toLowerCase().trim() || ((serviceOrder as any).visit_status || '').toLowerCase().trim() || '') && 
@@ -1002,6 +1045,25 @@ const ServiceOrderDetails: React.FC<ServiceOrderDetailsProps> = ({
         </View>
       </ScrollView>
 
+
+      <ConfirmDeleteModal
+        visible={showDeleteModal}
+        title="Delete Service Order?"
+        description="This permanently removes the service order record from the database. It cannot be undone."
+        details={[
+          { label: 'Ticket ID:', value: String(serviceOrder.ticketId || serviceOrder.id) },
+          { label: 'Account No:', value: serviceOrder.accountNumber || '-' },
+          { label: 'Customer:', value: serviceOrder.fullName || '-' },
+          { label: 'Concern:', value: serviceOrder.concern || '-' },
+          { label: 'Visit Status:', value: serviceOrder.visitStatus || '-' },
+        ]}
+        warning="Only the service order record is removed. Inventory items and service charges logged against it stay in their own records with no ticket linked, and nothing the order already changed on the customer's account or connection is undone."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Service Order"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
 
       {isEditModalOpen && (
         <ServiceOrderEditModal

@@ -451,7 +451,7 @@ final class ApiPermissionMap
         ['transactions/*/revert',        'transaction-list.revert-request', 'transaction-list.revert-request'],
         // Mark as Failed is an ungated button on the transaction pane.
         ['transactions/*/status',        'transaction-list', ['transaction-list.approve', 'transaction-list']],
-        ['transactions/upload-images',   'customer.transact', 'customer.transact'],
+        ['transactions/upload-images',   'customer.transact', ['customer.transact', 'transaction-list']],
         ['transactions/by-account/*',    ['transaction-list', 'customer', 'customer-bills', 'customer-dashboard', ...self::OVERLAY_READERS], 'customer.transact'],
         // Kept exactly as it was: no overlay reads it, so OVERLAY_READERS below
         // does not reach it.
@@ -462,7 +462,7 @@ final class ApiPermissionMap
         // its receipt are also read by the overlays (TransactionListDetails).
         // Edit Transaction is ungated on the pane; deleting one is SuperAdmin's.
         ['transactions/*',               ['transaction-list', 'customer', ...self::OVERLAY_READERS], ['customer.transact', 'transaction-list'], ['DELETE' => 'transaction-list.delete']],
-        ['transactions*',                ['transaction-list', 'customer'], 'customer.transact'],
+        ['transactions*',                ['transaction-list', 'customer'], ['customer.transact', 'transaction-list']],
         ['transaction-reverts/*/status', 'transactions-revert', 'transactions-revert.approve'],
         ['transaction-reverts*',         'transactions-revert', ['transactions-revert', 'transaction-list.revert-request']],
 

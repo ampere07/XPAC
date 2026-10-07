@@ -218,6 +218,8 @@ const SMSBlast: React.FC = () => {
                 <div className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-100'}`}>
                   {filteredRecords.map((record) => (
                     <div
+                      role="button"
+                      aria-label={`Open ${record.target_name}`}
                       key={record.id}
                       onClick={() => handleRecordClick(record)}
                       className={`px-6 py-4 cursor-pointer transition-colors border-b ${isDarkMode

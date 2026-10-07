@@ -442,6 +442,7 @@ const LcpList: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <span>Show</span>
                     <select
+                      aria-label="Items per page"
                       value={itemsPerPage}
                       onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                       className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -473,6 +474,7 @@ const LcpList: React.FC = () => {
                   </button>
 
                   <button
+                    aria-label="Previous page"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -490,6 +492,7 @@ const LcpList: React.FC = () => {
                   </div>
 
                   <button
+                    aria-label="Next page"
                     onClick={() => handlePageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages

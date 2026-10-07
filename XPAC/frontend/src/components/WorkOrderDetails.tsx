@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  X, ExternalLink, Edit, Settings
+  X, ExternalLink, Edit, Settings, Trash2
 } from 'lucide-react';
 import { WorkOrder, WorkOrderDetailsProps } from '../types/workOrder';
 import { ColorPalette } from '../services/settingsColorPaletteService';
 import { useUserDirectory } from '../hooks/useUserDirectory';
 import { resolveUserDisplayName } from '../utils/userDisplay';
 import AssignWorkOrderModal from '../modals/AssignWorkOrderModal';
+import { deleteWorkOrder } from '../services/workOrderService';
+import { isSuperAdminUser } from '../utils/agentAccess';
+import ConfirmDeleteDialog from './ConfirmDeleteDialog';
 
 interface WorkOrderDetailsComponentProps extends WorkOrderDetailsProps {
   isDarkMode?: boolean;
@@ -17,6 +20,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
   workOrder,
   onClose,
   onRefresh,
+  onDeleteSuccess,
   isMobile = false,
   isDarkMode = true,
   colorPalette
@@ -45,6 +49,35 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
   const [showFieldSettings, setShowFieldSettings] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const canDeleteWorkOrder = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!workOrder) return;
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteWorkOrder(workOrder.id);
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The work order could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const FIELD_VISIBILITY_KEY = 'workOrderDetailsFieldVisibility';
   const FIELD_ORDER_KEY = 'workOrderDetailsFieldOrder';
@@ -375,6 +408,8 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
               <div className={valueClass}>
                 <div className={`mt-2 rounded-lg border overflow-hidden max-w-sm ${isDarkMode ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-gray-100'}`}>
                   <img
+                    role="button"
+                    aria-label={`Open ${getFieldLabel(fieldKey)}`}
                     src={imageUrl}
                     alt={getFieldLabel(fieldKey)}
                     className="w-full h-auto object-contain cursor-pointer transition-transform hover:scale-105"
@@ -490,6 +525,7 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
                         className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-move transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draggedIndex === index ? isDarkMode ? 'bg-gray-600' : 'bg-gray-200' : ''}`}
                       >
                         <input
+                          aria-label={`Show ${getFieldLabel(fieldKey)}`}
                           type="checkbox"
                           checked={fieldVisibility[fieldKey]}
                           onChange={() => toggleFieldVisibility(fieldKey)}
@@ -504,6 +540,18 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
                 </div>
               )}
             </div>
+
+            {canDeleteWorkOrder && (
+              <button
+                onClick={openDeleteModal}
+                disabled={isDeleting}
+                className={`disabled:opacity-50 ${isDarkMode ? 'hover:text-red-400 text-gray-400' : 'hover:text-red-600 text-gray-600'}`}
+                title="Delete Work Order"
+                aria-label="Delete Work Order"
+              >
+                <Trash2 size={18} />
+              </button>
+            )}
 
             <button
               onClick={onClose}
@@ -543,6 +591,25 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsComponentProps> = ({
           }}
         />
       )}
+      <ConfirmDeleteDialog
+        isOpen={showDeleteModal}
+        isDarkMode={isDarkMode}
+        title="Delete Work Order?"
+        description="This permanently removes the work order record from the database. It cannot be undone."
+        details={[
+          { label: 'Work Order ID:', value: String(workOrder.id) },
+          { label: 'Instructions:', value: workOrder.instructions || '-' },
+          { label: 'Assigned To:', value: workOrder.assign_to || '-' },
+          { label: 'Requested By:', value: workOrder.requested_by || '-' },
+          { label: 'Status:', value: workOrder.work_status || '-' },
+        ]}
+        warning="Only the work order record is removed. Images and the signature already uploaded for it stay in storage, and nothing the work already changed is undone."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Work Order"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 };

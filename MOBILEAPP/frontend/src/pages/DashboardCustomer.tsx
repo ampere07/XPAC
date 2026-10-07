@@ -9,6 +9,7 @@ import { paymentService, PendingPayment } from '../services/paymentService';
 import { useCustomerDataContext } from '../contexts/CustomerDataContext';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { planService, Plan } from '../services/planService';
+import PaymentTotalBreakdown, { PaymentBreakdownLine, postpaidBalanceLines } from '../components/PaymentTotalBreakdown';
 
 interface Payment {
     id: string;
@@ -311,6 +312,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
         ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
         : 0;
     const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
+    const paymentSubtotalLabel = requiresExactPayment || payCurrentBalance
+        ? 'Current balance'
+        : isSwitchingToPrepaid
+            ? `Balance + one period of ${currentPlan?.name ?? 'your plan'}`
+            : isPrepaid && selectedPlan
+                ? (advanceMonths > 1 ? `${selectedPlan.name} × ${advanceMonths} months` : `${selectedPlan.name} plan`)
+                : 'Payment';
     // A switch already paid for and waiting. It takes priority when preselecting, so a top-up is
     // priced at the plan the customer will actually be on rather than the one they are leaving.
     const pendingPlan = useMemo(
@@ -382,6 +390,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
     const latestBillDiscount = Math.round(
         (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
     ) / 100;
+    const isPostpaidSettlement = !isPrepaid && !isSwitchingToPrepaid;
+    const paymentBaseLines: PaymentBreakdownLine[] = isPostpaidSettlement
+        ? [
+            ...postpaidBalanceLines(balance, invoiceRecords?.[0] ? Number(invoiceRecords[0].total_amount ?? 0) : null, latestBillDiscount),
+            ...(toCentavos(feeBaseAmount) !== toCentavos(balance)
+                ? [{ label: 'Advance payment', amount: Math.round((feeBaseAmount - balance) * 100) / 100 }]
+                : []),
+        ]
+        : [{ label: paymentSubtotalLabel, amount: requiresExactPayment ? balance : paymentAmount }];
     const formatCentavoPeso = (value: number) =>
         `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -1554,20 +1571,22 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate }) => 
                                     </Text>
                                 </View>
 
-                                {discountAmount > 0 && (
-                                    <Text style={styles.discountNoteText}>
-                                        {formatPeso(paymentAmount)} plan − {formatPeso(discountAmount)} discount / rebate = {formatPeso(netPaymentAmount)}
-                                    </Text>
-                                )}
-
-                                {/* Convenience fee disclosure. The field above is the amount that
-                                    settles the bill; the gateway collects this total instead. */}
-                                {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
-                                    <Text style={styles.feeNoteText}>
-                                        + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
-                                    </Text>
-                                )}
                             </View>
+
+                            {feeBaseAmount > 0 && (
+                                <PaymentTotalBreakdown
+                                    lines={[
+                                        ...paymentBaseLines,
+                                        ...(discountAmount > 0 ? [{ label: 'Discount / rebate', amount: -discountAmount, isDiscount: true }] : []),
+                                        ...(convenienceFeeAmount > 0 ? [{ label: `Convenience fee (${convenienceFeeLabel}%)`, amount: convenienceFeeAmount }] : []),
+                                    ]}
+                                    totalLabel="Total to pay"
+                                    total={totalWithConvenienceFee}
+                                    notes={!isPrepaid && postpaidDiscountsOnFile > 0
+                                        ? [`${formatCentavoPeso(postpaidDiscountsOnFile)} discount on file — comes off your ${isSwitchingToPrepaid ? 'next prepaid top-up' : 'next bill'}, not this payment.`]
+                                        : []}
+                                />
+                            )}
 
                             <Pressable
                                 onPress={handleProceedToCheckout}
@@ -1899,8 +1918,6 @@ const styles = StyleSheet.create({
     activateNowWarningText: { fontSize: 12, color: '#92400e', lineHeight: 17 },
     inputHint: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 },
     inputHintText: { fontSize: 12, color: '#6b7280' },
-    feeNoteText: { fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 16 },
-    discountNoteText: { fontSize: 13, color: '#15803d', marginTop: 8, lineHeight: 18 },
     primaryBtn: { paddingVertical: 12, borderRadius: 50, width: '50%', alignSelf: 'center', alignItems: 'center' },
     primaryBtnText: { color: '#ffffff', fontWeight: 'bold', fontSize: 16 },
     spacer: { height: 24 },

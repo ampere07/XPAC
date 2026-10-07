@@ -436,6 +436,7 @@ const SmsLogs: React.FC = () => {
               <div>
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={statementDateFrom}
                   onChange={(e) => setStatementDateFrom(e.target.value)}
@@ -446,6 +447,7 @@ const SmsLogs: React.FC = () => {
               <div>
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={statementDateTo}
                   onChange={(e) => setStatementDateTo(e.target.value)}
@@ -490,6 +492,7 @@ const SmsLogs: React.FC = () => {
               <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                 {dateItems.dates.map((item, index) => (
                   <button
+                    aria-label={`Show ${item.date}`}
                     key={index}
                     onClick={() => { setSelectedDate(item.date); if (isMobile) setMobileViewMode('list'); }}
                     className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} ${selectedDate === item.date ? '' : isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}
@@ -515,6 +518,7 @@ const SmsLogs: React.FC = () => {
           <div className="py-2">
             {statusItems.map((status) => (
               <button
+                aria-label={`Show ${status.name}`}
                 key={status.id}
                 onClick={() => { setSelectedStatus(status.id); if (isMobile) setMobileViewMode('list'); }}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${selectedStatus === status.id ? '' : isDarkMode ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
@@ -571,6 +575,7 @@ const SmsLogs: React.FC = () => {
             <div className="flex items-center space-x-3 w-full overflow-x-auto scrollbar-none pb-1 -mb-1">
               {isMobile && mobileViewMode === 'list' && (
                 <button
+                  aria-label="Back"
                   onClick={() => setMobileViewMode('sidebar')}
                   className={`p-2 rounded-lg transition-colors flex-shrink-0 ${isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'}`}
                 >
@@ -760,6 +765,7 @@ const SmsLogs: React.FC = () => {
         <div className={`fixed inset-0 z-50 md:relative md:inset-auto md:z-auto md:flex-shrink-0 md:w-full md:max-w-md border-l ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
           <div className="absolute top-4 right-4 z-10">
             <button
+              aria-label="Close"
               onClick={() => setSelectedLog(null)}
               className={`transition-colors rounded p-1 ${isDarkMode ? 'text-gray-400 hover:text-white bg-gray-800' : 'text-gray-600 hover:text-gray-900 bg-gray-200'}`}
             >

@@ -562,6 +562,7 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
             <div className="flex items-center gap-2">
               <span>Show</span>
               <select
+                aria-label="Items per page"
                 value={itemsPerPage}
                 onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                 className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -593,6 +594,7 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
             </button>
 
             <button
+              aria-label="Previous page"
               onClick={() => handlePageChange(currentPage - 1)}
               disabled={currentPage === 1}
               className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -610,6 +612,7 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
             </div>
 
             <button
+              aria-label="Next page"
               onClick={() => handlePageChange(currentPage + 1)}
               disabled={currentPage === totalPages}
               className={`p-1.5 rounded transition-colors ${currentPage === totalPages

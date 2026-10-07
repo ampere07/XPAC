@@ -352,6 +352,7 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
               )}
             </button>
             <button
+              aria-label="Close"
               onClick={handleClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -367,6 +368,7 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
               Status<span className="text-red-500">*</span>
             </label>
             <select
+              aria-label="Status"
               value={formData.status}
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
               className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode

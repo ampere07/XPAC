@@ -449,6 +449,7 @@ const ForApproval: React.FC = () => {
           {batchMode && transaction && (
             <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
               <input
+                aria-label={`Select transaction ${transaction.id}`}
                 type="checkbox"
                 checked={isChecked}
                 onChange={() => toggleTransactionSelection(transaction)}
@@ -653,6 +654,7 @@ const ForApproval: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span>Show</span>
                   <select
+                    aria-label="Items per page"
                     value={itemsPerPage}
                     onChange={(e) => {
                       setItemsPerPage(Number(e.target.value));

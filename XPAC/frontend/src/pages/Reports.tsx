@@ -869,6 +869,7 @@ const Reports: React.FC = () => {
                             <div className="flex items-center gap-1.5">
                                 <span>Show</span>
                                 <select
+                                    aria-label="Items per page"
                                     value={itemsPerPage}
                                     onChange={(e) => setItemsPerPage(Number(e.target.value))}
                                     className={`px-1.5 py-1 rounded border text-xs focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -998,6 +999,7 @@ const Reports: React.FC = () => {
                                 </button>
                             )}
                             <button
+                                aria-label={modal.type === 'confirm' ? 'Confirm' : 'OK'}
                                 type="button"
                                 onClick={() => {
                                     if (modal.onConfirm) modal.onConfirm();

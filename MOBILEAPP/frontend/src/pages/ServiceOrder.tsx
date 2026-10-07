@@ -239,6 +239,7 @@ const ServiceOrderPage: React.FC = () => {
     error, 
     refreshServiceOrders, 
     silentRefresh, 
+    removeServiceOrderRecord,
     setSearchQuery: setContextSearch, 
     fetchNextPage, 
     hasMore 
@@ -446,6 +447,13 @@ const ServiceOrderPage: React.FC = () => {
   }, [isTablet]);
 
 
+
+  const handleDeleteSuccess = useCallback(() => {
+    setSelectedServiceOrderRaw(null);
+    setMobileView('orders');
+    removeServiceOrderRecord(String(selectedServiceOrderRaw?.id));
+    silentRefresh();
+  }, [selectedServiceOrderRaw, removeServiceOrderRecord, silentRefresh]);
 
   const handleMobileBack = useCallback(() => {
     if (mobileView === 'details') {
@@ -682,6 +690,7 @@ const ServiceOrderPage: React.FC = () => {
             <ServiceOrderDetails
               serviceOrder={selectedServiceOrder as ServiceOrder}
               onClose={handleMobileBack}
+              onDeleteSuccess={handleDeleteSuccess}
               isMobile={true}
               userRoleProp={userRole}
               userRoleIdProp={userRoleId === null ? null : Number(userRoleId)}
@@ -696,6 +705,7 @@ const ServiceOrderPage: React.FC = () => {
             <ServiceOrderDetails
               serviceOrder={selectedServiceOrder as ServiceOrder}
               onClose={() => setSelectedServiceOrderRaw(null)}
+              onDeleteSuccess={handleDeleteSuccess}
               isMobile={false}
               userRoleProp={userRole}
               userRoleIdProp={userRoleId === null ? null : Number(userRoleId)}

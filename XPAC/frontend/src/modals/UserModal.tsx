@@ -304,7 +304,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
           <h2 className="text-xl font-semibold">
             {isEditMode ? 'Edit User' : 'Add New User'}
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors dark:hover:bg-gray-800">
+          <button aria-label="Close" onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors dark:hover:bg-gray-800">
             <X size={20} />
           </button>
         </div>
@@ -355,7 +355,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
             {!agentOnly && (
               <div>
                 <label className={labelClass}>Organization</label>
-                <select name="organization_id" value={formData.organization_id || ''} onChange={handleInputChange} className={inputClass}>
+                <select aria-label="Organization" name="organization_id" value={formData.organization_id || ''} onChange={handleInputChange} className={inputClass}>
                   <option value="">Select Organization</option>
                   {organizations.map(org => (
                     <option key={org.id} value={org.id}>
@@ -371,13 +371,14 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
               <label className={labelClass}>Role*</label>
               {agentOnly ? (
                 <input
+                  aria-label="Role"
                   value="Agent"
                   readOnly
                   className={`${inputClass} opacity-70 cursor-not-allowed`}
                   style={{ pointerEvents: 'none' }}
                 />
               ) : (
-                <select name="role_id" value={formData.role_id || ''} onChange={handleInputChange} className={`${inputClass} ${errors.role_id ? 'border-red-500' : ''}`}>
+                <select aria-label="Role id" name="role_id" value={formData.role_id || ''} onChange={handleInputChange} className={`${inputClass} ${errors.role_id ? 'border-red-500' : ''}`}>
                   <option value="">Select Role</option>
                   {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
                 </select>
@@ -390,7 +391,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
               <>
                 <div className="col-span-2 animate-in fade-in slide-in-from-top-1 duration-200">
                   <label className={labelClass}>Team</label>
-                  <select name="agent_id" value={formData.agent_id || ''} onChange={handleInputChange} className={`${inputClass} ${errors.agent_id ? 'border-red-500' : ''}`}>
+                  <select aria-label="Team" name="agent_id" value={formData.agent_id || ''} onChange={handleInputChange} className={`${inputClass} ${errors.agent_id ? 'border-red-500' : ''}`}>
                     <option value="">Select Team</option>
                     {agents.map(a => <option key={a.id} value={a.id}>{a.team_name}</option>)}
                   </select>
@@ -422,7 +423,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
                   className={`${inputClass} ${errors.password ? 'border-red-500' : ''}`}
                   placeholder={isEditMode ? 'Leave blank to keep current' : 'At least 8 characters'}
                 />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-2.5 text-gray-500">
+                <button aria-label={showPassword ? 'Hide password' : 'Show password'} type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-2.5 text-gray-500">
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
@@ -443,7 +444,7 @@ const UserModal: React.FC<UserModalProps> = ({ isOpen, onClose, onSave, user, ag
                     className={`${inputClass} ${errors.confirmPassword ? 'border-red-500' : ''}`}
                     placeholder="Repeat password"
                   />
-                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-2.5 text-gray-500">
+                  <button aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'} type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-2.5 text-gray-500">
                     {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>

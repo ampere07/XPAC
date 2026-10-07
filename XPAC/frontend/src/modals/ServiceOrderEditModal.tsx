@@ -1533,6 +1533,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Username</label>
               <input
+                aria-label="Username"
                 type="text"
                 value={formData.username}
                 readOnly
@@ -1545,6 +1546,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>PPPOE Password</label>
               <input
+                aria-label="PPPOE Password"
                 type="text"
                 value={formData.pppoePassword || ''}
                 readOnly
@@ -1559,6 +1561,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Connection Type</label>
                   <input
+                    aria-label="Connection Type"
                     type="text"
                     value={formData.connectionType}
                     readOnly
@@ -1571,6 +1574,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>Router/Modem SN</label>
                   <input
+                    aria-label="Router/Modem SN"
                     type="text"
                     value={formData.routerModemSN}
                     readOnly
@@ -1583,6 +1587,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>LCP</label>
                   <input
+                    aria-label="LCP"
                     type="text"
                     value={formData.lcp}
                     onChange={(e) => handleInputChange('lcp', e.target.value)}
@@ -1596,6 +1601,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>NAP</label>
                   <input
+                    aria-label="NAP"
                     type="text"
                     value={formData.nap}
                     onChange={(e) => handleInputChange('nap', e.target.value)}
@@ -1609,6 +1615,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>PORT</label>
                   <input
+                    aria-label="PORT"
                     type="text"
                     value={formData.port}
                     onChange={(e) => handleInputChange('port', e.target.value)}
@@ -1622,6 +1629,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                     }`}>VLAN</label>
                   <input
+                    aria-label="VLAN"
                     type="text"
                     value={formData.vlan}
                     onChange={(e) => handleInputChange('vlan', e.target.value)}
@@ -1638,6 +1646,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 }`}>Support Status</label>
               <div className="relative">
                 <select
+                  aria-label="Support Status"
                   value={formData.supportStatus}
                   onChange={(e) => handleInputChange('supportStatus', e.target.value)}
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
@@ -1661,6 +1670,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     }`}>Visit Status<span className="text-red-500">*</span></label>
                   <div className="relative">
                     <select
+                      aria-label="Visit Status"
                       value={formData.visitStatus}
                       onChange={(e) => handleInputChange('visitStatus', e.target.value)}
                       className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
@@ -1691,6 +1701,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                       }`}>Assigned Email<span className="text-red-500">*</span></label>
                     <input
+                      aria-label="Assigned Email"
                       type="text"
                       // Resolved to the technician's name, matching what the editable
                       // SearchableField displays, rather than showing the raw email.
@@ -1782,6 +1793,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                             }`}>New Port<span className="text-red-500">*</span></label>
                           <div className="relative">
                             <select
+                              aria-label="New Port"
                               value={formData.newPort}
                               onChange={(e) => handleInputChange('newPort', e.target.value)}
                               className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'
@@ -1915,6 +1927,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                         }`}>Visit Remarks<span className="text-red-500">*</span></label>
                       <textarea
+                        aria-label="Visit Remarks"
                         value={formData.visitRemarks}
                         onChange={(e) => handleInputChange('visitRemarks', e.target.value)}
                         rows={3}
@@ -2039,6 +2052,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                               <div className="flex flex-col">
                                 <div className="h-7 mb-2"></div> {/* Spacer to align with labels */}
                                 <button
+                                  aria-label="Remove item"
                                   type="button"
                                   onClick={() => handleRemoveItem(index)}
                                   className="p-2 text-red-500 hover:text-red-400"
@@ -2252,6 +2266,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-2">Visit Remarks<span className="text-red-500">*</span></label>
                       <textarea
+                        aria-label="Visit Remarks"
                         value={formData.visitRemarks}
                         onChange={(e) => handleInputChange('visitRemarks', e.target.value)}
                         rows={3}
@@ -2276,6 +2291,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Concern<span className="text-red-500">*</span></label>
                 <input
+                  aria-label="Concern"
                   type="text"
                   value={formData.concern}
                   readOnly
@@ -2322,6 +2338,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Concern Remarks{!isTechnician && <span className="text-red-500">*</span>}</label>
               <textarea
+                aria-label="Concern remarks"
                 value={formData.concernRemarks}
                 onChange={(e) => handleInputChange('concernRemarks', e.target.value)}
                 readOnly={isTechnician}
@@ -2348,6 +2365,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                 }`}>Modified By</label>
               <input
+                aria-label="Modified By"
                 type="email"
                 value={formData.modifiedBy}
                 readOnly
@@ -2361,6 +2379,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 }`}>Modified Date</label>
               <div className="relative">
                 <input
+                  aria-label="Modified Date"
                   type="text"
                   value={formData.modifiedDate}
                   readOnly
@@ -2429,6 +2448,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Support Remarks{!isTechnician && <span className="text-red-500">*</span>}</label>
                 <textarea
+                  aria-label="Support remarks"
                   value={formData.supportRemarks}
                   onChange={(e) => handleInputChange('supportRemarks', e.target.value)}
                   readOnly={isTechnician}
@@ -2461,6 +2481,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   <span className={`px-3 py-2 ${isDarkMode ? 'text-white' : 'text-gray-900'
                     }`}>₱</span>
                   <input
+                    aria-label="Service Charge"
                     type="number"
                     value={formData.serviceCharge}
                     onChange={(e) => handleInputChange('serviceCharge', e.target.value)}
@@ -2470,6 +2491,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   />
                   <div className="flex">
                     <button
+                      aria-label="Decrease service charge"
                       type="button"
                       onClick={() => handleNumberChange('serviceCharge', false)}
                       className={`px-3 py-2 border-l ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'
@@ -2484,6 +2506,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                       <Minus size={16} />
                     </button>
                     <button
+                      aria-label="Increase service charge"
                       type="button"
                       onClick={() => handleNumberChange('serviceCharge', true)}
                       className={`px-3 py-2 border-l ${isDarkMode ? 'text-gray-400 hover:text-white border-gray-700' : 'text-gray-600 hover:text-gray-900 border-gray-300'

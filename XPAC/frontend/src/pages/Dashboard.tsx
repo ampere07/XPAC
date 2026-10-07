@@ -642,7 +642,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     the sidebar's Logout button — is unreachable. dvh tracks the
                     actually-visible height. Matches the h-[100dvh] already used by the
                     detail panels. */}
-                <div className={`h-[100dvh] flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
+                <div data-testid="dashboard-screen" className={`h-[100dvh] flex flex-col overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
                     }`}>
                     {/* Fixed Header */}
                     <div className="flex-shrink-0">
@@ -660,6 +660,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                         {/* Mobile Overlay */}
                         {isMobileMenuOpen && (
                             <div
+                                role="button"
+                                aria-label="Close"
                                 className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
                                 onClick={closeMobileMenu}
                             />

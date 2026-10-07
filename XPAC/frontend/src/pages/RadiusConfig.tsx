@@ -440,6 +440,7 @@ const RadiusConfig: React.FC = () => {
                           Connection Type
                         </label>
                         <select
+                          aria-label="Connection Type"
                           value={formData.ssl_type}
                           onChange={(e) => handleInputChange('ssl_type', e.target.value)}
                           className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode
@@ -776,6 +777,7 @@ const RadiusConfig: React.FC = () => {
                         Connection Type
                       </label>
                       <select
+                        aria-label="Connection Type"
                         value={formData.ssl_type}
                         onChange={(e) => handleInputChange('ssl_type', e.target.value)}
                         className={`w-full px-3 py-1.5 text-sm rounded focus:outline-none focus:border-orange-500 ${isDarkMode

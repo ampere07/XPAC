@@ -817,6 +817,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.proof_of_billing_url && (
                 <button
+                  aria-label="Open proof of billing"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.proof_of_billing_url)}
@@ -842,6 +843,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.government_valid_id_url && (
                 <button
+                  aria-label="Open government valid id"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.government_valid_id_url)}
@@ -870,6 +872,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.secondary_government_valid_id_url && (
                 <button
+                  aria-label="Open secondary government valid id"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.secondary_government_valid_id_url)}
@@ -895,6 +898,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.house_front_picture_url && (
                 <button
+                  aria-label="Open house front picture"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.house_front_picture_url)}
@@ -920,6 +924,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.promo_url && (
                 <button
+                  aria-label="Open promo"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.promo_url)}
@@ -945,6 +950,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.nearest_landmark1_url && (
                 <button
+                  aria-label="Open nearest landmark1"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.nearest_landmark1_url)}
@@ -970,6 +976,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.nearest_landmark2_url && (
                 <button
+                  aria-label="Open nearest landmark2"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.nearest_landmark2_url)}
@@ -995,6 +1002,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.document_attachment_url && (
                 <button
+                  aria-label="Open document attachment"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.document_attachment_url)}
@@ -1020,6 +1028,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
               </span>
               {detailedApplication?.other_isp_bill_url && (
                 <button
+                  aria-label="Open other isp bill"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                     }`}
                   onClick={() => window.open(detailedApplication.other_isp_bill_url)}
@@ -1255,6 +1264,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
                           }`}
                       >
                         <input
+                          aria-label={`Show ${getFieldLabel(fieldKey)}`}
                           type="checkbox"
                           checked={fieldVisibility[fieldKey]}
                           onChange={() => toggleFieldVisibility(fieldKey)}
@@ -1668,6 +1678,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
             </div>
 
             <button
+              aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded-full transition-colors ${
                 isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'

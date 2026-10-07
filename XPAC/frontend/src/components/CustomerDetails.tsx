@@ -2091,6 +2091,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                           >
                             <div className="flex items-center space-x-2">
                               <input
+                                aria-label={`Show ${sectionLabel}`}
                                 type="checkbox"
                                 checked={columnVisibility[sectionKey]}
                                 onChange={(e) => {
@@ -2147,6 +2148,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                 )}
               </div>
               <button
+                aria-label="Close"
                 onClick={handleClose}
                 className={`p-2 rounded transition-colors ${isDarkMode
                   ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -2628,6 +2630,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
             </div>
 
             <button
+              aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded-full transition-colors ${
                 isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'
@@ -2729,6 +2732,7 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
               // middle-click, ctrl/cmd-click, "Open in new window", copy link address — which a
               // click handler would swallow. rel guards the opener against the target page.
               <a
+                aria-label={`Open ${url}`}
                 key={scheme}
                 role="menuitem"
                 href={url}

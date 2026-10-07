@@ -524,6 +524,7 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
               From
             </label>
             <input
+              aria-label="From"
               type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
               value={currentValue?.from || ''}
               onChange={(e) => handleDateChange(selectedColumn.key, 'from', e.target.value)}
@@ -539,6 +540,7 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
               To
             </label>
             <input
+              aria-label="To"
               type={selectedColumn.dataType === 'datetime' ? 'datetime-local' : 'date'}
               value={currentValue?.to || ''}
               onChange={(e) => handleDateChange(selectedColumn.key, 'to', e.target.value)}
@@ -578,6 +580,8 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
     <div className="fixed inset-0 z-50 overflow-hidden text-left">
       <div className="absolute inset-0 overflow-hidden">
         <div
+          role="button"
+          aria-label="Close"
           className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity"
           onClick={onClose}
         />
@@ -591,6 +595,7 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
               <div className="flex items-center space-x-4">
                 {selectedColumn && (
                   <button
+                    aria-label="Back"
                     onClick={handleBack}
                     className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       }`}
@@ -610,6 +615,7 @@ const JobOrderFunnelFilter: React.FC<JobOrderFunnelFilterProps> = ({
                 </div>
               </div>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className={`p-2 rounded-xl transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   }`}

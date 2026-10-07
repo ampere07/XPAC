@@ -1090,7 +1090,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
             }`}
         >
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+          <button aria-label="Dismiss notice" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1251,6 +1251,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
             <div className="flex items-center gap-2">
               <label className={`text-xs ${muted}`}>Offline for at least</label>
               <input
+                aria-label="Offline for at least"
                 type="number"
                 min={1}
                 value={offlineDays}
@@ -1282,6 +1283,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                   selection and takes every eligible row — including ones on pages the
                   operator has not scrolled to — which is the whole point of "All". */}
               <select
+                aria-label="Bulk action"
                 value=""
                 disabled={jobRunning}
                 onChange={(e) => {
@@ -1352,6 +1354,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                   filling blank columns is safe and is what most operators want, while
                   replacing serials somebody already recorded deserves its own decision. */}
               <select
+                aria-label="Fill action"
                 value=""
                 disabled={jobRunning}
                 onChange={(e) => {
@@ -1620,6 +1623,7 @@ const SmartOltTool: React.FC<SmartOltToolProps> = ({ isDarkMode: isDarkModeProp 
                             inactive ONU while the individual boxes stayed greyed out,
                             so a row could be selected in bulk but not on its own. */}
                         <input
+                          aria-label={`Select ${id}`}
                           type="checkbox"
                           disabled={!selectable(row)}
                           checked={selected.has(id)}

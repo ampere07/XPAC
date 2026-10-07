@@ -335,6 +335,7 @@ const SmsConfig: React.FC = () => {
                           Provider
                         </label>
                         <select
+                          aria-label="Provider"
                           value={formData.provider}
                           onChange={(e) => handleInputChange('provider', e.target.value)}
                           className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode
@@ -656,6 +657,7 @@ const SmsConfig: React.FC = () => {
                         Provider
                       </label>
                       <select
+                        aria-label="Provider"
                         value={formData.provider}
                         onChange={(e) => handleInputChange('provider', e.target.value)}
                         className={`w-full px-3 py-1.5 text-sm border rounded focus:outline-none ${isDarkMode

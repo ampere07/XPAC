@@ -337,6 +337,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
             <img src={imagePreviews[field]} alt={label} className="w-full h-32 object-cover" />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               <button
+                aria-label={`Remove ${label} image`}
                 onClick={() => {
                   setImagePreviews(prev => ({ ...prev, [field]: '' }));
                   setImages(prev => ({ ...prev, [field]: null }));
@@ -398,6 +399,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                   <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Work Category<span className="text-red-500 ml-1">*</span></label>
                   <div className="relative">
                     <select
+                      aria-label="Work Category"
                       value={formData.work_category}
                       onChange={(e) => handleInputChange('work_category', e.target.value)}
                       disabled={isAssignedToCurrentUser}
@@ -418,6 +420,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                     <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Work Status</label>
                     <div className="relative">
                       <select
+                        aria-label="Work Status"
                         value={formData.work_status}
                         onChange={(e) => handleInputChange('work_status', e.target.value)}
                         className={`w-full px-3 py-2 border rounded appearance-none transition-all duration-300 focus:outline-none focus:border-orange-500 ${isDarkMode
@@ -482,6 +485,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                       />
                       {!isAssignedToCurrentUser && (
                         <button
+                          aria-label={isAssignToOpen || formData.assign_to ? 'Clear assignee' : 'Open assignee list'}
                           type="button"
                           onClick={() => {
                             if (isAssignToOpen) {
@@ -506,6 +510,8 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                             .filter(a => a.name.toLowerCase().includes(assignToSearch.toLowerCase()) || a.email.toLowerCase().includes(assignToSearch.toLowerCase()))
                             .map((assignee) => (
                               <div
+                                role="option"
+                                aria-label={`Select ${assignee.name}`}
                                 key={assignee.email}
                                 className={`px-3 py-2 cursor-pointer transition-colors flex flex-col ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${formData.assign_to === assignee.email ? (isDarkMode ? 'bg-gray-700 text-orange-400' : 'bg-gray-50 text-orange-600') : ''}`}
                                 onClick={() => {
@@ -554,6 +560,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                         <div className="absolute inset-0 flex items-center justify-center p-6">
                           <img src={imagePreviews.signature} alt="Signature Preview" className="max-h-full max-w-full drop-shadow-xl" />
                           <button
+                            aria-label="Remove signature"
                             onClick={() => {
                               setImagePreviews(prev => ({ ...prev, signature: '' }));
                               setImages(prev => ({ ...prev, signature: null }));
@@ -591,6 +598,7 @@ const AssignWorkOrderModal: React.FC<AssignWorkOrderModalProps> = ({
                               <Camera size={16} />
                             </label>
                             <button
+                              aria-label="Clear signature pad"
                               type="button"
                               onClick={() => sigCanvas.current?.clear()}
                               className={`p-2 rounded shadow transition-all ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-white text-gray-600 border'}`}

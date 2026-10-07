@@ -67,7 +67,7 @@ const Body: React.FC<{
 
             <div>
                 <label className={labelClass}>What to download</label>
-                <select value={mode} onChange={(e) => setMode(e.target.value as Mode)} className={selectClass}>
+                <select aria-label="What to download" value={mode} onChange={(e) => setMode(e.target.value as Mode)} className={selectClass}>
                     <option value="all">Download all</option>
                     <option value="period">Specific date</option>
                 </select>
@@ -87,6 +87,7 @@ const Body: React.FC<{
                         </p>
                     ) : (
                         <select
+                            aria-label="Billing period"
                             value={selectedPeriod}
                             onChange={(e) => setSelectedPeriod(e.target.value)}
                             className={selectClass}

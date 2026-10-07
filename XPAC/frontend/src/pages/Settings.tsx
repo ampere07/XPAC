@@ -714,6 +714,8 @@ const Settings: React.FC = () => {
               <div className="space-y-2 mb-4">
                 {imageSizes.map((size) => (
                   <div
+                    role="button"
+                    aria-label={`Open ${size.image_size}`}
                     key={size.id}
                     onClick={() => isEditingImageSize && setSelectedImageSizeId(size.id)}
                     className={`flex items-center justify-between p-3 rounded border transition-all ${isEditingImageSize ? 'cursor-pointer' : ''}`}

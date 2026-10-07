@@ -1375,6 +1375,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={timestampFrom}
                   onChange={(e) => setTimestampFrom(e.target.value)}
@@ -1388,6 +1389,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={timestampTo}
                   onChange={(e) => setTimestampTo(e.target.value)}
@@ -1455,6 +1457,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
 
             return (
               <button
+                aria-label={`Show ${status.name}`}
                 key={status.id}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1591,6 +1594,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                 {displayMode === 'table' && (
                   <div className="relative z-50 flex-shrink-0" ref={filterDropdownRef}>
                     <button
+                      aria-label="Column options"
                       className={`px-4 py-2 rounded text-sm transition-colors flex items-center ${isDarkMode
                         ? 'hover:bg-gray-800 text-white'
                         : 'hover:bg-gray-100 text-gray-900'
@@ -1816,6 +1820,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
                       <button
+                        aria-label={`Remove ${key} filter`}
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {
@@ -1884,6 +1889,8 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                   <div className="space-y-0">
                     {paginatedApplications.map((application) => (
                       <div
+                        role="button"
+                        aria-label={`Open ${application.create_date}`}
                         key={application.id}
                         onClick={() => handleRowClick(application)}
                         className={`px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode ? 'hover:bg-gray-800 border-gray-800' : 'hover:bg-gray-100 border-gray-200'
@@ -1985,6 +1992,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                                 <span>{column.label}</span>
                                 {(hoveredColumn === column.key || sortColumn === column.key) && (
                                   <button
+                                    aria-label={`Sort by ${column.label}`}
                                     onClick={() => handleSort(column.key)}
                                     className="ml-2 transition-colors"
                                   >
@@ -2057,6 +2065,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                   <div className="flex items-center gap-1.5">
                     <span>Show</span>
                     <select
+                      aria-label="Items per page"
                       value={itemsPerPage}
                       onChange={(e) => setItemsPerPage(Number(e.target.value))}
                       className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -2098,6 +2107,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                       <ChevronsLeft size={16} />
                     </button>
                     <button
+                      aria-label="Previous page"
                       onClick={() => handlePageChange(currentPage - 1)}
                       disabled={currentPage === 1}
                       className={`p-1.5 rounded text-sm transition-colors ${currentPage === 1
@@ -2108,6 +2118,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                       <ChevronLeft size={16} />
                     </button>
                     <button
+                      aria-label="Next page"
                       onClick={() => handlePageChange(currentPage + 1)}
                       disabled={currentPage === totalPages || totalPages <= 1}
                       className={`p-1.5 rounded text-sm transition-colors ${currentPage === totalPages || totalPages <= 1
@@ -2210,6 +2221,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                 Download
               </h2>
               <button
+                aria-label="Close"
                 onClick={() => setIsDownloadModalOpen(false)}
                 className={`p-1 rounded transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
               >

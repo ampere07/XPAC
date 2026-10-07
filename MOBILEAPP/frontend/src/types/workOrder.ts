@@ -25,6 +25,7 @@ export type WorkOrderData = WorkOrder;
 export interface WorkOrderDetailsProps {
   workOrder: WorkOrder | null;
   onClose: () => void;
+  onDeleteSuccess?: () => void;
   onEdit?: () => void;
   onRefresh?: () => void;
   isMobile?: boolean;

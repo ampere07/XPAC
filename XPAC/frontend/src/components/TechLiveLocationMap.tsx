@@ -510,6 +510,7 @@ const TechLiveLocationMap: React.FC<Props> = ({ data, isDarkMode, colorPalette }
                   return (
                     <label key={t.user_id} className="flex items-center gap-1.5 cursor-pointer py-0.5">
                       <input
+                        aria-label={`Track ${t.full_name}`}
                         type="checkbox"
                         className="cursor-pointer"
                         checked={checked}
