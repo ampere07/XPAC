@@ -651,6 +651,7 @@ const LocationList: React.FC = () => {
                 <div key={`region-${region.id}`} className="flex-shrink-0">
                   <div className="flex flex-col md:flex-row items-center">
                     <button
+                      aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${region.name}`}
                       onClick={() => toggleRegion(region.id)}
                       className={`p-2 transition-colors hidden md:block ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         }`}>
@@ -661,6 +662,7 @@ const LocationList: React.FC = () => {
                       )}
                     </button>
                     <button
+                      aria-label={`Show ${region.name}`}
                       onClick={() => setSidebarFilter({ type: 'region', id: region.id })}
                       className={`flex-1 md:flex-1 flex flex-col md:flex-row items-center md:justify-between py-3 px-4 md:pr-4 md:pl-0 text-sm transition-colors rounded-md md:rounded-none ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         }`}
@@ -699,6 +701,7 @@ const LocationList: React.FC = () => {
                       <div key={`city-${city.id}`} className="ml-6 hidden md:block">
                         <div className="flex items-center">
                           <button
+                            aria-label={`${isCityExpanded ? 'Collapse' : 'Expand'} ${city.name}`}
                             onClick={() => toggleCity(city.id)}
                             className={`p-2 transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                               }`}>
@@ -709,6 +712,7 @@ const LocationList: React.FC = () => {
                             )}
                           </button>
                           <button
+                            aria-label={`Show ${city.name}`}
                             onClick={() => setSidebarFilter({ type: 'city', id: city.id })}
                             className={`flex-1 flex items-center justify-between py-2 pr-4 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                               }`}
@@ -743,6 +747,7 @@ const LocationList: React.FC = () => {
 
                           return (
                             <button
+                              aria-label={`Show ${barangay.name}`}
                               key={`barangay-${barangay.id}`}
                               onClick={() => setSidebarFilter({ type: 'borough', id: barangay.id })}
                               className={`w-full flex items-center justify-between py-2 pl-12 pr-4 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -923,6 +928,7 @@ const LocationList: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span>Show</span>
                   <select
+                    aria-label="Items per page"
                     value={itemsPerPage}
                     onChange={(e) => handleItemsPerPageChange(Number(e.target.value))}
                     className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -954,6 +960,7 @@ const LocationList: React.FC = () => {
                 </button>
 
                 <button
+                  aria-label="Previous page"
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
                   className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -971,6 +978,7 @@ const LocationList: React.FC = () => {
                 </div>
 
                 <button
+                  aria-label="Next page"
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage === totalPages}
                   className={`p-1.5 rounded transition-colors ${currentPage === totalPages

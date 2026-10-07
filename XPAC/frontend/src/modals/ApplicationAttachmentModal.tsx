@@ -86,7 +86,7 @@ const ImageUploadField = ({
                 <>
                     <Camera size={32} className={isDarkMode ? 'text-gray-500' : 'text-gray-400'} />
                     <span className={`mt-2 text-xs font-medium ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>Click to upload {label}</span>
-                    <input 
+                    <input aria-label={`Upload ${field}`} 
                         type="file" 
                         className="absolute inset-0 opacity-0 cursor-pointer" 
                         accept="image/*" 

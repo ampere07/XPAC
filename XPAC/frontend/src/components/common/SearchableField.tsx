@@ -109,6 +109,7 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
           className={`w-full bg-transparent border-none focus:outline-none p-0 text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'}`}
         />
         <button
+          aria-label={isOpen ? 'Close options' : 'Open options'}
           type="button"
           onClick={() => {
             if (isOpen) {
@@ -146,7 +147,7 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
               groupedOptions ? (
                 (filteredData as GroupedOption[]).map((group, gIdx) => (
                   <div key={gIdx}>
-                    <div 
+                    <div role={isHeaderSelectable ? 'button' : undefined} aria-label={`Select ${group.label}`} 
                       className={`px-4 py-1.5 text-[10px] font-bold uppercase tracking-wider ${
                         isDarkMode ? 'bg-gray-900/50 text-gray-500' : 'bg-gray-50 text-gray-400'
                       } ${isHeaderSelectable ? `cursor-pointer hover:bg-orange-500/10 hover:text-orange-500 transition-colors ${
@@ -164,6 +165,8 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
                     </div>
                     {group.options.map((option, oIdx) => (
                       <div
+                        role="option"
+                        aria-label={`Select ${option[optionLabelKey]}`}
                         key={`${gIdx}-${oIdx}`}
                         className={`px-6 py-2 text-sm cursor-pointer transition-colors ${
                           isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'
@@ -187,6 +190,8 @@ const SearchableField: React.FC<SearchableFieldProps> = ({
               ) : (
                 (filteredData as any[]).map((option, idx) => (
                   <div
+                    role="option"
+                    aria-label={`Select ${option[optionLabelKey]}`}
                     key={option.id || idx}
                     className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${
                       isDarkMode ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-100 text-gray-700'

@@ -114,5 +114,9 @@ export const invoiceService = {
       console.error('Error fetching invoice record:', error);
       throw error;
     }
+  },
+
+  async deleteInvoice(id: number): Promise<void> {
+    await apiClient.delete(`/invoices/${id}`);
   }
 };

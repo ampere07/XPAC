@@ -427,6 +427,7 @@ Route::prefix('statement-of-accounts')->group(function () {
 Route::prefix('invoices')->group(function () {
     Route::get('/by-account/{accountNo}', [RelatedDataController::class , 'getInvoicesByAccount']);
     Route::get('/{id}', [RelatedDataController::class , 'getInvoiceById']);
+    Route::delete('/{id}', [\App\Http\Controllers\InvoiceController::class , 'destroy'])->whereNumber('id')->middleware('auth:sanctum');
     // The paid invoice PDF: returns invoices.pdf_url, making the PDF first if the invoice has none
     // (one paid before PDFs existed, or whose generation failed at payment time).
     Route::post('/{id}/generate-pdf', function ($id) {

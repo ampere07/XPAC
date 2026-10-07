@@ -64,6 +64,7 @@ interface InvoiceStore {
     refreshInvoiceRecords: () => Promise<void>;
     silentRefresh: () => Promise<void>;
     pollLatestUpdates: () => Promise<void>;
+    removeInvoiceRecord: (id: string) => void;
     lastUpdated: Date | null;
 }
 
@@ -201,8 +202,15 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
         await get().pollLatestUpdates();
     },
 
+    removeInvoiceRecord: (id: string) => {
+        set(state => ({
+            invoiceRecords: state.invoiceRecords.filter(record => record.id !== id),
+            totalCount: Math.max(0, state.totalCount - 1)
+        }));
+    },
+
     pollLatestUpdates: async () => {
-        const { lastUpdated, invoiceRecords, totalCount } = get();
+        const { lastUpdated, invoiceRecords } = get();
         if (!lastUpdated || invoiceRecords.length === 0) return;
 
         try {
@@ -264,16 +272,16 @@ export const useInvoiceStore = create<InvoiceStore>((set, get) => ({
 
                 const newTransformed = (result.data as InvoiceRecord[]).map(transform);
 
-                const updateMap = new Map();
-                invoiceRecords.forEach(r => updateMap.set(r.id, r));
-                newTransformed.forEach(r => updateMap.set(r.id, r));
+                set(state => {
+                    const updateMap = new Map<string, InvoiceRecordUI>();
+                    state.invoiceRecords.forEach(r => updateMap.set(r.id, r));
+                    newTransformed.forEach(r => updateMap.set(r.id, r));
 
-                const allFetchedRecords = Array.from(updateMap.values());
-
-                set({
-                    invoiceRecords: [...allFetchedRecords].sort((a, b) => parseInt(b.id) - parseInt(a.id)),
-                    totalCount: result.total || totalCount,
-                    lastUpdated: new Date()
+                    return {
+                        invoiceRecords: Array.from(updateMap.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id)),
+                        totalCount: result.total || state.totalCount,
+                        lastUpdated: new Date()
+                    };
                 });
             } else {
                 set({ lastUpdated: new Date() });

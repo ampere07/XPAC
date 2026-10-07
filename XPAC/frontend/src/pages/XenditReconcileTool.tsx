@@ -399,7 +399,7 @@ const XenditReconcileTool: React.FC<XenditReconcileToolProps> = ({ isDarkMode: i
           }`}
         >
           <span className="flex-1">{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
+          <button aria-label="Dismiss notice" onClick={() => setNotice(null)} className="shrink-0 opacity-70 hover:opacity-100">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -409,6 +409,7 @@ const XenditReconcileTool: React.FC<XenditReconcileToolProps> = ({ isDarkMode: i
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         {statCards.map((stat) => (
           <button
+            aria-label={`Filter by ${stat.label}`}
             key={stat.label}
             onClick={() => { setFilter(stat.filter); setPage(1); }}
             title={stat.hint}
@@ -574,6 +575,7 @@ const XenditReconcileTool: React.FC<XenditReconcileToolProps> = ({ isDarkMode: i
                         return (
                           <td key={column.key} className="px-3 py-2.5">
                             <input
+                              aria-label={`Select payment ${row.id}`}
                               type="checkbox"
                               checked={grid.selected.has(String(row.id))}
                               onChange={(e) => grid.toggleRow(String(row.id), e.target.checked)}

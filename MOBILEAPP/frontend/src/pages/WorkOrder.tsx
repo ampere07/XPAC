@@ -114,7 +114,7 @@ const WorkOrderPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(() => settingsColorPaletteService.getActiveSync());
 
-  const { workOrders, isLoading, fetchWorkOrders, error } = useWorkOrderStore();
+  const { workOrders, isLoading, fetchWorkOrders, removeWorkOrderRecord, error } = useWorkOrderStore();
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showStatusModal, setShowStatusModal] = useState<boolean>(false);
@@ -456,6 +456,10 @@ const WorkOrderPage: React.FC = () => {
           <WorkOrderDetails
             workOrder={selectedWorkOrder}
             onClose={handleCloseModal}
+            onDeleteSuccess={() => {
+              if (selectedWorkOrder) removeWorkOrderRecord(selectedWorkOrder.id);
+              handleCloseModal();
+            }}
             onEdit={() => {
               setShowAssignModal(true);
             }}

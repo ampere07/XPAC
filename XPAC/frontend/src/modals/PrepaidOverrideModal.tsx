@@ -334,13 +334,13 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
                                             <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                                 Account No.
                                             </label>
-                                            <input type="text" value={accountNo} readOnly className={readOnlyBase} />
+                                            <input aria-label="Account No." type="text" value={accountNo} readOnly className={readOnlyBase} />
                                         </div>
                                         <div className="space-y-2">
                                             <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                                 Customer
                                             </label>
-                                            <input type="text" value={customerName || '-'} readOnly className={readOnlyBase} />
+                                            <input aria-label="Customer" type="text" value={customerName || '-'} readOnly className={readOnlyBase} />
                                         </div>
                                     </div>
 
@@ -348,14 +348,14 @@ const PrepaidOverrideModal: React.FC<PrepaidOverrideModalProps> = ({
                                         <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                             Requested By
                                         </label>
-                                        <input type="text" value={requestedBy} readOnly className={readOnlyBase} />
+                                        <input aria-label="Requested By" type="text" value={requestedBy} readOnly className={readOnlyBase} />
                                     </div>
 
                                     <div className="space-y-2">
                                         <label className={`block text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                             Current Prepaid Expiration
                                         </label>
-                                        <input type="text" value={formatDateTime(currentExpiration)} readOnly className={readOnlyBase} />
+                                        <input aria-label="Current Prepaid Expiration" type="text" value={formatDateTime(currentExpiration)} readOnly className={readOnlyBase} />
                                         {!currentExpiration && (
                                             <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                                                 The prepaid clock has not started for this account. Adding days starts it from today.

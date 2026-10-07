@@ -1008,6 +1008,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <input
+                    aria-label="Timestamp"
                     type="datetime-local"
                     value={formData.timestamp}
                     onChange={(e) => handleInputChange('timestamp', e.target.value)}
@@ -1024,6 +1025,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Status"
                     value={formData.status}
                     onChange={(e) => handleInputChange('status', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.status ? 'border-red-500' : ''}`}
@@ -1069,6 +1071,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Choose Plan"
                     value={formData.choosePlan}
                     onChange={(e) => handleInputChange('choosePlan', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.choosePlan ? 'border-red-500' : ''}`}
@@ -1096,6 +1099,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Promo</label>
                 <div className="relative">
                   <select
+                    aria-label="Promo"
                     value={formData.promo}
                     onChange={(e) => handleInputChange('promo', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'}`}
@@ -1120,6 +1124,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   Remarks{formData.status === 'Confirmed' && ['Reschedule', 'Failed'].includes(formData.onsiteStatus) && <span className="text-red-500">*</span>}
                 </label>
                 <textarea
+                  aria-label="Remarks"
                   value={formData.remarks}
                   onChange={(e) => handleInputChange('remarks', e.target.value)}
                   rows={3}
@@ -1153,6 +1158,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Billing Type"
                     value={formData.generationType}
                     onChange={(e) => handleInputChange('generationType', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.generationType ? 'border-red-500' : ''}`}
@@ -1184,6 +1190,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}>
                   <input
+                    aria-label="Billing Day"
                     type="number"
                     min="1"
                     max="30"
@@ -1194,6 +1201,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   />
                   <div className="flex">
                     <button
+                      aria-label="Decrease billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', false)}
                       disabled={formData.isLastDayOfMonth}
@@ -1202,6 +1210,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                       <Minus size={16} />
                     </button>
                     <button
+                      aria-label="Increase billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', true)}
                       disabled={formData.isLastDayOfMonth}
@@ -1316,6 +1325,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                     </label>
                     <div className="relative">
                       <input
+                        aria-label="Expiration Date"
                         type="date"
                         value={formData.vipExpiration}
                         onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
@@ -1342,6 +1352,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Onsite Status"
                       value={formData.onsiteStatus}
                       onChange={(e) => handleInputChange('onsiteStatus', e.target.value)}
                       className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} ${errors.onsiteStatus ? 'border-red-500' : ''}`}
@@ -1410,6 +1421,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                   Modified By<span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label="Modified By"
                   type="email"
                   value={formData.modifiedBy}
                   readOnly
@@ -1423,6 +1435,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <input
+                    aria-label="Modified Date"
                     type="datetime-local"
                     value={formData.modifiedDate}
                     readOnly
@@ -1435,6 +1448,7 @@ const JobOrderDoneFormModal: React.FC<JobOrderDoneFormModalProps> = ({
               <div>
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Installation Landmark</label>
                 <input
+                  aria-label="Installation Landmark"
                   type="text"
                   value={formData.installationLandmark}
                   onChange={(e) => handleInputChange('installationLandmark', e.target.value)}

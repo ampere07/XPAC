@@ -359,6 +359,7 @@ const Rebate: React.FC = () => {
           <div className="flex items-center gap-2">
             <span>Show</span>
             <select
+              aria-label="Items per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -388,6 +389,7 @@ const Rebate: React.FC = () => {
           </button>
 
           <button
+            aria-label="Previous page"
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
             className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -405,6 +407,7 @@ const Rebate: React.FC = () => {
           </div>
 
           <button
+            aria-label="Next page"
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages || totalPages === 0}
             className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages || totalPages === 0
@@ -571,6 +574,7 @@ const Rebate: React.FC = () => {
           {/* Date Levels */}
           {dateItems.dates.map((item, index) => (
             <button
+              aria-label={`Show ${item.date}`}
               key={index}
               onClick={() => setSelectedDate(item.date)}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'

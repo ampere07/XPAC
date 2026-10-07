@@ -26,6 +26,7 @@ export interface WorkOrderDetailsProps {
   workOrder: WorkOrder | null;
   onClose: () => void;
   onRefresh?: () => void;
+  onDeleteSuccess?: () => void;
   isMobile?: boolean;
 }
 

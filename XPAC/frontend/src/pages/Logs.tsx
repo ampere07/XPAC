@@ -299,6 +299,7 @@ const Logs: React.FC = () => {
           </div>
 
           <select
+            aria-label="Filter by level"
             value={filterLevel}
             onChange={(e) => setFilterLevel(e.target.value)}
             className={`px-4 py-3 rounded focus:outline-none flex-shrink-0 ${isDarkMode

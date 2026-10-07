@@ -567,6 +567,7 @@ const DisconnectionLogs: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={statementDateFrom}
                   onChange={(e) => setStatementDateFrom(e.target.value)}
@@ -580,6 +581,7 @@ const DisconnectionLogs: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={statementDateTo}
                   onChange={(e) => setStatementDateTo(e.target.value)}
@@ -653,6 +655,7 @@ const DisconnectionLogs: React.FC = () => {
               <div className={`${isDarkMode ? 'bg-gray-900/50' : 'bg-gray-50/50 shadow-inner'}`}>
                 {dateItems.dates.map((item, index) => (
                   <button
+                    aria-label={`Show ${item.date}`}
                     key={index}
                     onClick={() => {
                       setSelectedDate(item.date);
@@ -692,6 +695,7 @@ const DisconnectionLogs: React.FC = () => {
           <div className="py-2">
             {locationItems.map((location) => (
               <button
+                aria-label={`Show ${location.name}`}
                 key={location.id}
                 onClick={() => {
                   setSelectedLocation(location.id);
@@ -770,6 +774,7 @@ const DisconnectionLogs: React.FC = () => {
             <div className="flex items-center space-x-3 w-full overflow-x-auto scrollbar-none pb-1 -mb-1">
               {isMobile && mobileViewMode === 'list' && (
                 <button
+                  aria-label="Back"
                   onClick={() => setMobileViewMode('sidebar')}
                   className={`p-2 rounded-lg transition-colors flex-shrink-0 ${
                     isDarkMode ? 'hover:bg-gray-800 text-gray-400 hover:text-white' : 'hover:bg-gray-100 text-gray-600 hover:text-gray-900'

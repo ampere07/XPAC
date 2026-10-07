@@ -1401,6 +1401,7 @@ const LiveMonitor: React.FC = () => {
       <div className="flex gap-2 items-center text-xs flex-wrap" style={{ fontSize: `${fontSize}px` }}>
         {id === 'pay_method_mon' && (
           <select
+            aria-label="Payment grouping"
             value={state.paymentMode || 'type'}
             onChange={(e) => updateWidgetState(id, { paymentMode: e.target.value as any })}
             className={`px-2 py-1 rounded border text-xs ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -1429,6 +1430,7 @@ const LiveMonitor: React.FC = () => {
         {(id !== 'pay_method_mon' || state.paymentMode !== 'months') &&
           (config.filterType === 'toggle_today' || config.filterType === 'date' || config.filterType === 'date_bgy') && (
             <select
+              aria-label="Time scope"
               value={state.scope}
               onChange={(e) => updateWidgetState(id, { scope: e.target.value as any })}
               className={`px-2 py-1 rounded border text-xs ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -1445,6 +1447,7 @@ const LiveMonitor: React.FC = () => {
 
         {config.filterType === 'year' && (
           <select
+            aria-label="Year"
             value={state.year}
             onChange={(e) => updateWidgetState(id, { year: e.target.value })}
             className={`px-2 py-1 rounded border text-xs ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -1457,6 +1460,7 @@ const LiveMonitor: React.FC = () => {
 
         {(config.filterType === 'bgy_only' || config.filterType === 'date_bgy') && barangays.length > 0 && (
           <select
+            aria-label="Barangay"
             value={state.bgy}
             onChange={(e) => updateWidgetState(id, { bgy: e.target.value })}
             className={`px-2 py-1 rounded border text-xs ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -1649,6 +1653,7 @@ const LiveMonitor: React.FC = () => {
           <div className="flex items-center gap-3 flex-wrap">
             {isSuperAdmin && (
               <select
+                aria-label="Organization"
                 value={selectedOrgId}
                 onChange={(e) => {
                   setSelectedOrgId(e.target.value);
@@ -1863,6 +1868,7 @@ const LiveMonitor: React.FC = () => {
                   className={`flex items-center gap-2 p-2 rounded cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
                 >
                   <input
+                    aria-label={`Show widget ${config.title}`}
                     type="checkbox"
                     checked={widgetStates[id]?.visible || false}
                     onChange={() => toggleWidgetVisibility(id)}
@@ -2118,6 +2124,7 @@ const LiveMonitor: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-bold uppercase opacity-60">Cols:</span>
                           <input
+                            aria-label="Grid columns"
                             type="number"
                             min={1}
                             max={12}
@@ -2129,6 +2136,7 @@ const LiveMonitor: React.FC = () => {
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-bold uppercase opacity-60">Rows:</span>
                           <input
+                            aria-label="Grid rows"
                             type="number"
                             min={1}
                             max={20}

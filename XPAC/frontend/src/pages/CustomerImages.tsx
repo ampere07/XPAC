@@ -216,6 +216,7 @@ const CustomerImages: React.FC = () => {
                 const active = selected?.account_no === folder.account_no;
                 return (
                   <button
+                    aria-label={`Open folder ${folder.account_no}`}
                     key={folder.account_no}
                     onClick={() => openFolder(folder)}
                     className={`w-full flex items-center gap-3 px-4 py-3 text-left border-b transition-colors ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-100 hover:bg-gray-100'}`}
@@ -243,9 +244,9 @@ const CustomerImages: React.FC = () => {
           </div>
           {lastPage > 1 && (
             <div className={`flex items-center justify-between px-4 py-2 border-t text-sm ${isDarkMode ? 'border-gray-700' : 'border-gray-200'} ${muted}`}>
-              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="p-1 disabled:opacity-40"><ChevronLeft size={18} /></button>
+              <button aria-label="Previous page" disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="p-1 disabled:opacity-40"><ChevronLeft size={18} /></button>
               <span>Page {page} of {lastPage}</span>
-              <button disabled={page >= lastPage} onClick={() => setPage(p => p + 1)} className="p-1 disabled:opacity-40"><ChevronRight size={18} /></button>
+              <button aria-label="Next page" disabled={page >= lastPage} onClick={() => setPage(p => p + 1)} className="p-1 disabled:opacity-40"><ChevronRight size={18} /></button>
             </div>
           )}
         </div>

@@ -86,6 +86,7 @@ const GroupTree: React.FC<GroupTreeProps> = ({
 
               {hasChildren && (
                 <span
+                  aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${node.label}`}
                   role="button"
                   tabIndex={0}
                   onClick={(event) => {

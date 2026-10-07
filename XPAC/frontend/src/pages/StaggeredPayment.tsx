@@ -699,6 +699,7 @@ const StaggeredPayment: React.FC = () => {
           <div className="flex items-center gap-2">
             <span>Show</span>
             <select
+              aria-label="Items per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -728,6 +729,7 @@ const StaggeredPayment: React.FC = () => {
           </button>
 
           <button
+            aria-label="Previous page"
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
             className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -745,6 +747,7 @@ const StaggeredPayment: React.FC = () => {
           </div>
 
           <button
+            aria-label="Next page"
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages}
             className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -979,6 +982,7 @@ const StaggeredPayment: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={staggeredDateFrom}
                   onChange={(e) => setStaggeredDateFrom(e.target.value)}
@@ -992,6 +996,7 @@ const StaggeredPayment: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={staggeredDateTo}
                   onChange={(e) => setStaggeredDateTo(e.target.value)}
@@ -1035,6 +1040,7 @@ const StaggeredPayment: React.FC = () => {
 
           {dateItems.dates.map((item, index) => (
             <button
+              aria-label={`Show ${item.date}`}
               key={index}
               onClick={() => setSelectedDate(item.date)}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1096,6 +1102,7 @@ const StaggeredPayment: React.FC = () => {
             <div className="flex flex-col space-y-3">
               <div className="flex items-center space-x-3">
                 <button
+                  aria-label="Toggle menu"
                   onClick={() => setMobileMenuOpen(true)}
                   className={`md:hidden p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-600'
                     }`}
@@ -1440,7 +1447,7 @@ const StaggeredPayment: React.FC = () => {
       {/* Mobile Overlay Menu */}
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setMobileMenuOpen(false)} />
+          <div role="button" aria-label="Close" className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setMobileMenuOpen(false)} />
           <div className={`absolute inset-y-0 left-0 w-64 shadow-xl flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
             }`}>
             <div className={`p-4 border-b flex items-center justify-between ${isDarkMode ? 'border-gray-700' : 'border-gray-200'
@@ -1448,6 +1455,7 @@ const StaggeredPayment: React.FC = () => {
               <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'
                 }`}>Categories</h2>
               <button
+                aria-label="Close"
                 onClick={() => setMobileMenuOpen(false)}
                 className={isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}
               >
@@ -1502,6 +1510,7 @@ const StaggeredPayment: React.FC = () => {
                   <div className="relative">
                     <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                     <input
+                      aria-label="From"
                       type="date"
                       value={staggeredDateFrom}
                       onChange={(e) => setStaggeredDateFrom(e.target.value)}
@@ -1515,6 +1524,7 @@ const StaggeredPayment: React.FC = () => {
                   <div className="relative">
                     <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                     <input
+                      aria-label="To"
                       type="date"
                       value={staggeredDateTo}
                       onChange={(e) => setStaggeredDateTo(e.target.value)}
@@ -1531,6 +1541,7 @@ const StaggeredPayment: React.FC = () => {
               {/* Date Categories */}
               {dateItems.dates.map((item, index) => (
                 <button
+                  aria-label={`Show ${item.date}`}
                   key={index}
                   onClick={() => {
                     setSelectedDate(item.date);

@@ -419,6 +419,7 @@ const PPPoESetup: React.FC = () => {
                   <div className="flex gap-2">
                     {actions.canEdit && (
                     <button
+                      aria-label="Edit"
                       onClick={() => handleEdit(usernamePattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
@@ -427,6 +428,7 @@ const PPPoESetup: React.FC = () => {
                     )}
                     {actions.canDelete && (
                     <button
+                      aria-label="Delete"
                       onClick={() => handleDelete(usernamePattern.id, 'username')}
                       className="text-red-600 hover:text-red-900"
                     >
@@ -504,6 +506,7 @@ const PPPoESetup: React.FC = () => {
                   <div className="flex gap-2">
                     {actions.canEdit && (
                     <button
+                      aria-label="Edit"
                       onClick={() => handleEdit(passwordPattern)}
                       className={`${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-900'}`}
                     >
@@ -512,6 +515,7 @@ const PPPoESetup: React.FC = () => {
                     )}
                     {actions.canDelete && (
                     <button
+                      aria-label="Delete"
                       onClick={() => handleDelete(passwordPattern.id, 'password')}
                       className="text-red-600 hover:text-red-900"
                     >
@@ -591,6 +595,7 @@ const PPPoESetup: React.FC = () => {
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Pattern Type"
                     value={patternType}
                     onChange={(e) => {
                       setPatternType(e.target.value as 'username' | 'password');
@@ -698,6 +703,7 @@ const PPPoESetup: React.FC = () => {
                             {(item.type !== 'custom_password' && item.type !== 'tech_input') && <GripVertical className="h-4 w-4" />}
                             <span className="text-sm font-medium">{item.label}</span>
                             <button
+                              aria-label="Remove from sequence"
                               onClick={() => removeFromSequence(item.id)}
                               className="ml-1 hover:text-red-500"
                             >

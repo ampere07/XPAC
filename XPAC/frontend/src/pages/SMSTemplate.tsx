@@ -369,6 +369,7 @@ const SMSTemplate: React.FC = () => {
                 Template Type
               </label>
               <select
+                aria-label="Template Type"
                 value={formData.template_type}
                 onChange={(e) => setFormData({ ...formData, template_type: e.target.value })}
                 className={`w-full px-3 py-2 rounded border ${isDarkMode
@@ -495,6 +496,7 @@ const SMSTemplate: React.FC = () => {
                         <td className="px-6 py-4">
                           <div className="flex items-center">
                             <button
+                              aria-label={expandedRows[template.id] ? 'Hide template' : 'Show template'}
                               onClick={() => toggleRowExpand(template.id)}
                               className={`mr-2 ${isDarkMode ? 'text-gray-400 hover:text-gray-300' : 'text-gray-600 hover:text-gray-900'}`}
                             >

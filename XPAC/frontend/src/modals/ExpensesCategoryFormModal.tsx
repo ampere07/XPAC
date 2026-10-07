@@ -118,6 +118,7 @@ const ExpensesCategoryFormModal: React.FC<ExpensesCategoryFormModalProps> = ({
           >
             <div className="flex items-center space-x-4">
               <button
+                aria-label="Close"
                 onClick={handleClose}
                 disabled={saving}
                 className={`transition-colors disabled:cursor-not-allowed ${
@@ -172,6 +173,7 @@ const ExpensesCategoryFormModal: React.FC<ExpensesCategoryFormModalProps> = ({
                 Category Name<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Category Name"
                 type="text"
                 value={categoryName}
                 onChange={(e) => {
@@ -226,6 +228,7 @@ const ExpensesCategoryFormModal: React.FC<ExpensesCategoryFormModalProps> = ({
               </label>
               <div className="relative">
                 <input
+                  aria-label="Modified Date"
                   type="text"
                   value={modifiedDate}
                   readOnly

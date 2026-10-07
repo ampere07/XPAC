@@ -270,6 +270,7 @@ const StatusRemarkFormContent: React.FC<{
             Modified Date
           </label>
           <input
+            aria-label="Modified Date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -281,6 +282,7 @@ const StatusRemarkFormContent: React.FC<{
             Modified By
           </label>
           <input
+            aria-label="Modified By"
             type="text"
             value={modifiedBy}
             readOnly

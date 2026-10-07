@@ -202,6 +202,7 @@ const TransactionRevertModal: React.FC<TransactionRevertModalProps> = ({
                                 <span>{loading ? 'Submitting...' : 'Submit'}</span>
                             </button>
                             <button
+                                aria-label="Close"
                                 onClick={onClose}
                                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                                     }`}
@@ -248,6 +249,7 @@ const TransactionRevertModal: React.FC<TransactionRevertModalProps> = ({
                                             Requested By
                                         </label>
                                         <input
+                                            aria-label="Requested By"
                                             type="text"
                                             value={requestedBy}
                                             readOnly

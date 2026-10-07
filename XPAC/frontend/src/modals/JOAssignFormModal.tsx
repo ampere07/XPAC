@@ -906,6 +906,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 {loading ? 'Saving...' : 'Save'}
               </button>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -924,6 +925,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <input
+                    aria-label="Timestamp"
                     type="datetime-local"
                     value={formData.timestamp}
                     onChange={(e) => handleInputChange('timestamp', e.target.value)}
@@ -945,6 +947,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Status"
                     value={formData.status}
                     onChange={(e) => handleInputChange('status', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -998,6 +1001,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                   Address<span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label="Address"
                   type="text"
                   value={formData.address}
                   onChange={(e) => handleInputChange('address', e.target.value)}
@@ -1020,6 +1024,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Choose Plan"
                     value={formData.choosePlan}
                     onChange={(e) => handleInputChange('choosePlan', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1057,6 +1062,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Billing Type"
                     value={formData.generationType}
                     onChange={(e) => handleInputChange('generationType', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1168,6 +1174,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                     </label>
                     <div className="relative">
                       <input
+                        aria-label="Expiration Date"
                         type="date"
                         value={formData.vipExpiration}
                         onChange={(e) => handleInputChange('vipExpiration', e.target.value)}
@@ -1197,6 +1204,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 </label>
                 <div className="relative">
                   <select
+                    aria-label="Promo"
                     value={formData.promo}
                     onChange={(e) => handleInputChange('promo', e.target.value)}
                     className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1224,6 +1232,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Remarks</label>
                 <textarea
+                  aria-label="Remarks"
                   value={formData.remarks}
                   onChange={(e) => handleInputChange('remarks', e.target.value)}
                   rows={3}
@@ -1283,6 +1292,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                   }`}>
                   <input
+                    aria-label="Billing Day"
                     type="number"
                     min="1"
                     max="30"
@@ -1294,6 +1304,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                   />
                   <div className="flex">
                     <button
+                      aria-label="Decrease billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', false)}
                       disabled={false}
@@ -1305,6 +1316,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                       <Minus size={16} />
                     </button>
                     <button
+                      aria-label="Increase billing day"
                       type="button"
                       onClick={() => handleNumberChange('billingDay', true)}
                       disabled={false}
@@ -1333,6 +1345,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Onsite Status"
                       value={formData.onsiteStatus}
                       onChange={(e) => handleInputChange('onsiteStatus', e.target.value)}
                       className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode
@@ -1408,6 +1421,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
                   }`}>Installation Landmark</label>
                 <input
+                  aria-label="Installation Landmark"
                   type="text"
                   value={formData.installationLandmark}
                   onChange={(e) => handleInputChange('installationLandmark', e.target.value)}

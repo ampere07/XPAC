@@ -1521,6 +1521,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {clientSignatureImg && (
                 <button
+                  aria-label="Open client signature"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(clientSignatureImg)}
                 >
@@ -1543,6 +1544,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {setupImg && (
                 <button
+                  aria-label="Open setup"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(setupImg)}
                 >
@@ -1565,6 +1567,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {speedtestImg && (
                 <button
+                  aria-label="Open speedtest"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(speedtestImg)}
                 >
@@ -1587,6 +1590,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {contractImg && (
                 <button
+                  aria-label="Open contract"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(contractImg)}
                 >
@@ -1609,6 +1613,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {boxReadingImg && (
                 <button
+                  aria-label="Open box reading"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(boxReadingImg)}
                 >
@@ -1631,6 +1636,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {routerReadingImg && (
                 <button
+                  aria-label="Open router reading"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(routerReadingImg)}
                 >
@@ -1653,6 +1659,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {portLabelImg && (
                 <button
+                  aria-label="Open port label"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(portLabelImg)}
                 >
@@ -1675,6 +1682,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {houseFrontImg && (
                 <button
+                  aria-label="Open house front"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(houseFrontImg)}
                 >
@@ -1697,6 +1705,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {clientTaggingImg && (
                 <button
+                  aria-label="Open client tagging"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(clientTaggingImg)}
                 >
@@ -1719,6 +1728,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
               {proofImg && (
                 <button
+                  aria-label="Open proof"
                   className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                   onClick={() => window.open(proofImg)}
                 >
@@ -1738,6 +1748,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{proofOfBilling}</span>
               <button
+                aria-label="Open proof of billing"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(proofOfBilling)}
               >
@@ -1756,6 +1767,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{govId}</span>
               <button
+                aria-label="Open gov id"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(govId)}
               >
@@ -1774,6 +1786,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{secondGovId}</span>
               <button
+                aria-label="Open second gov id"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(secondGovId)}
               >
@@ -1792,6 +1805,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{docAttach}</span>
               <button
+                aria-label="Open doc attach"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(docAttach)}
               >
@@ -1810,6 +1824,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
             <div className={`flex-1 flex items-center justify-between min-w-0 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               <span className="truncate mr-2">{ispBill}</span>
               <button
+                aria-label="Open isp bill"
                 className={`flex-shrink-0 ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'}`}
                 onClick={() => window.open(ispBill)}
               >
@@ -2099,6 +2114,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
                             }`}
                         >
                           <input
+                            aria-label={`Show ${getFieldLabel(fieldKey)}`}
                             type="checkbox"
                             checked={fieldVisibility[fieldKey]}
                             onChange={() => toggleFieldVisibility(fieldKey)}
@@ -2220,6 +2236,7 @@ const JobOrderDetails: React.FC<JobOrderDetailsProps> = ({ jobOrder, onClose, on
               </span>
             </div>
             <button
+              aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'

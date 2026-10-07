@@ -205,7 +205,7 @@ const ViewOptionsModal: React.FC<ViewOptionsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div role="button" aria-label="Close" className="absolute inset-0 bg-black/60" onClick={onClose} />
 
       <div className={`relative w-full max-w-lg rounded-xl border shadow-2xl flex flex-col max-h-[85vh] ${surface}`}>
         <div className={`flex items-start justify-between gap-3 p-4 border-b ${divider}`}>
@@ -290,6 +290,7 @@ const ViewOptionsModal: React.FC<ViewOptionsModalProps> = ({
                 <div className="flex items-center gap-2 pt-1">
                   <Plus className={`h-3.5 w-3.5 shrink-0 ${muted}`} />
                   <select
+                    aria-label="Add group level"
                     value=""
                     onChange={(event) => addLevel(event.target.value)}
                     className={`flex-1 px-3 py-2 rounded-lg border text-sm ${input}`}
@@ -365,6 +366,7 @@ const ViewOptionsModal: React.FC<ViewOptionsModalProps> = ({
                 <div className="flex items-center gap-2 pt-1">
                   <Plus className={`h-3.5 w-3.5 shrink-0 ${muted}`} />
                   <select
+                    aria-label="Add sort rule"
                     value=""
                     onChange={(event) => addSort(event.target.value)}
                     className={`flex-1 px-3 py-2 rounded-lg border text-sm ${input}`}

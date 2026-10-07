@@ -18,11 +18,11 @@ import {
   CircleArrowRight,
   Loader,
   Trash2,
-  AlertTriangle,
 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { update, remove } from '../services/discountService';
 import { usePermissions } from '../hooks/usePermissions';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getCustomerDetail, CustomerDetailData } from '../services/customerDetailService';
 
@@ -476,143 +476,25 @@ const DiscountDetails: React.FC<DiscountDetailsProps> = ({
         ) : null}
       </ScrollView>
 
-      <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={closeDeleteModal}>
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: 12,
-              padding: 24,
-              width: '88%',
-              borderWidth: 1,
-              borderColor: '#e5e7eb',
-            }}
-          >
-            <View
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 16,
-              }}
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <View style={{ padding: 8, borderRadius: 999, backgroundColor: '#fee2e2' }}>
-                  <Trash2 size={18} color="#ef4444" />
-                </View>
-                <Text style={{ fontSize: 18, fontWeight: '600', color: '#111827' }}>
-                  Delete Discount?
-                </Text>
-              </View>
-              <TouchableOpacity onPress={closeDeleteModal} disabled={isDeleting} accessibilityLabel="Close">
-                <X size={20} color="#6b7280" />
-              </TouchableOpacity>
-            </View>
-
-            <Text style={{ color: '#374151', marginBottom: 16 }}>
-              This permanently removes the discount from the database. It cannot be undone.
-            </Text>
-
-            <View
-              style={{
-                backgroundColor: '#f9fafb',
-                borderRadius: 8,
-                padding: 16,
-                borderWidth: 1,
-                borderColor: '#e5e7eb',
-                marginBottom: 16,
-                gap: 8,
-              }}
-            >
-              {[
-                { label: 'Account No:', value: discountRecord.accountNo },
-                { label: 'Customer:', value: discountRecord.fullName },
-                { label: 'Amount:', value: `₱${discountRecord.discountAmount.toFixed(2)}` },
-                { label: 'Status:', value: discountRecord.discountStatus },
-              ].map(({ label, value }) => (
-                <View key={label} style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ color: '#6b7280', fontSize: 13 }}>{label}</Text>
-                  <Text style={{ color: '#111827', fontSize: 13 }}>{value}</Text>
-                </View>
-              ))}
-            </View>
-
-            {isUsedDiscount && (
-              <View
-                style={{
-                  flexDirection: 'row',
-                  gap: 8,
-                  padding: 12,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: '#fcd34d',
-                  backgroundColor: '#fffbeb',
-                  marginBottom: 16,
-                }}
-              >
-                <AlertTriangle size={16} color="#92400e" />
-                <Text style={{ flex: 1, fontSize: 13, color: '#92400e' }}>
-                  This discount was already taken off a bill. Deleting it removes the record only; that bill keeps the discount.
-                </Text>
-              </View>
-            )}
-
-            {deleteError ? (
-              <Text accessibilityRole="alert" style={{ color: '#dc2626', fontSize: 13, marginBottom: 16 }}>
-                {deleteError}
-              </Text>
-            ) : null}
-
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <TouchableOpacity
-                onPress={closeDeleteModal}
-                disabled={isDeleting}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 8,
-                  backgroundColor: '#e5e7eb',
-                  alignItems: 'center',
-                  opacity: isDeleting ? 0.5 : 1,
-                }}
-              >
-                <Text style={{ color: '#111827', fontWeight: '500' }}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleConfirmDelete}
-                disabled={isDeleting}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  borderRadius: 8,
-                  backgroundColor: isDeleting ? '#4b5563' : '#dc2626',
-                  alignItems: 'center',
-                  flexDirection: 'row',
-                  justifyContent: 'center',
-                  gap: 6,
-                  opacity: isDeleting ? 0.7 : 1,
-                }}
-              >
-                {isDeleting ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <Trash2 size={16} color="#ffffff" />
-                )}
-                <Text style={{ color: '#ffffff', fontWeight: '500' }}>
-                  {isDeleting ? 'Deleting...' : 'Delete Discount'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmDeleteModal
+        visible={showDeleteModal}
+        title="Delete Discount?"
+        description="This permanently removes the discount from the database. It cannot be undone."
+        details={[
+          { label: 'Account No:', value: discountRecord.accountNo },
+          { label: 'Customer:', value: discountRecord.fullName },
+          { label: 'Amount:', value: `₱${discountRecord.discountAmount.toFixed(2)}` },
+          { label: 'Status:', value: discountRecord.discountStatus },
+        ]}
+        warning={isUsedDiscount
+          ? 'This discount was already taken off a bill. Deleting it removes the record only; that bill keeps the discount.'
+          : undefined}
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Discount"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Confirm Approve Modal */}
       <Modal visible={showConfirmModal} transparent animationType="fade">

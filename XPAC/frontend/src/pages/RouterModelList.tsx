@@ -307,10 +307,10 @@ const RouterModelList: React.FC = () => {
                   Add
                 </button>
               )}
-              <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded">
+              <button aria-label="Filter" className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded">
                 <Filter className="h-5 w-5" />
               </button>
-              <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded">
+              <button aria-label="View options" className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                 </svg>

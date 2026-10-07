@@ -289,6 +289,7 @@ const SOADetails: React.FC<SOADetailsProps> = ({ soaRecord, onViewCustomer, onCl
             {isGeneratingPdf ? <Loader size={18} className="animate-spin" /> : <ExternalLink size={18} />}
           </button>
           <button
+            aria-label="Close"
             onClick={onClose}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'

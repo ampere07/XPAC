@@ -355,6 +355,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
                 {loading ? 'Saving...' : (editData ? 'Update' : 'Save')}
               </button>
               <button
+                aria-label="Close"
                 onClick={onClose}
                 className={`transition-colors ${isDarkMode ? 'text-gray-400 hover:text-white' : 'text-gray-600 hover:text-gray-900'
                   }`}
@@ -409,6 +410,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
               <div className={`flex items-center border rounded ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                 }`}>
                 <input
+                  aria-label="Quantity Alert"
                   type="number"
                   value={formData.quantityAlert}
                   onChange={(e) => handleInputChange('quantityAlert', parseInt(e.target.value) || 0)}
@@ -418,6 +420,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
                 />
                 <div className="flex">
                   <button
+                    aria-label="Decrease quantity alert"
                     type="button"
                     onClick={() => handleQuantityChange('quantityAlert', false)}
                     className={`px-3 py-2 border-l transition-colors ${isDarkMode
@@ -428,6 +431,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
                     <Minus size={16} />
                   </button>
                   <button
+                    aria-label="Increase quantity alert"
                     type="button"
                     onClick={() => handleQuantityChange('quantityAlert', true)}
                     className={`px-3 py-2 border-l transition-colors ${isDarkMode
@@ -448,6 +452,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
               </label>
               <div className="relative">
                 <input
+                  aria-label="Image"
                   type="file"
                   accept="image/*"
                   onChange={handleImageUpload}
@@ -500,6 +505,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
               </label>
               <div className="relative">
                 <input
+                  aria-label="Current Date"
                   type="datetime-local"
                   value={formData.modifiedDate}
                   readOnly
@@ -549,6 +555,7 @@ const InventoryFormModal: React.FC<InventoryFormModalProps> = ({
                 Category
               </label>
               <select
+                aria-label="Category"
                 value={formData.category}
                 onChange={(e) => handleInputChange('category', e.target.value)}
                 className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode

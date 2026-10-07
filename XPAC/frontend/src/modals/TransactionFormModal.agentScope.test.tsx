@@ -35,6 +35,7 @@ jest.mock('../services/paymentMethodService', () => ({
 }));
 jest.mock('../services/planService', () => ({ planService: { getAllPlans: () => Promise.resolve([]) } }));
 jest.mock('../services/paymentService', () => ({ paymentService: { getAvailableDiscount: () => Promise.resolve({ checkout: 0, discountsOnFile: 0 }) } }));
+jest.mock('../services/invoiceService', () => ({ invoiceService: { getInvoicesByAccountNo: () => Promise.resolve([]) } }));
 jest.mock('../services/imageSettingsService', () => ({
   getActiveImageSize: () => Promise.resolve(null),
   resizeImage: (file: File) => Promise.resolve(file),
@@ -63,7 +64,7 @@ const openAccountList = () => fireEvent.focus(accountInput());
 
 const pickAccount = async (accountNo: string) => {
   openAccountList();
-  fireEvent.mouseDown(screen.getByRole('button', { name: new RegExp(`^${accountNo} \\|`) }));
+  fireEvent.mouseDown(screen.getByRole('button', { name: new RegExp(`^Select account ${accountNo} \\|`) }));
   await waitFor(() => expect(accountInput().value).toMatch(new RegExp(`^${accountNo} \\|`)));
 };
 
@@ -96,8 +97,8 @@ test('starts Under My Account: own customers only, with the Agent Collected spli
   expect(field('Received Payment').readOnly).toBe(true);
 
   openAccountList();
-  expect(screen.getByRole('button', { name: /^1001 \|/ })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: /^2002 \|/ })).toBeNull();
+  expect(screen.getByRole('button', { name: /^Select account 1001 \|/ })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /^Select account 2002 \|/ })).toBeNull();
 });
 
 test('Under XPACS offers every customer and only an editable Received Payment', () => {
@@ -109,8 +110,8 @@ test('Under XPACS offers every customer and only an editable Received Payment', 
   expect(field('Received Payment').readOnly).toBe(false);
 
   openAccountList();
-  expect(screen.getByRole('button', { name: /^1001 \|/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: /^2002 \|/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Select account 1001 \|/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Select account 2002 \|/ })).toBeTruthy();
 });
 
 test('switching back to My Account drops a customer the agent did not refer', async () => {

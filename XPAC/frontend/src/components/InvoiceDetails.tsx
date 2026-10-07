@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ExternalLink, X, Info, ChevronDown, ChevronRight, ChevronLeft, CircleArrowRight, Loader } from 'lucide-react';
+import { ExternalLink, X, Info, ChevronDown, ChevronRight, ChevronLeft, CircleArrowRight, Loader, Trash2 } from 'lucide-react';
+import { invoiceService } from '../services/invoiceService';
+import ConfirmDeleteDialog from './ConfirmDeleteDialog';
+import { isSuperAdminUser } from '../utils/agentAccess';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { relatedDataService } from '../services/relatedDataService';
 import RelatedDataTable from './RelatedDataTable';
@@ -65,11 +68,12 @@ interface InvoiceDetailsProps {
   invoiceRecord: InvoiceRecord;
   onViewCustomer?: (accountNo: string) => void;
   onClose?: () => void;
+  onDeleteSuccess?: () => void;
   onPrevious?: () => void;
   onNext?: () => void;
 }
 
-const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCustomer, onClose, onPrevious, onNext }) => {
+const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCustomer, onClose, onDeleteSuccess, onPrevious, onNext }) => {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [detailsWidth, setDetailsWidth] = useState<number>(600);
   const [isResizing, setIsResizing] = useState<boolean>(false);
@@ -193,6 +197,35 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCu
     startWidthRef.current = detailsWidth;
   };
 
+  const canDeleteInvoice = isSuperAdminUser();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await invoiceService.deleteInvoice(Number(invoiceRecord.id));
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The invoice could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleExpandModalOpen = (sectionKey: string) => {
     setExpandedModalSection(sectionKey);
   };
@@ -265,7 +298,22 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCu
               <ChevronRight size={18} />
             </button>
           </div>
+          {canDeleteInvoice && (
+            <button
+              onClick={openDeleteModal}
+              disabled={isDeleting}
+              className={`p-2 rounded transition-colors disabled:opacity-50 ${isDarkMode
+                ? 'text-gray-400 hover:text-red-400 hover:bg-gray-700'
+                : 'text-gray-600 hover:text-red-600 hover:bg-gray-200'
+                }`}
+              title="Delete Invoice"
+              aria-label="Delete Invoice"
+            >
+              <Trash2 size={18} />
+            </button>
+          )}
           <button
+            aria-label="Close"
             onClick={onClose}
             className={`p-2 rounded transition-colors ${isDarkMode
               ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -505,6 +553,7 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCu
               </span>
             </div>
             <button
+              aria-label="Close"
               onClick={handleExpandModalClose}
               className={`p-2 rounded transition-colors ${isDarkMode
                 ? 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -578,6 +627,27 @@ const InvoiceDetails: React.FC<InvoiceDetailsProps> = ({ invoiceRecord, onViewCu
           )}
         </div>
       )}
+
+      <ConfirmDeleteDialog
+        isOpen={showDeleteModal}
+        isDarkMode={isDarkMode}
+        title="Delete Invoice?"
+        description="This permanently removes the invoice record from the database. It cannot be undone."
+        details={[
+          { label: 'Invoice No:', value: invoiceRecord.invoiceNo || invoiceRecord.id },
+          { label: 'Account No:', value: invoiceRecord.accountNo },
+          { label: 'Customer:', value: invoiceRecord.fullName },
+          { label: 'Invoice Date:', value: formatDate(invoiceRecord.invoiceDate) },
+          { label: 'Total Amount:', value: `₱${Number(invoiceRecord.totalAmountDue || 0).toFixed(2)}` },
+          { label: 'Status:', value: invoiceRecord.invoiceStatus || 'Unpaid' },
+        ]}
+        warning="Only the invoice record is removed. The account balance, the statement of account, and any discounts, rebates or payments applied to this bill stay as they are."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Invoice"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Not Found Modal */}
       <React.Suspense fallback={null}>

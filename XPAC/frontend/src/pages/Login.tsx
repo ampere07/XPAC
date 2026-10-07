@@ -270,7 +270,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           }
         }
       `}</style>
-      <div style={{
+      <div data-testid="sign-in-screen" style={{
         display: 'flex',
         minHeight: '100vh',
         backgroundColor: '#f3f4f6'
@@ -519,6 +519,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                       placeholder="Password"
                     />
                     <button
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       style={{

@@ -285,6 +285,7 @@ const PromoFormContent: React.FC<{
           Status
         </label>
         <select
+          aria-label="Status"
           value={formData.status}
           onChange={(e) => setFormData({ ...formData, status: e.target.value })}
           className={inputClasses}
@@ -311,6 +312,7 @@ const PromoFormContent: React.FC<{
             Modified Date
           </label>
           <input
+            aria-label="Modified Date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -322,6 +324,7 @@ const PromoFormContent: React.FC<{
             Modified By
           </label>
           <input
+            aria-label="Modified By"
             type="text"
             value={modifiedBy}
             readOnly

@@ -274,6 +274,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                   Concern
                 </label>
                 <select
+                  aria-label="Concern"
                   value={selectedConcern}
                   onChange={(e) => setSelectedConcern(e.target.value)}
                   className={`w-full px-3 py-2 rounded border focus:outline-none focus:ring-1 ${isDarkMode
@@ -597,6 +598,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                 </p>
               </div>
               <button
+                aria-label="Close"
                 onClick={() => setShowDetailModal(false)}
                 className={`p-2 rounded-full transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
               >

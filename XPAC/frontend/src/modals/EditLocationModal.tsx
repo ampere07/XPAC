@@ -210,6 +210,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
               Save
             </button>
             <button
+              aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -228,6 +229,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                 Name<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Name"
                 type="text"
                 value={editedName}
                 onChange={(e) => setEditedName(e.target.value)}
@@ -246,6 +248,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                   Barangay<span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label="Barangay"
                   type="text"
                   value={barangayName}
                   disabled
@@ -265,6 +268,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                   City<span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label="City"
                   type="text"
                   value={cityName}
                   disabled
@@ -284,6 +288,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                   Region<span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label="Region"
                   type="text"
                   value={regionName}
                   disabled
@@ -305,6 +310,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                   <span className="text-red-500">*</span>
                 </label>
                 <input
+                  aria-label={location.type === 'city' ? 'Region' : location.type === 'borough' ? 'City' : 'Parent'}
                   type="text"
                   value={location.parentName}
                   disabled
@@ -323,6 +329,7 @@ const EditLocationModal: React.FC<EditLocationModalProps> = ({
                 id<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="id"
                 type="text"
                 value={location.id}
                 disabled

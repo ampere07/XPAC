@@ -564,6 +564,7 @@ const AgentPayoutForm: React.FC<{
                 <div>
                     <label className={labelClass}>Payout Type <span className="text-red-500">*</span></label>
                     <select
+                        aria-label="Payout Type"
                         name="payout_type"
                         value={formData.payout_type}
                         onChange={handleInputChange}
@@ -638,6 +639,7 @@ const AgentPayoutForm: React.FC<{
                         onClick={() => fileInputRef.current?.click()}
                     >
                         <input
+                            aria-label="Proof"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

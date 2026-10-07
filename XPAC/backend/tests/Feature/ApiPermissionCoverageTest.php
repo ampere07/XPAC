@@ -179,10 +179,15 @@ class ApiPermissionCoverageTest extends TestCase
                     ['GET', 'api/lcpnap'],
                     ['GET', 'api/plans'],
                     ['POST', 'api/technician-location'],
+                    ['GET', 'api/transactions'],
+                    ['POST', 'api/transactions'],
+                    ['POST', 'api/transactions/upload-images'],
+                    ['PUT', 'api/transactions/5'],
                 ],
                 'deny' => [
-                    ['GET', 'api/transactions'],
                     ['POST', 'api/transactions/5/approve'],
+                    ['POST', 'api/transactions/batch-approve'],
+                    ['DELETE', 'api/transactions/5'],
                     // Reading the staff list is allowed — a technician's job
                     // order names the person it is assigned to — but creating
                     // an account is not.
@@ -200,20 +205,25 @@ class ApiPermissionCoverageTest extends TestCase
             ],
             Role::AGENT => [
                 'allow' => [
+                    ['GET', 'api/transactions'],
+                    ['POST', 'api/transactions'],
+                    ['PUT', 'api/transactions/5'],
+                    ['GET', 'api/customers'],
+                    ['GET', 'api/customer-detail/ACC-1'],
+                ],
+                'deny' => [
+                    ['POST', 'api/transactions/5/approve'],
+                    ['POST', 'api/transactions/batch-approve'],
+                    ['DELETE', 'api/transactions/5'],
                     ['GET', 'api/job-orders'],
                     ['GET', 'api/work-orders'],
                     ['GET', 'api/commissions'],
                     ['GET', 'api/agent-invoices'],
                     ['POST', 'api/applications'],
-                ],
-                'deny' => [
-                    ['GET', 'api/customers'],
-                    ['GET', 'api/transactions'],
                     ['POST', 'api/agent-invoices/generate'],
                     ['PATCH', 'api/agent-invoices/2/status'],
                     ['GET', 'api/service-orders'],
                     ['POST', 'api/users'],
-                    ['GET', 'api/customer-detail/ACC-1'],
                     ['POST', 'api/work-orders'],
                     ['DELETE', 'api/work-orders/3'],
                     ['POST', 'api/commissions/history/1/approve'],
@@ -605,10 +615,14 @@ class ApiPermissionCoverageTest extends TestCase
 
         // Head Technician holds customer.transact (the customer pane's Transact),
         // so its transaction writes were never overlay-only; the other two are.
-        foreach ([Role::TECHNICIAN, Role::OSP] as $roleId) {
-            foreach ($writes as [$method, $uri]) {
-                $this->assertFalse($this->permits($this->user($roleId), $method, $uri), "Role $roleId gained $method $uri.");
+        foreach ($writes as [$method, $uri]) {
+            $this->assertFalse($this->permits($this->user(Role::OSP), $method, $uri), "OSP gained $method $uri.");
+        }
+        foreach ($writes as [$method, $uri]) {
+            if (str_starts_with($uri, 'api/transactions')) {
+                continue;
             }
+            $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), $method, $uri), "Technician gained $method $uri.");
         }
         foreach ([['PUT', 'api/users/5'], ['DELETE', 'api/users/5'], ['PUT', 'api/transactions/12/status'],
                   ['POST', 'api/concerns'], ['PUT', 'api/concerns/3'], ['DELETE', 'api/concerns/3'],
@@ -618,8 +632,8 @@ class ApiPermissionCoverageTest extends TestCase
         $this->assertFalse($this->permits($this->user(Role::OSP), 'POST', 'api/applications/12/upload-images'));
 
         // Neighbours of the widened reads keep their own page.
-        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/transactions/12/details'));
-        $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/transactions'));
+        $this->assertFalse($this->permits($this->user(Role::OSP), 'GET', 'api/transactions/12/details'));
+        $this->assertFalse($this->permits($this->user(Role::OSP), 'GET', 'api/transactions'));
         $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/billing/accounts/active'));
         $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/disconnected-logs'));
         $this->assertFalse($this->permits($this->user(Role::TECHNICIAN), 'GET', 'api/staggered-installations'));
@@ -637,13 +651,13 @@ class ApiPermissionCoverageTest extends TestCase
         // and the payment logs stay closed to them. What they read before —
         // one job order, one application — they still read.
         $agent = $this->user(Role::AGENT);
-        foreach ([['GET', 'api/billing'], ['GET', 'api/customer-detail/ACC-1'], ['GET', 'api/transactions/12'],
-                  ['GET', 'api/payment-portal-logs'], ['GET', 'api/soa-records'], ['GET', 'api/invoices/12'],
-                  ['GET', 'api/service-orders/12'], ['GET', 'api/inventory-logs/by-item/7']] as [$method, $uri]) {
+        foreach ([['GET', 'api/billing'], ['GET', 'api/payment-portal-logs'], ['GET', 'api/soa-records'],
+                  ['GET', 'api/invoices/12'], ['GET', 'api/service-orders/12'], ['GET', 'api/inventory-logs/by-item/7'],
+                  ['GET', 'api/job-orders/12'], ['GET', 'api/applications/12']] as [$method, $uri]) {
             $this->assertFalse($this->permits($agent, $method, $uri), "The Agent gained $method $uri.");
         }
-        $this->assertTrue($this->permits($agent, 'GET', 'api/job-orders/12'));
-        $this->assertTrue($this->permits($agent, 'GET', 'api/applications/12'));
+        $this->assertTrue($this->permits($agent, 'GET', 'api/transactions/12'));
+        $this->assertTrue($this->permits($agent, 'GET', 'api/customer-detail/ACC-1'));
 
         // A custom role that works job orders gets the panes; one that only
         // holds the page, like the Agent, does not.

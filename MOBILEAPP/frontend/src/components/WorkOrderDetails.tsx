@@ -10,7 +10,7 @@ import {
   DeviceEventEmitter,
   Alert
 } from 'react-native';
-import { X, ExternalLink, Play, Square, Paperclip } from 'lucide-react-native';
+import { X, ExternalLink, Play, Square, Paperclip, Trash2 } from 'lucide-react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -21,7 +21,9 @@ dayjs.extend(timezone);
 
 import { WorkOrderDetailsProps } from '../types/workOrder';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { updateWorkOrder } from '../services/workOrderService';
+import { updateWorkOrder, deleteWorkOrder } from '../services/workOrderService';
+import ConfirmDeleteModal from './ConfirmDeleteModal';
+import { usePermissions } from '../hooks/usePermissions';
 import { useUserDirectory } from '../hooks/useUserDirectory';
 import { resolveUserDisplayName } from '../utils/userDisplay';
 import ConfirmationModal from '../modals/MoveToJoModal';
@@ -135,6 +137,7 @@ const defaultFields = [
 const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean; colorPalette?: ColorPalette | null }> = ({
   workOrder,
   onClose,
+  onDeleteSuccess,
   onEdit,
   onRefresh,
   isDarkMode: propDarkMode,
@@ -158,6 +161,35 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean;
   const [techStatus, setTechStatus] = useState<'online' | 'offline'>('offline');
   const [showTimeInWarning, setShowTimeInWarning] = useState(false);
 
+  const { isSuperAdmin } = usePermissions();
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string>('');
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setShowDeleteModal(false);
+    setDeleteError('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!workOrder) return;
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await deleteWorkOrder(workOrder.id);
+      setShowDeleteModal(false);
+      onDeleteSuccess?.();
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.message || error.message || 'The work order could not be deleted. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -506,6 +538,17 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean;
 
 
 
+          {isSuperAdmin && (
+            <Pressable
+              onPress={openDeleteModal}
+              disabled={isDeleting}
+              accessibilityRole="button"
+              accessibilityLabel="Delete Work Order"
+              style={{ padding: 6, opacity: isDeleting ? 0.5 : 1 }}
+            >
+              <Trash2 size={22} color="#6b7280" />
+            </Pressable>
+          )}
           <Pressable onPress={onClose} style={{ padding: 4 }}>
             <X width={28} height={28} color="#4b5563" />
           </Pressable>
@@ -545,6 +588,25 @@ const WorkOrderDetails: React.FC<WorkOrderDetailsProps & { isDarkMode?: boolean;
         cancelText="Close"
         onConfirm={() => setShowTimeInWarning(false)}
         onCancel={() => setShowTimeInWarning(false)}
+      />
+
+      <ConfirmDeleteModal
+        visible={showDeleteModal}
+        title="Delete Work Order?"
+        description="This permanently removes the work order record from the database. It cannot be undone."
+        details={[
+          { label: 'Work Order ID:', value: String(workOrder.id) },
+          { label: 'Instructions:', value: workOrder.instructions || '-' },
+          { label: 'Assigned To:', value: workOrder.assign_to || '-' },
+          { label: 'Requested By:', value: workOrder.requested_by || '-' },
+          { label: 'Status:', value: workOrder.work_status || '-' },
+        ]}
+        warning="Only the work order record is removed. Images and the signature already uploaded for it stay in storage, and nothing the work already changed is undone."
+        error={deleteError}
+        isDeleting={isDeleting}
+        confirmLabel="Delete Work Order"
+        onCancel={closeDeleteModal}
+        onConfirm={handleConfirmDelete}
       />
 
       <StartTimerModal

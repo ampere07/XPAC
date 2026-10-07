@@ -353,6 +353,7 @@ const IncentivesPayoutForm: React.FC<{
                 <div>
                     <label className={labelClass}>Transaction Type <span className="text-red-500">*</span></label>
                     <select
+                        aria-label="Transaction Type"
                         value={incentiveType}
                         onChange={(e) => {
                             const newType = e.target.value as 'incentives' | 'incentives_payout';
@@ -435,6 +436,7 @@ const IncentivesPayoutForm: React.FC<{
                         onClick={() => fileInputRef.current?.click()}
                     >
                         <input
+                            aria-label="Proof"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

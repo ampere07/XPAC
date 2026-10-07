@@ -393,6 +393,7 @@ const BonusPayoutForm: React.FC<{
                 <div>
                     <label className={labelClass}>Transaction Type <span className="text-red-500">*</span></label>
                     <select
+                        aria-label="Transaction Type"
                         value={BonusType}
                         onChange={(e) => {
                             const newType = e.target.value as 'Bonus' | 'Bonus_payout';
@@ -465,6 +466,7 @@ const BonusPayoutForm: React.FC<{
                         onClick={() => fileInputRef.current?.click()}
                     >
                         <input
+                            aria-label="Proof"
                             ref={fileInputRef}
                             type="file"
                             accept="image/*"

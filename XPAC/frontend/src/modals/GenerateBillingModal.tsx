@@ -191,6 +191,8 @@ const GenerateBillingModal: React.FC<GenerateBillingModalProps> = ({
     <>
       {/* Backdrop */}
       <div
+        role="button"
+        aria-label="Close"
         className="fixed inset-0 z-[9998]"
         style={{ backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}
         onClick={() => { if (!isGenerating) onClose(); }}
@@ -234,6 +236,7 @@ const GenerateBillingModal: React.FC<GenerateBillingModalProps> = ({
               </div>
             </div>
             <button
+              aria-label="Close"
               onClick={() => { if (!isGenerating) onClose(); }}
               disabled={isGenerating}
               className="rounded-lg p-2 transition-colors"
@@ -340,6 +343,7 @@ const GenerateBillingModal: React.FC<GenerateBillingModalProps> = ({
                         return (
                           <button
                             key={accNo}
+                            aria-label={`Select customer ${accNo}`}
                             className="w-full text-left flex items-center justify-between px-4 py-3 text-sm transition-colors"
                             style={{
                               backgroundColor: isSelected ? `${primary}20` : 'transparent',
@@ -388,6 +392,7 @@ const GenerateBillingModal: React.FC<GenerateBillingModalProps> = ({
                 <DollarSign size={16} />
               </div>
               <input
+                aria-label="Service Charge (optional · ₱)"
                 id="billing-service-charge"
                 type="text"
                 inputMode="decimal"

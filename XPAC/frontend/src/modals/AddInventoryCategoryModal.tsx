@@ -156,6 +156,7 @@ const AddInventoryCategoryModal: React.FC<AddInventoryCategoryModalProps> = ({
             }`}>
             <div className="flex items-center space-x-4">
               <button
+                aria-label="Close"
                 onClick={handleClose}
                 disabled={loading}
                 className={`transition-colors disabled:cursor-not-allowed ${isDarkMode
@@ -248,6 +249,7 @@ const AddInventoryCategoryModal: React.FC<AddInventoryCategoryModalProps> = ({
               </label>
               <div className="relative">
                 <input
+                  aria-label="Modified Date"
                   type="text"
                   value={modifiedDate}
                   readOnly

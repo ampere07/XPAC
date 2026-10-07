@@ -15,6 +15,7 @@ interface WorkOrderState {
     refreshWorkOrders: (status?: string) => Promise<void>;
     silentRefresh: (status?: string) => Promise<void>;
     fetchUpdates: (status?: string) => Promise<void>;
+    removeWorkOrderRecord: (id: number) => void;
 }
 
 export const useWorkOrderStore = create<WorkOrderState>((set, get) => ({
@@ -56,6 +57,13 @@ export const useWorkOrderStore = create<WorkOrderState>((set, get) => ({
 
     silentRefresh: async (status?: string) => {
         await get().fetchWorkOrders(1, 10000, '', status, true);
+    },
+
+    removeWorkOrderRecord: (id: number) => {
+        set((state) => ({
+            workOrders: state.workOrders.filter((workOrder) => workOrder.id !== id),
+            totalCount: Math.max(0, state.totalCount - 1)
+        }));
     },
 
     fetchUpdates: async (status?: string) => {

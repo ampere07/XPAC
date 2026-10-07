@@ -237,7 +237,7 @@ const ExpensesLog: React.FC = () => {
                           <td className={`py-3 px-4 whitespace-nowrap ${isDarkMode ? 'text-white' : 'text-gray-900'
                             }`}>
                             {record.photo ? (
-                              <button className={isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}>
+                              <button aria-label="View photo" className={isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-700'}>
                                 <Eye size={16} />
                               </button>
                             ) : (
@@ -274,6 +274,7 @@ const ExpensesLog: React.FC = () => {
           }`}>
           <div className="absolute top-4 right-4 z-10">
             <button
+              aria-label="Close"
               onClick={handleCloseDetails}
               className={`transition-colors rounded p-1 ${isDarkMode
                   ? 'text-slate-400 hover:text-white bg-slate-800'

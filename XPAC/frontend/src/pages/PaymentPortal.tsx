@@ -51,6 +51,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         <div className="flex items-center gap-2">
           <span>Show</span>
           <select
+            aria-label="Items per page"
             value={itemsPerPage}
             onChange={(e) => setItemsPerPage(Number(e.target.value))}
             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -80,6 +81,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </button>
 
         <button
+          aria-label="Previous page"
           onClick={() => handlePageChange(currentPage - 1)}
           disabled={currentPage === 1}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === 1
@@ -97,6 +99,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         </div>
 
         <button
+          aria-label="Next page"
           onClick={() => handlePageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
           className={`px-3 py-1 rounded text-sm transition-colors ${currentPage === totalPages
@@ -1134,6 +1137,7 @@ const PaymentPortal: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>From</label>
                 <input
+                  aria-label="From"
                   type="date"
                   value={dateTimeFrom}
                   onChange={(e) => setDateTimeFrom(e.target.value)}
@@ -1147,6 +1151,7 @@ const PaymentPortal: React.FC = () => {
               <div className="relative">
                 <label className={`text-[10px] mb-1 block ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>To</label>
                 <input
+                  aria-label="To"
                   type="date"
                   value={dateTimeTo}
                   onChange={(e) => setDateTimeTo(e.target.value)}
@@ -1193,6 +1198,7 @@ const PaymentPortal: React.FC = () => {
           {locationItems.regions.map((region: any) => (
             <div key={region.id}>
               <button
+                aria-label={`Show ${region.name}`}
                 onClick={() => setSelectedLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
@@ -1206,6 +1212,7 @@ const PaymentPortal: React.FC = () => {
               >
                 <div className="flex items-center flex-1">
                   <button
+                    aria-label={`${expandedLocations.has(region.id) ? 'Collapse' : 'Expand'} ${region.name}`}
                     onClick={(e) => toggleLocationExpansion(e, region.id)}
                     className="p-1 mr-1"
                   >
@@ -1237,6 +1244,7 @@ const PaymentPortal: React.FC = () => {
               {expandedLocations.has(region.id) && region.cities.map((city: any) => (
                 <div key={city.id}>
                   <button
+                    aria-label={`Show ${city.name}`}
                     onClick={() => setSelectedLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
@@ -1250,6 +1258,7 @@ const PaymentPortal: React.FC = () => {
                   >
                     <div className="flex items-center flex-1">
                       <button
+                        aria-label={`${expandedLocations.has(city.id) ? 'Collapse' : 'Expand'} ${city.name}`}
                         onClick={(e) => toggleLocationExpansion(e, city.id)}
                         className="p-1 mr-1"
                       >
@@ -1269,6 +1278,7 @@ const PaymentPortal: React.FC = () => {
                   {/* Barangay Level */}
                   {expandedLocations.has(city.id) && city.barangays.map((barangay: any) => (
                     <button
+                      aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
                       onClick={() => setSelectedLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
@@ -1550,6 +1560,7 @@ const PaymentPortal: React.FC = () => {
                       <span className="opacity-70 mr-1">{label}:</span>
                       <span className="truncate max-w-[150px]">{displayValue}</span>
                       <button
+                        aria-label={`Remove ${key} filter`}
                         onClick={() => removeFilter(key)}
                         className={`ml-1 p-0.5 rounded-full transition-colors`}
                         onMouseEnter={(e) => {

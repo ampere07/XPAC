@@ -515,6 +515,7 @@ const AgentInvoice: React.FC = () => {
                 </div>
 
                 <select
+                    aria-label="Filter by type"
                     value={typeFilter}
                     onChange={(e) => setTypeFilter(e.target.value)}
                     className={`px-3 py-2 rounded-lg border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -586,6 +587,7 @@ const AgentInvoice: React.FC = () => {
                             return (
                                 <div key={group.key} className="space-y-2">
                                     <button
+                                        aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${group.label}`}
                                         onClick={() => togglePeriod(group.key)}
                                         className={`w-full flex items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors ${
                                             isDarkMode ? 'bg-gray-800/70 text-gray-100' : 'bg-gray-100 text-gray-800'
@@ -605,6 +607,7 @@ const AgentInvoice: React.FC = () => {
 
                                     {isOpen && group.records.map(record => (
                                         <button
+                                            aria-label={`Open ${cell(record, 'invoice_number')}`}
                                             key={record.id}
                                             onClick={() => handleOpenDetails(record)}
                                             className={`w-full rounded-lg border p-4 text-left transition-colors ${
@@ -735,6 +738,7 @@ const AgentInvoice: React.FC = () => {
                         <div className="flex items-center gap-2">
                             <span>Show</span>
                             <select
+                                aria-label="Items per page"
                                 value={itemsPerPage}
                                 onChange={(e) => setItemsPerPage(Number(e.target.value))}
                                 className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}

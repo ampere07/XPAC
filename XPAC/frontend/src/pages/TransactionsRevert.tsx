@@ -350,6 +350,7 @@ const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertI
                     <div className="flex items-center gap-2">
                         <span>Show</span>
                         <select
+                            aria-label="Items per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
@@ -499,6 +500,8 @@ const TransactionsRevert: React.FC<TransactionsRevertProps> = ({ autoOpenRevertI
                             <div className="space-y-0">
                                 {paginatedReverts.map((revert: TransactionRevert) => (
                                     <div
+                                        role="button"
+                                        aria-label={`Open ${revert.reason}`}
                                         key={revert.id}
                                         onClick={() => handleRowClick(revert)}
                                         className={`flex items-start px-4 py-3 cursor-pointer transition-colors border-b ${isDarkMode

@@ -241,6 +241,7 @@ const AddRouterModelModal: React.FC<AddRouterModelModalProps> = ({
               )}
             </button>
             <button
+              aria-label="Close"
               onClick={handleClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -329,6 +330,7 @@ const AddRouterModelModal: React.FC<AddRouterModelModalProps> = ({
             </label>
             <div className="relative">
               <input
+                aria-label="Modified Date"
                 type="datetime-local"
                 value={formData.modifiedDate}
                 className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 ${isDarkMode

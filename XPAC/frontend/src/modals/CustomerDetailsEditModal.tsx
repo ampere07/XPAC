@@ -700,6 +700,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
         <div className={`relative w-full h-48 border rounded overflow-hidden cursor-pointer ${isDarkMode ? 'bg-gray-800 border-gray-700 hover:bg-gray-750' : 'bg-gray-100 border-gray-300 hover:bg-gray-200'
           }`}>
           <input
+            aria-label={`${label}`}
             type="file"
             accept="image/*"
             onChange={(e) => {
@@ -1194,6 +1195,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
               )}
             </button>
             <button
+              aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -1209,6 +1211,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                 }`}>Edit Type</label>
               <div className="relative">
                 <select
+                  aria-label="Edit Type"
                   value={editType}
                   onChange={(e) => setEditType(e.target.value as 'customer_details' | 'billing_details' | 'technical_details')}
                   className={`w-full px-3 py-2 rounded border appearance-none ${isDarkMode
@@ -1231,6 +1234,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     First Name<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="First Name"
                     type="text"
                     value={formData.firstName || ''}
                     onChange={(e) => handleInputChange('firstName', e.target.value)}
@@ -1255,6 +1259,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Middle Initial
                   </label>
                   <input
+                    aria-label="Middle Initial"
                     type="text"
                     value={formData.middleInitial || ''}
                     onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -1279,6 +1284,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Last Name<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="Last Name"
                     type="text"
                     value={formData.lastName || ''}
                     onChange={(e) => handleInputChange('lastName', e.target.value)}
@@ -1303,6 +1309,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Email Address<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="Email Address"
                     type="email"
                     value={formData.emailAddress || ''}
                     onChange={(e) => handleInputChange('emailAddress', e.target.value)}
@@ -1330,6 +1337,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Contact Number<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="Contact Number"
                     type="text"
                     value={formData.contactNumberPrimary || ''}
                     onChange={(e) => handleInputChange('contactNumberPrimary', e.target.value)}
@@ -1357,6 +1365,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Second Contact Number
                   </label>
                   <input
+                    aria-label="Second Contact Number"
                     type="text"
                     value={formData.contactNumberSecondary || ''}
                     onChange={(e) => handleInputChange('contactNumberSecondary', e.target.value)}
@@ -1380,6 +1389,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Address<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="Address"
                     type="text"
                     value={formData.address || ''}
                     onChange={(e) => handleInputChange('address', e.target.value)}
@@ -1405,6 +1415,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Region"
                       value={formData.region || ''}
                       onChange={(e) => handleInputChange('region', e.target.value)}
                       onFocus={(e) => {
@@ -1441,6 +1452,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="City"
                       value={formData.city || ''}
                       onChange={(e) => handleInputChange('city', e.target.value)}
                       disabled={!formData.region}
@@ -1478,6 +1490,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Barangay"
                       value={formData.barangay || ''}
                       onChange={(e) => handleInputChange('barangay', e.target.value)}
                       disabled={!formData.city}
@@ -1515,6 +1528,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Housing Status"
                       value={formData.housingStatus || ''}
                       onChange={(e) => handleInputChange('housingStatus', e.target.value)}
                       onFocus={(e) => {
@@ -1549,6 +1563,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Plan"
                       value={formData.plan || ''}
                       onChange={(e) => handleInputChange('plan', e.target.value)}
                       onFocus={(e) => {
@@ -1622,6 +1637,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Billing Status"
                       value={formData.billing_status_id || ''}
                       onChange={(e) => handleInputChange('billing_status_id', e.target.value)}
                       onFocus={(e) => {
@@ -1657,6 +1673,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                         VIP Expiration Date<span className="text-red-500">*</span>
                       </label>
                       <input
+                        aria-label="VIP Expiration Date"
                         type="date"
                         value={formData.vip_expiration || ''}
                         onChange={(e) => handleInputChange('vip_expiration', e.target.value)}
@@ -1752,6 +1769,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Billing Type"
                       value={formData.generation_type || ''}
                       onChange={(e) => handleInputChange('generation_type', e.target.value)}
                       onFocus={(e) => {
@@ -1839,6 +1857,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       Prepaid Expiration
                     </label>
                     <input
+                      aria-label="Prepaid Expiration"
                       type="datetime-local"
                       value={formData.prepaid_expires_at || ''}
                       onChange={(e) => handleInputChange('prepaid_expires_at', e.target.value)}
@@ -1932,6 +1951,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Date Installed
                   </label>
                   <input
+                    aria-label="Date Installed"
                     type="date"
                     value={formData.date_installed || ''}
                     onChange={(e) => handleInputChange('date_installed', e.target.value)}
@@ -1959,6 +1979,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     PPPOE Username<span className="text-red-500">*</span>
                   </label>
                   <input
+                    aria-label="PPPOE Username"
                     type="text"
                     value={formData.username || ''}
                     onChange={(e) => handleInputChange('username', e.target.value)}
@@ -1986,6 +2007,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       PPPOE Password
                     </label>
                     <input
+                      aria-label="PPPOE Password"
                       type="text"
                       autoComplete="off"
                       value={formData.pppoe_password || ''}
@@ -2088,6 +2110,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div>
                     <input
+                      aria-label="Router Modem SN"
                       type="text"
                       value={formData.router_modem_sn || ''}
                       onChange={(e) => handleInputChange('router_modem_sn', e.target.value)}
@@ -2114,6 +2137,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       IP Address<span className="text-red-500">*</span>
                     </label>
                     <input
+                      aria-label="IP Address"
                       type="text"
                       value={formData.ip_address || ''}
                       onChange={(e) => handleInputChange('ip_address', e.target.value)}
@@ -2153,6 +2177,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       </label>
                       <div className="relative">
                         <select
+                          aria-label="Port"
                           value={formData.port || ''}
                           onChange={(e) => handleInputChange('port', e.target.value)}
                           disabled={!formData.lcpnap}
@@ -2206,6 +2231,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                       </label>
                       <div className="relative">
                         <select
+                          aria-label="VLAN"
                           value={formData.vlan || ''}
                           onChange={(e) => handleInputChange('vlan', e.target.value)}
                           onFocus={(e) => {
@@ -2241,6 +2267,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                   </label>
                   <div className="relative">
                     <select
+                      aria-label="Usage Type"
                       value={formData.usage_type || ''}
                       onChange={(e) => handleInputChange('usage_type', e.target.value)}
                       onFocus={(e) => {
@@ -2272,6 +2299,7 @@ const CustomerDetailsEditModal: React.FC<CustomerDetailsEditModalProps> = ({
                     Group (Session Group)
                   </label>
                   <input
+                    aria-label="Group (Session Group)"
                     type="text"
                     value={formData.session_group || ''}
                     readOnly

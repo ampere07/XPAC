@@ -627,6 +627,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               )}
             </button>
             <button
+              aria-label="Close"
               onClick={onClose}
               className={isDarkMode ? 'text-gray-400 hover:text-white transition-colors' : 'text-gray-600 hover:text-gray-900 transition-colors'}
             >
@@ -643,6 +644,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 First Name<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="First Name"
                 type="text"
                 value={formData.firstName}
                 onChange={(e) => handleInputChange('firstName', e.target.value)}
@@ -669,6 +671,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Middle Initial
               </label>
               <input
+                aria-label="Middle Initial"
                 type="text"
                 value={formData.middleInitial}
                 onChange={(e) => handleInputChange('middleInitial', e.target.value)}
@@ -696,6 +699,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Last Name<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Last Name"
                 type="text"
                 value={formData.lastName}
                 onChange={(e) => handleInputChange('lastName', e.target.value)}
@@ -722,6 +726,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Contact Number<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Contact Number"
                 type="text"
                 value={formData.contactNumber}
                 onChange={(e) => handleInputChange('contactNumber', e.target.value)}
@@ -748,6 +753,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Second Contact Number
               </label>
               <input
+                aria-label="Second Contact Number"
                 type="text"
                 value={formData.secondContactNumber || ''}
                 onChange={(e) => handleInputChange('secondContactNumber', e.target.value)}
@@ -774,6 +780,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Applicant Email Address<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Applicant Email Address"
                 type="email"
                 value={formData.email}
                 onChange={(e) => handleInputChange('email', e.target.value)}
@@ -800,6 +807,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Address<span className="text-red-500">*</span>
               </label>
               <input
+                aria-label="Address"
                 type="text"
                 value={formData.address}
                 onChange={(e) => handleInputChange('address', e.target.value)}
@@ -827,6 +835,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Region"
                   value={formData.region}
                   onChange={(e) => handleInputChange('region', e.target.value)}
                   onFocus={(e) => {
@@ -866,6 +875,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="City"
                   value={formData.city}
                   onChange={(e) => handleInputChange('city', e.target.value)}
                   disabled={!formData.region}
@@ -905,6 +915,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Barangay"
                   value={formData.barangay}
                   onChange={(e) => handleInputChange('barangay', e.target.value)}
                   disabled={!formData.city}
@@ -944,6 +955,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Location"
                   value={formData.location}
                   onChange={(e) => handleInputChange('location', e.target.value)}
                   disabled={!formData.barangay}
@@ -983,6 +995,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Choose Plan"
                   value={formData.choosePlan}
                   onChange={(e) => handleInputChange('choosePlan', e.target.value)}
                   onFocus={(e) => {
@@ -1027,6 +1040,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
               </label>
               <div className="relative">
                 <select
+                  aria-label="Promo"
                   value={formData.promo}
                   onChange={(e) => handleInputChange('promo', e.target.value)}
                   onFocus={(e) => {
@@ -1065,6 +1079,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Remarks
               </label>
               <textarea
+                aria-label="Remarks"
                 value={formData.remarks}
                 onChange={(e) => handleInputChange('remarks', e.target.value)}
                 rows={3}
@@ -1091,6 +1106,7 @@ const ApplicationVisitFormModal: React.FC<ApplicationVisitFormModalProps> = ({
                 Assigned Email<span className="text-red-500">*</span>
               </label>
               <select
+                aria-label="Assigned Email"
                 value={formData.assignedEmail}
                 onChange={(e) => handleInputChange('assignedEmail', e.target.value)}
                 onFocus={(e) => {

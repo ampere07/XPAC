@@ -138,6 +138,7 @@ const RoleForm: React.FC<{
         <div>
           <label className={labelClass}>Start From a System Role</label>
           <select
+            aria-label="Start From a System Role"
             value={baseRoleId}
             onChange={(e) => handleBaseRoleChange(Number(e.target.value))}
             className={inputClass()}

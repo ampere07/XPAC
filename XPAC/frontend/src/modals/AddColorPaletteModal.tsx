@@ -181,6 +181,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                 Save
               </button>
               <button
+                aria-label="Close"
                 onClick={handleClose}
                 disabled={isLoading}
                 className={`transition-colors disabled:cursor-not-allowed ${isDarkMode
@@ -271,6 +272,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                     {errors.primary && <p className="text-red-500 text-xs mt-1">{errors.primary}</p>}
                   </div>
                   <input
+                    aria-label="Primary color picker"
                     type="color"
                     value={primaryColor}
                     onChange={(e) => setPrimaryColor(e.target.value)}
@@ -321,6 +323,7 @@ const AddColorPaletteModal: React.FC<AddColorPaletteModalProps> = ({
                     {errors.accent && <p className="text-red-500 text-xs mt-1">{errors.accent}</p>}
                   </div>
                   <input
+                    aria-label="Accent color picker"
                     type="color"
                     value={accentColor}
                     onChange={(e) => setAccentColor(e.target.value)}

@@ -34,7 +34,7 @@ const WorkOrderPage: React.FC = () => {
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
-  const { workOrders, isLoading, fetchWorkOrders, fetchUpdates, error } = useWorkOrderStore();
+  const { workOrders, isLoading, fetchWorkOrders, fetchUpdates, removeWorkOrderRecord, error } = useWorkOrderStore();
   const [selectedWorkOrder, setSelectedWorkOrder] = useState<WorkOrder | null>(null);
   const selectedWorkOrderRef = useRef<WorkOrder | null>(null);
 
@@ -487,6 +487,7 @@ const WorkOrderPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <span>Show</span>
             <select
+              aria-label="Items per page"
               value={itemsPerPage}
               onChange={(e) => setItemsPerPage(Number(e.target.value))}
               className={`px-2 py-1 rounded border focus:outline-none text-xs transition-colors ${isDarkMode
@@ -518,6 +519,7 @@ const WorkOrderPage: React.FC = () => {
           </button>
 
           <button
+            aria-label="Previous page"
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
             className={`p-1.5 rounded transition-colors ${currentPage === 1
@@ -535,6 +537,7 @@ const WorkOrderPage: React.FC = () => {
           </div>
 
           <button
+            aria-label="Next page"
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages || totalPages <= 1}
             className={`p-1.5 rounded transition-colors ${currentPage === totalPages || totalPages <= 1
@@ -999,6 +1002,8 @@ const WorkOrderPage: React.FC = () => {
                   <div>
                     {paginatedWorkOrders.map((wo) => (
                       <div
+                        role="button"
+                        aria-label={`Open ${wo.work_category}`}
                         key={wo.id}
                         className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'}`}
                         onClick={() => handleEdit(wo)}
@@ -1059,7 +1064,7 @@ const WorkOrderPage: React.FC = () => {
                           >
                             <div className="flex items-center justify-between">
                               <span>{column.label}</span>
-                              <button onClick={() => handleSort(column.key)} className="ml-1 opacity-40 hover:opacity-100 transition-opacity">
+                              <button aria-label={`Sort by ${column.label}`} onClick={() => handleSort(column.key)} className="ml-1 opacity-40 hover:opacity-100 transition-opacity">
                                 {sortColumn === column.key ? (
                                   sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                                 ) : (
@@ -1138,6 +1143,11 @@ const WorkOrderPage: React.FC = () => {
               setMobileView('orders');
             }}
             onRefresh={handleRefresh}
+            onDeleteSuccess={() => {
+              removeWorkOrderRecord(selectedWorkOrder.id);
+              setSelectedWorkOrder(null);
+              setMobileView('orders');
+            }}
             isMobile={isMobile}
             isDarkMode={isDarkMode}
             colorPalette={colorPalette}

@@ -8,7 +8,10 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use App\Models\ActivityLog;
 use App\Models\BillingAccount;
+use App\Events\ServiceOrderUpdated;
+use App\Support\AgentAccess;
 use App\Services\PppoeUsernameService;
 use App\Services\ManualRadiusOperationsService;
 use App\Services\RadiusQueueService;
@@ -1633,17 +1636,42 @@ class ServiceOrderApiController extends Controller
 
     public function destroy($id): JsonResponse
     {
+        if (!AgentAccess::isSuperAdmin(Auth::user())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only a Super Admin can delete a service order.'
+            ], 403);
+        }
+
         try {
             $serviceOrder = DB::table('service_orders')->where('id', $id)->first();
 
             if (!$serviceOrder) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Service order not found'
+                    'message' => 'Service order not found. It may have been deleted already.'
                 ], 404);
             }
 
+            $snapshot = (array) $serviceOrder;
             DB::table('service_orders')->where('id', $id)->delete();
+
+            ActivityLog::log(
+                'Service Order Deleted',
+                "Service Order #{$id} deleted. Ticket: " . ($snapshot['ticket_id'] ?? '') . ', Account: ' . ($snapshot['account_no'] ?? ''),
+                'warning',
+                [
+                    'resource_type' => 'ServiceOrder',
+                    'resource_id' => $id,
+                    'additional_data' => $snapshot
+                ]
+            );
+
+            event(new ServiceOrderUpdated([
+                'action' => 'deleted',
+                'service_order_id' => $id,
+                'ticket_id' => $snapshot['ticket_id'] ?? null
+            ]));
 
             return response()->json([
                 'success' => true,

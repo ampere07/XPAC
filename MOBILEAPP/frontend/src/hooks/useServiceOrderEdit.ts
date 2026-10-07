@@ -759,7 +759,7 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
 };
 
 const initialFormState: ServiceOrderEditFormData = {
-  accountNo: '', dateInstalled: '', fullName: '', contactNumber: '', emailAddress: '', plan: '', username: '', connectionType: 'Fiber',
+  accountNo: '', dateInstalled: '', fullName: '', contactNumber: '', emailAddress: '', plan: '', username: '', pppoePassword: '', connectionType: 'Fiber',
   routerModemSN: '', lcp: '', nap: '', port: '', vlan: '', supportStatus: 'In Progress', visitStatus: 'In Progress',
   repairCategory: '', visitBy: '', visitWith: '', visitWithOther: '', visitRemarks: '', clientSignature: '',
   itemName1: '', timeIn: '', modemSetupImage: '', timeOut: '', assignedEmail: '', concern: '', concernRemarks: '',

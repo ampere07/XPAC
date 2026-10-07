@@ -114,6 +114,7 @@ const Roles: React.FC = () => {
                     <div className="flex items-center gap-2">
                         <span>Show</span>
                         <select
+                            aria-label="Items per page"
                             value={itemsPerPage}
                             onChange={(e) => setItemsPerPage(Number(e.target.value))}
                             className={`px-2 py-1 rounded border focus:outline-none text-[10px] ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'}`}
@@ -145,6 +146,7 @@ const Roles: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2">
                         <button
+                            aria-label="Refresh roles"
                             onClick={() => fetchRoles()}
                             className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
                         >
@@ -152,6 +154,7 @@ const Roles: React.FC = () => {
                         </button>
                         {actions.canCreate && (
                         <button
+                            aria-label="Add role"
                             onClick={() => { setSelectedRole(null); setShowModal(true); }}
                             className="p-2 rounded-lg text-white shadow-lg transition-transform active:scale-95"
                             style={{ backgroundColor: colorPalette?.primary || '#3b82f6' }}
@@ -234,6 +237,7 @@ const Roles: React.FC = () => {
                                                     <>
                                                         {actions.canEdit && (
                                                         <button
+                                                            aria-label={`Edit ${role.role_name}`}
                                                             onClick={() => { setSelectedRole(role); setShowModal(true); }}
                                                             className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-blue-400' : 'hover:bg-gray-100 text-blue-600'}`}
                                                         >
@@ -242,6 +246,7 @@ const Roles: React.FC = () => {
                                                         )}
                                                         {actions.canDelete && (
                                                         <button
+                                                            aria-label={`Delete ${role.role_name}`}
                                                             onClick={() => handleDeleteRole(role.id)}
                                                             className={`p-1.5 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-gray-800 text-red-400' : 'hover:bg-gray-100 text-red-600'}`}
                                                         >

@@ -271,6 +271,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                             </label>
                             <div className="relative">
                                 <input
+                                    aria-label="Date"
                                     type="text"
                                     readOnly
                                     value={formData.date}
@@ -291,6 +292,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                     Item Name
                                 </label>
                                 <input
+                                    aria-label="Item Name"
                                     type="text"
                                     readOnly
                                     value={formData.item_name}
@@ -343,6 +345,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 <div className={`flex items-center border rounded overflow-hidden ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-300'
                                     }`}>
                                     <button
+                                        aria-label="Decrease quantity"
                                         onClick={() => handleQuantityChange('dec')}
                                         type="button"
                                         className={`px-3 py-2.5 transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
@@ -350,12 +353,14 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                         <Minus size={16} />
                                     </button>
                                     <input
+                                        aria-label="Item Quantity"
                                         type="number"
                                         value={formData.item_quantity}
                                         onChange={(e) => setFormData(prev => ({ ...prev, item_quantity: Math.max(1, parseInt(e.target.value) || 1) }))}
                                         className="flex-1 bg-transparent text-center border-none outline-none text-sm font-bold"
                                     />
                                     <button
+                                        aria-label="Increase quantity"
                                         onClick={() => handleQuantityChange('inc')}
                                         type="button"
                                         className={`px-3 py-2.5 transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
@@ -372,6 +377,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 Item Description
                             </label>
                             <textarea
+                                aria-label="Item Description"
                                 readOnly
                                 rows={2}
                                 value={formData.item_description}
@@ -392,6 +398,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 </label>
                                 <div className="relative">
                                     <select
+                                        aria-label="Requested By"
                                         value={formData.requested_by}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_by: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode
@@ -417,6 +424,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 </label>
                                 <div className="relative">
                                     <select
+                                        aria-label="Requested With"
                                         value={formData.requested_with}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_with: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode
@@ -442,6 +450,7 @@ const InventoryLogsFormModal: React.FC<InventoryLogsFormModalProps> = ({
                                 </label>
                                 <div className="relative">
                                     <select
+                                        aria-label="Requested With (Addl)"
                                         value={formData.requested_with_10}
                                         onChange={(e) => setFormData(prev => ({ ...prev, requested_with_10: e.target.value }))}
                                         className={`w-full px-4 py-2.5 border rounded focus:outline-none appearance-none ${isDarkMode

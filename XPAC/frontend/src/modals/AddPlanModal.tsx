@@ -341,6 +341,7 @@ const PlanFormContent: React.FC<{
             <span className={`font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>₱</span>
           </div>
           <input
+            aria-label="Price"
             type="number"
             value={formData.price}
             onChange={(e) => setFormData({ ...formData, price: Number(e.target.value) || 0 })}
@@ -359,6 +360,7 @@ const PlanFormContent: React.FC<{
           />
           <div className={`flex flex-col border-t border-b border-r rounded-r-lg overflow-hidden ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-gray-300 bg-gray-100'}`}>
             <button
+              aria-label="Increase price"
               type="button"
               onClick={incrementPrice}
               className={`flex-1 px-3 py-1 flex items-center justify-center border-b ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700 border-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200 border-gray-300'}`}
@@ -366,6 +368,7 @@ const PlanFormContent: React.FC<{
               <Plus className="h-3 w-3" />
             </button>
             <button
+              aria-label="Decrease price"
               type="button"
               onClick={decrementPrice}
               className={`flex-1 px-3 py-1 flex items-center justify-center ${isDarkMode ? 'text-gray-400 hover:text-white hover:bg-gray-700' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
@@ -404,6 +407,7 @@ const PlanFormContent: React.FC<{
             Modified Date
           </label>
           <input
+            aria-label="Modified Date"
             type="text"
             value={modifiedDate}
             readOnly
@@ -415,6 +419,7 @@ const PlanFormContent: React.FC<{
             Modified By
           </label>
           <input
+            aria-label="Modified By"
             type="text"
             value={modifiedBy}
             readOnly
