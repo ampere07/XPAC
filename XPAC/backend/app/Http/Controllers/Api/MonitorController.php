@@ -959,19 +959,27 @@ class MonitorController extends Controller
                         return !empty($t->start_time) && empty($t->end_time) && !$isCompleted;
                     })->last();
                     $isPullout = false;
+                    // The task the details pill describes (null when it describes none) and its
+                    // "Job Order #12" label. The pill shows the customer's name; the label is kept
+                    // for its tooltip, and the type for its colour now the text no longer says it.
+                    $detailsTaskType = null;
+                    $taskLabel = null;
                     if ($workingTask) {
                         $status = 'Working';
-                        $details = ($workingTask->task_type === 'jo' ? 'Job Order' : ($workingTask->task_type === 'so' ? 'Service Order' : 'Work Order')) . ' #' . $workingTask->id;
-                        
+                        $taskLabel = ($workingTask->task_type === 'jo' ? 'Job Order' : ($workingTask->task_type === 'so' ? 'Service Order' : 'Work Order')) . ' #' . $workingTask->id;
+
                         // Add concern for SO or WO
                         if (in_array($workingTask->task_type, ['so', 'wo']) && !empty($workingTask->concern)) {
                             if (stripos($workingTask->concern, 'Pullout') !== false) {
                                 $isPullout = true;
                             } else {
-                                $details .= ' - ' . $workingTask->concern;
+                                $taskLabel .= ' - ' . $workingTask->concern;
                             }
                         }
-                        
+
+                        $details = $this->taskCustomerName($workingTask) ?? $taskLabel;
+                        $detailsTaskType = $workingTask->task_type;
+
                         $since = $workingTask->start_time;
                         // Set primaryTimeDisp to null so it counts the current task duration live in the frontend
                         $primaryTimeDisp = null; 
@@ -980,7 +988,9 @@ class MonitorController extends Controller
                         $lastFinished = $allTasks->filter(function($t) { return !empty($t->start_time) && !empty($t->end_time); })->sortBy('end_time')->last();
                         
                         if ($lastFinished) {
-                            $details = ($lastFinished->task_type === 'jo' ? 'Job Order' : ($lastFinished->task_type === 'so' ? 'Service Order' : 'Work Order')) . ' (' . ($lastFinished->status ?? 'Done') . ')';
+                            $taskLabel = ($lastFinished->task_type === 'jo' ? 'Job Order' : ($lastFinished->task_type === 'so' ? 'Service Order' : 'Work Order')) . ' #' . $lastFinished->id;
+                            $details = ($this->taskCustomerName($lastFinished) ?? $taskLabel) . ' (' . ($lastFinished->status ?? 'Done') . ')';
+                            $detailsTaskType = $lastFinished->task_type;
                             $since = $lastFinished->end_time;
                         } else {
                             $pendingCount = $allTasks->filter(function($t) { return empty($t->start_time) && empty($t->end_time); })->count();
@@ -998,6 +1008,8 @@ class MonitorController extends Controller
                     if ($isOffline) {
                         $status = 'Offline';
                         $details = 'Technician is offline';
+                        $detailsTaskType = null;
+                        $taskLabel = null;
                         $since = clone $timeBound;
                         $primaryTimeDisp = $workingTimeStr;
                     }
@@ -1033,6 +1045,8 @@ class MonitorController extends Controller
                             'email' => $email,
                             'status' => $status,
                             'details' => $details,
+                            'details_task_type' => $detailsTaskType,
+                            'task_label' => $taskLabel,
                             'since' => $since,
                             'primary_time_str' => $primaryTimeDisp,
                             'total_working_str' => $workingTimeStr,
@@ -1328,6 +1342,37 @@ class MonitorController extends Controller
                 'message' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * "First Last" of the customer a technician availability task is for, or null to fall back
+     * to the "Job Order #12" label.
+     *
+     * Resolved the way the detailed queue resolves it: a job order through its application, a
+     * service order through its account's customer. A work order has no customer.
+     */
+    private function taskCustomerName(object $task): ?string
+    {
+        try {
+            $row = match ($task->task_type ?? null) {
+                'jo' => DB::table('job_orders')
+                    ->join('applications', 'job_orders.application_id', '=', 'applications.id')
+                    ->where('job_orders.id', $task->id)
+                    ->first(['applications.first_name', 'applications.last_name']),
+                'so' => DB::table('service_orders')
+                    ->join('billing_accounts', 'service_orders.account_no', '=', 'billing_accounts.account_no')
+                    ->join('customers', 'billing_accounts.customer_id', '=', 'customers.id')
+                    ->where('service_orders.id', $task->id)
+                    ->first(['customers.first_name', 'customers.last_name']),
+                default => null,
+            };
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        $name = trim(($row->first_name ?? '') . ' ' . ($row->last_name ?? ''));
+
+        return $name !== '' ? $name : null;
     }
 }
 

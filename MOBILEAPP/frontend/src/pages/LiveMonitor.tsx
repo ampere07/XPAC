@@ -594,7 +594,9 @@ const LiveMonitor: React.FC = () => {
                 {row.label}
               </Text>
 
-              {/* Details badge */}
+              {/* Details badge. A task's badge reads the customer's name, so its colour comes
+                  from details_task_type; the text match covers an older payload and the
+                  "Job Order #12" fallback used when no name was found. */}
               {meta.details && (
                 <View style={{ alignSelf: 'flex-start', marginBottom: 6 }}>
                   <Text style={{
@@ -602,8 +604,8 @@ const LiveMonitor: React.FC = () => {
                     fontWeight: '700',
                     textTransform: 'uppercase',
                     color: meta.is_pullout ? '#ef4444' :
-                      meta.details.toLowerCase().includes('job order') ? '#3b82f6' :
-                      meta.details.toLowerCase().includes('service order') ? '#8b5cf6' : '#6b7280',
+                      meta.details_task_type === 'jo' || meta.details.toLowerCase().includes('job order') ? '#3b82f6' :
+                      meta.details_task_type === 'so' || meta.details.toLowerCase().includes('service order') ? '#8b5cf6' : '#6b7280',
                   }}>
                     {meta.details}
                   </Text>
