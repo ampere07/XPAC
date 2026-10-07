@@ -8,6 +8,7 @@ import { useCustomerDashboardStore } from '../store/customerDashboardStore';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { planService, Plan } from '../services/planService';
 import pusher from '../services/pusherService';
+import PaymentTotalBreakdown, { PaymentBreakdownLine, postpaidBalanceLines } from '../components/PaymentTotalBreakdown';
 
 // Interfaces for data types
 interface Payment {
@@ -259,7 +260,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // prepaid period, it does not bank a credit, so a fully-paid prepaid account reads as 0 —
     // never a negative overpayment. Postpaid / blank generation_type keep the real balance
     // (including any negative credit from overpayment), which is the existing behaviour.
-    const rawBalance = customerDetail?.billingAccount?.accountBalance || 0;
+    const rawBalance = Number(customerDetail?.billingAccount?.accountBalance || 0);
     const balance = isPrepaid ? Math.max(0, rawBalance) : rawBalance;
 
     // ── Prepaid plan selection ────────────────────────────────────────────────────────────────
@@ -360,6 +361,13 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
         ? Math.round(feeBaseAmount * (convenienceFeePercentage / 100) * 100) / 100
         : 0;
     const totalWithConvenienceFee = feeBaseAmount + convenienceFeeAmount;
+    const paymentSubtotalLabel = requiresExactPayment || payCurrentBalance
+        ? 'Current balance'
+        : isSwitchingToPrepaid
+            ? `Balance + one period of ${currentPlan?.name ?? 'your plan'}`
+            : isPrepaid && selectedPlan
+                ? (advanceMonths > 1 ? `${selectedPlan.name} × ${advanceMonths} months` : `${selectedPlan.name} plan`)
+                : 'Payment';
     // No padding to 2 dp: 922.5 stays 922.5. Capped at 2 dp only because the fee above is already
     // rounded to centavos, so nothing here is ever actually rounded away.
     const formatPeso = (value: number) => value.toLocaleString('en-PH', { maximumFractionDigits: 2 });
@@ -370,6 +378,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     const latestBillDiscount = Math.round(
         (Number(invoiceRecords?.[0]?.discounts ?? 0) + Number(invoiceRecords?.[0]?.rebate ?? 0)) * 100
     ) / 100;
+    const isPostpaidSettlement = !isPrepaid && !isSwitchingToPrepaid;
+    const paymentBaseLines: PaymentBreakdownLine[] = isPostpaidSettlement
+        ? [
+            ...postpaidBalanceLines(balance, invoiceRecords?.[0] ? Number(invoiceRecords[0].total_amount ?? 0) : null, latestBillDiscount),
+            ...(toCentavos(feeBaseAmount) !== toCentavos(balance)
+                ? [{ label: 'Advance payment', amount: Math.round((feeBaseAmount - balance) * 100) / 100 }]
+                : []),
+        ]
+        : [{ label: paymentSubtotalLabel, amount: requiresExactPayment ? balance : paymentAmount }];
     const formatCentavoPeso = (value: number) =>
         `₱${value.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -1250,20 +1267,22 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                         )}
                                     </div>
 
-                                    {discountAmount > 0 && (
-                                        <p className="text-sm text-green-700 mt-2">
-                                            ₱{formatPeso(paymentAmount)} plan − ₱{formatPeso(discountAmount)} discount / rebate = ₱{formatPeso(netPaymentAmount)}
-                                        </p>
-                                    )}
-
-                                    {/* Convenience fee disclosure. The field above is the amount that
-                                        settles the bill; the gateway collects this total instead. */}
-                                    {convenienceFeePercentage > 0 && feeBaseAmount > 0 && (
-                                        <p className="text-xs text-gray-500 mt-2">
-                                            + convenience fee: {convenienceFeeLabel}% = {formatPeso(totalWithConvenienceFee)}
-                                        </p>
-                                    )}
                                 </div>
+
+                                {feeBaseAmount > 0 && (
+                                    <PaymentTotalBreakdown
+                                        lines={[
+                                            ...paymentBaseLines,
+                                            ...(discountAmount > 0 ? [{ label: 'Discount / rebate', amount: -discountAmount, isDiscount: true }] : []),
+                                            ...(convenienceFeeAmount > 0 ? [{ label: `Convenience fee (${convenienceFeeLabel}%)`, amount: convenienceFeeAmount }] : []),
+                                        ]}
+                                        totalLabel="Total to pay"
+                                        total={totalWithConvenienceFee}
+                                        notes={!isPrepaid && postpaidDiscountsOnFile > 0
+                                            ? [`${formatCentavoPeso(postpaidDiscountsOnFile)} discount on file — comes off your ${isSwitchingToPrepaid ? 'next prepaid top-up' : 'next bill'}, not this payment.`]
+                                            : []}
+                                    />
+                                )}
 
                                 <div className="flex gap-3">
                                     <button

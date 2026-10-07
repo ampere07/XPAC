@@ -8,7 +8,8 @@ import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import { planService, Plan } from '../services/planService';
-import { paymentService } from '../services/paymentService';
+import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
+import PaymentTotalBreakdown, { postpaidBalanceLines } from '../components/PaymentTotalBreakdown';
 import { API_BASE_URL } from '../config/api';
 import { useBillingStore } from '../store/billingStore';
 import { createAgentReferralMatcher, getStoredAgentIdentity } from '../utils/agentReferral';
@@ -267,23 +268,18 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // file -> ₱900 collected. At least ₱1.00 is always charged (CheckoutDiscountService::
   // applicableAmount). This is the preview; approval spends them and credits the account the full
   // plan price (TransactionController::creditPrepaidCheckoutDiscounts).
-  const [availableDiscount, setAvailableDiscount] = useState<number>(0);
-  useEffect(() => {
-    setAvailableDiscount(0);
-    if (!isOpen || !isPrepaid || !formData.accountNo) return;
-    let cancelled = false;
-    paymentService.getAvailableDiscount(formData.accountNo).then(discount => {
-      if (!cancelled) setAvailableDiscount(discount.checkout);
-    });
-    return () => { cancelled = true; };
-  }, [isOpen, isPrepaid, formData.accountNo]);
+  const accountDiscounts = useAccountDiscounts(formData.accountNo, isOpen);
+  const availableDiscount = accountDiscounts.checkout;
 
-  const selectedPlanPrice = Number(plans.find(p => p.id === formData.selectedPlanId)?.price ?? 0);
+  const selectedPlan = plans.find(p => p.id === formData.selectedPlanId);
+  const selectedPlanPrice = Number(selectedPlan?.price ?? 0);
   const discountAmount = showPlanPicker && selectedPlanPrice > 1 && availableDiscount > 0
     ? Math.round(Math.min(availableDiscount, selectedPlanPrice - 1) * 100) / 100
     : 0;
   const netPlanAmount = Math.round((selectedPlanPrice - discountAmount) * 100) / 100;
-
+  const postpaidBalance = parseFloat(formData.accountBalance) || 0;
+  const receivedAmount = parseFloat(formData.receivedPayment) || 0;
+  const balanceAfterPayment = Math.round((postpaidBalance - receivedAmount) * 100) / 100;
   // Take the discount off the amount the plan price was filled in with. Only while the field
   // still holds the full price (prefilled, untouched), and never on an edit, so a typed amount or
   // a recorded transaction is not changed behind the cashier's back.
@@ -1190,12 +1186,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                   </select>
                   <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
                 </div>
-                {discountAmount > 0 && (
-                  <p className="text-xs mt-1 font-medium text-green-500">
-                    ₱{selectedPlanPrice.toFixed(2)} plan − ₱{discountAmount.toFixed(2)} discount / rebate = ₱{netPlanAmount.toFixed(2)} to collect.
-                    The discount is applied on approval and the account is credited the full plan price.
-                  </p>
-                )}
                 {billingRecord?.pendingPlanId ? (
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-600'}`}>
                     A plan change is already scheduled
@@ -1386,6 +1376,35 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
                 <select
                   value={formData.processedBy}
                   onChange={(e) => handleInputChange('processedBy', e.target.value)}
+          {!isPrepaid && formData.accountNo && (
+            <PaymentTotalBreakdown
+              lines={[
+                ...postpaidBalanceLines(postpaidBalance, accountDiscounts.latestBillTotal, accountDiscounts.latestBillDiscount),
+                ...(receivedAmount > 0 ? [{ label: 'Received payment', amount: -receivedAmount }] : []),
+              ]}
+              totalLabel="Balance after payment"
+              total={balanceAfterPayment}
+              notes={[
+                ...(balanceAfterPayment < 0 ? [`₱${Math.abs(balanceAfterPayment).toFixed(2)} overpayment stays on the account as credit.`] : []),
+                ...(accountDiscounts.discountsOnFile > 0 ? [`₱${accountDiscounts.discountsOnFile.toFixed(2)} discount on file — comes off the next bill, not this payment.`] : []),
+              ]}
+              isDarkMode={isDarkMode}
+            />
+          )}
+
+          {showPlanPicker && selectedPlan && (
+            <PaymentTotalBreakdown
+              lines={[
+                { label: `${selectedPlan.name} plan`, amount: selectedPlanPrice },
+                ...(discountAmount > 0 ? [{ label: 'Discount / rebate', amount: -discountAmount, isDiscount: true }] : []),
+              ]}
+              totalLabel="To collect"
+              total={netPlanAmount}
+              notes={discountAmount > 0 ? ['The discount is applied on approval and the account is credited the full plan price.'] : []}
+              isDarkMode={isDarkMode}
+            />
+          )}
+
                   className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
                     } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
                 >

@@ -238,7 +238,7 @@ const Bills: React.FC<BillsProps> = ({ initialTab = 'soa', onNavigate }) => {
                     if (storedUser) {
                         const parsedUser = JSON.parse(storedUser);
                         if (parsedUser.username) {
-                            await fetchCustomerData(parsedUser.username, parsedUser.role === 'customer');
+                            await fetchCustomerData(parsedUser.username);
                         }
                     }
                 } catch (refreshErr) {
