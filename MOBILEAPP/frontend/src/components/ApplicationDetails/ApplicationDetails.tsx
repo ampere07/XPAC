@@ -27,6 +27,7 @@ interface ApplicationDetailsProps {
     barangay?: string;
     email_address?: string;
     mobile_number?: string;
+    status?: string;
   };
   onClose: () => void;
   onApplicationUpdate?: () => void;
@@ -52,6 +53,8 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
   const [showFieldSettings, setShowFieldSettings] = useState(false);
+  const currentStatus = (detailedApplication?.status || application.status || '').toLowerCase();
+  const isScheduled = ['scheduled', 'schedule'].includes(currentStatus);
 
   const FIELD_VISIBILITY_KEY = 'applicationDetailsFieldVisibility';
   const FIELD_ORDER_KEY = 'applicationDetailsFieldOrder';
@@ -202,8 +205,16 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
     setPendingStatus('');
   };
 
-  const handleSaveJOForm = (formData: JobOrderData) => {
+  const handleSaveJOForm = async (formData: JobOrderData) => {
     setShowJOAssignForm(false);
+    if (onApplicationUpdate) {
+      onApplicationUpdate();
+    }
+    try {
+      setDetailedApplication(await getApplication(application.id));
+    } catch (err: any) {
+      setError(err.message || 'Failed to load application details');
+    }
   };
 
   const handleSaveVisitForm = (formData: ApplicationVisitData) => {
@@ -658,7 +669,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         </View>
         
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          {canMoveToJo && (
+          {!isScheduled && canMoveToJo && (
           <Pressable 
             style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 2, flexDirection: 'row', alignItems: 'center', backgroundColor: colorPalette?.primary || '#7c3aed' }}
             onPress={handleMoveToJO}
@@ -685,7 +696,7 @@ const ApplicationDetails: React.FC<ApplicationDetailsProps> = ({ application, on
         </View>
       </View>
       
-      {canQuickStatus && (
+      {!isScheduled && canQuickStatus && (
       <View style={{ paddingVertical: 12, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, backgroundColor: isDarkMode ? '#111827' : '#f3f4f6', borderBottomColor: isDarkMode ? '#374151' : '#e5e7eb' }}>
         <Pressable 
           style={{ flexDirection: 'column', alignItems: 'center', padding: 8, borderRadius: 6 }}

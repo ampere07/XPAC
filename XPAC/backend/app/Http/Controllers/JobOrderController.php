@@ -331,6 +331,21 @@ class JobOrderController extends Controller
         return $data;
     }
 
+    private function applicationHasJobOrder($applicationId): bool
+    {
+        $query = JobOrder::where('application_id', $applicationId);
+        $currentUser = auth()->user();
+        if ($currentUser) {
+            if ($currentUser->organization_id) {
+                $query->where('organization_id', $currentUser->organization_id);
+            } else {
+                $query->whereNull('organization_id');
+            }
+        }
+
+        return $query->exists();
+    }
+
     public function store(Request $request): JsonResponse
     {
         try {
@@ -388,6 +403,13 @@ class JobOrderController extends Controller
                     'message' => 'Validation failed',
                     'errors' => $validator->errors(),
                 ], 422);
+            }
+
+            if ($this->applicationHasJobOrder($request->input('application_id'))) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This application already has a job order.',
+                ], 409);
             }
 
             $data = $request->all();
