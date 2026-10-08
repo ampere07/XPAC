@@ -1020,20 +1020,22 @@ const LiveMonitor: React.FC = () => {
                 </div>
               </div>
 
-              {/* Details - Moved */}
+              {/* Details - Moved. A task's pill reads the customer's name, so its colour comes
+                  from details_task_type; the text match covers an older payload and the
+                  "Job Order #12" fallback used when no name was found. */}
               {meta.details && (
                 <div className="w-full flex justify-center mt-2">
                   <div
                     className={`px-3 py-1 rounded-full font-bold uppercase tracking-wide text-center truncate max-w-[90%] ${meta.is_pullout
                         ? 'bg-red-600/20 text-red-500 border border-red-500/30'
-                        : meta.details.toLowerCase().includes('job order')
+                        : meta.details_task_type === 'jo' || meta.details.toLowerCase().includes('job order')
                           ? 'bg-blue-600/20 text-blue-500 border border-blue-500/30'
-                          : meta.details.toLowerCase().includes('service order')
+                          : meta.details_task_type === 'so' || meta.details.toLowerCase().includes('service order')
                             ? 'bg-purple-600/20 text-purple-500 border border-purple-500/30'
                             : 'opacity-60 ' + (isDarkMode ? 'text-gray-400' : 'text-gray-600')
                       }`}
                     style={{ fontSize: `${fontSize * 0.75}px` }}
-                    title={meta.details}
+                    title={meta.task_label || meta.details}
                   >
                     {meta.details}
                   </div>
