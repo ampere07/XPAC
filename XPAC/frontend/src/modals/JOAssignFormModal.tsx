@@ -760,6 +760,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
         throw new Error(result.message || 'Failed to create job order');
       }
 
+      let statusUpdateFailure: string | null = null;
       try {
         const applicationUpdateData: any = {
           referred_by: referredByForSave(
@@ -779,9 +780,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
         await updateApplication(appId.toString(), applicationUpdateData);
       } catch (appError: any) {
-        // Silently log promo update failures to avoid blocking the user
-        // with the "Partial Success" modal, as the Job Order itself was created.
-        console.error('Application promo update failed:', appError);
+        statusUpdateFailure = appError.response?.data?.message || appError.message || 'Unknown error occurred';
       }
 
       clearInterval(progressInterval);
@@ -795,18 +794,27 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
 
       setPendingJobOrder(result.data);
       setErrors({});
-      setModal({
-        isOpen: true,
-        type: 'success',
-        title: 'Success',
-        message: 'Job Order created successfully!',
-        onConfirm: () => {
-          onSave(pendingJobOrder!);
-          setPendingJobOrder(null);
-          onClose();
-          setModal({ ...modal, isOpen: false });
+      const closeAfterCreate = () => {
+        onSave(pendingJobOrder!);
+        setPendingJobOrder(null);
+        onClose();
+        setModal({ ...modal, isOpen: false });
+      };
+      setModal(statusUpdateFailure
+        ? {
+          isOpen: true,
+          type: 'error',
+          title: 'Application Status Not Updated',
+          message: `The job order was created, but the application status could not be set to Scheduled: ${statusUpdateFailure}`,
+          onConfirm: closeAfterCreate
         }
-      });
+        : {
+          isOpen: true,
+          type: 'success',
+          title: 'Success',
+          message: 'Job Order created successfully!',
+          onConfirm: closeAfterCreate
+        });
     } catch (error: any) {
       let errorMessage = 'Unknown error occurred';
 
@@ -819,12 +827,12 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
           })
           .join('\n');
         errorMessage = `Validation failed:\n${errorDetails}`;
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
       } else if (error.response?.data?.message) {
         errorMessage = error.response.data.message;
       } else if (error.response?.data?.error) {
         errorMessage = error.response.data.error;
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
       } else if (typeof error === 'string') {
         errorMessage = error;
       }

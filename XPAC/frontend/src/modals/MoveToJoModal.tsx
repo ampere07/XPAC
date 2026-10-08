@@ -91,6 +91,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
               e.currentTarget.style.backgroundColor = colorPalette?.primary || '#7c3aed';
             }}
             onClick={onConfirm}
+            aria-label={`Confirm ${confirmText}`}
           >
             {confirmText}
           </button>
