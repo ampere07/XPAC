@@ -27,6 +27,20 @@ interface SupportProps {
   forceLightMode?: boolean;
 }
 
+// Part of the notice below; the message box keys its red styling on it.
+const OPEN_REQUEST_PHRASE = 'already have an open request';
+
+/**
+ * The notice for a request refused because one is still open, or null for any other failure.
+ * The server (ServiceOrderApiController) names the open ticket in `open_service_order`; its own
+ * message is worded for staff, so the customer gets this instead.
+ */
+const openRequestMessage = (error: any): string | null => {
+  const open = error?.response?.data?.open_service_order;
+  if (!open) return null;
+  return `You ${OPEN_REQUEST_PHRASE}${open.ticket_id ? ` (Ticket ${open.ticket_id})` : ''}. You can submit a new one once it is resolved.`;
+};
+
 const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(forceLightMode ? false : true);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -223,7 +237,9 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
         created_by_user: userEmail,
         requested_by: userEmail,
         support_status: 'Pending',
-        visit_status: 'Pending'
+        visit_status: 'Pending',
+        // Refused while this customer still has a request that is not Done, Resolved or Failed.
+        reject_if_open: true
       };
 
       console.log('[Support] Submitting service order:', newServiceOrder);
@@ -244,8 +260,10 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
     } catch (error) {
       console.error('Failed to submit request:', error);
       setShowLoadingModal(false);
-      setSubmitMessage('Failed to submit request. Please try again.');
-      setTimeout(() => setSubmitMessage(''), 3000);
+      const openMessage = openRequestMessage(error);
+      setSubmitMessage(openMessage || 'Failed to submit request. Please try again.');
+      // Longer for the open-request notice: it is a sentence with a ticket number to note.
+      setTimeout(() => setSubmitMessage(''), openMessage ? 8000 : 3000);
     }
   };
 
@@ -339,7 +357,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
               </div>
 
               {submitMessage && (
-                <div className={`mt-3 p-3 rounded text-sm text-center ${submitMessage.includes('Failed') || submitMessage.includes('limit') || submitMessage.includes('not found')
+                <div className={`mt-3 p-3 rounded text-sm text-center ${submitMessage.includes('Failed') || submitMessage.includes('limit') || submitMessage.includes('not found') || submitMessage.includes(OPEN_REQUEST_PHRASE)
                   ? isDarkMode ? 'bg-red-900/50 text-red-200' : 'bg-red-100 text-red-700'
                   : isDarkMode ? 'bg-green-900/50 text-green-200' : 'bg-green-100 text-green-700'
                   }`}>
