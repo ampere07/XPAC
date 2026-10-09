@@ -248,6 +248,33 @@ const allColumns = [
   { key: 'techCreatedAt', label: 'Technical Details Created At', width: 'min-w-36' }
 ];
 
+// Top level of the left-hand tree. "none" holds accounts whose generation type is blank or
+// unrecognised, so they are listed somewhere rather than silently counted as Postpaid.
+const GENERATION_GROUPS: { key: 'postpaid' | 'prepaid' | 'none'; label: string }[] = [
+  { key: 'postpaid', label: 'Postpaid' },
+  { key: 'prepaid', label: 'Prepaid' },
+  { key: 'none', label: 'Not Set' },
+];
+
+const generationKeyOf = (record: BillingRecord): 'postpaid' | 'prepaid' | 'none' => {
+  const type = normalizeGenerationType(record.generationType);
+  return type === 'Prepaid' ? 'prepaid' : type === 'Postpaid' ? 'postpaid' : 'none';
+};
+
+/** The status row an account is counted under ("online", "restricted", ...). */
+const statusBucketOf = (record: BillingRecord): string => {
+  const lowerStatus = (record.status || '').toLowerCase();
+  const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
+
+  if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') return 'restricted';
+  if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') return 'not found';
+  if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') return 'disconnected';
+  if (lowerStatus === 'inactive') return 'offline';
+  if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) return 'online';
+  if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') return lowerOnlineStatus;
+  return 'offline';
+};
+
 interface CustomerProps {
   initialSearchQuery?: string;
   autoOpenAccountNo?: string;
@@ -304,7 +331,9 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
   const [barangays, setBarangays] = useState<Barangay[]>([]);
   const [billingStatuses, setBillingStatuses] = useState<BillingStatus[]>([]);
-  const [expandedLocations, setExpandedLocations] = useState<Set<string>>(new Set());
+  // Postpaid and Prepaid start open, so the online statuses under them are as reachable as they
+  // were when they sat at the top level.
+  const [expandedLocations, setExpandedLocations] = useState<Set<string>>(() => new Set(['gen:postpaid', 'gen:prepaid']));
 
   const isLoading = isTableLoading || isActionLoading;
   const error = localError || contextError;
@@ -756,8 +785,8 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     const [type, name] = selectedLocation.split(':');
     let isValid = false;
 
-    if (type === 'status') {
-      isValid = true; // Status categories are always valid
+    if (type === 'gen' || type === 'status') {
+      isValid = true; // Generation types and status categories are always valid
     } else if (type === 'reg') {
       isValid = regions.some(r => r.name === name);
     } else if (type === 'city') {
@@ -1011,27 +1040,19 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
     return applyFunnelFilters(filtered, activeFilters);
   }, [billingRecords, searchQuery, activeFilters, userOrgId]);
 
-  // Memoize status tree (Status > Billing Status > Barangay) - Now using globalFilteredRecords
+  // Memoize status tree (Generation Type > Status > Billing Status > Barangay) - Now using globalFilteredRecords
   const statusTree = useMemo(() => {
-    const tree: Record<string, { 
-      count: number, 
+    // One status tree per generation type, ids prefixed with the generation's id
+    // ("gen:prepaid:status:online"), so a selection carries both levels.
+    const buildStatusItems = (records: BillingRecord[], idPrefix: string) => {
+    const tree: Record<string, {
+      count: number,
       bStatuses: Record<string, { count: number, barangays: Record<string, number> }>,
       sessionStatuses?: Record<string, { count: number, bStatuses: Record<string, { count: number, barangays: Record<string, number> }> }>
     }> = {};
 
-    globalFilteredRecords.forEach((record: BillingRecord) => {
-      const accessStatus = record.status || '';
-      let bucket = 'offline';
-
-      const lowerStatus = accessStatus.toLowerCase();
-      const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
-
-      if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') bucket = 'restricted';
-      else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') bucket = 'not found';
-      else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') bucket = 'disconnected';
-      else if (lowerStatus === 'inactive') bucket = 'offline';
-      else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) bucket = 'online';
-      else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') bucket = lowerOnlineStatus;
+    records.forEach((record: BillingRecord) => {
+      const bucket = statusBucketOf(record);
 
       if (!tree[bucket]) {
         tree[bucket] = { count: 0, bStatuses: {}, sessionStatuses: (bucket === 'restricted' || bucket === 'disconnected') ? {} : undefined };
@@ -1064,32 +1085,31 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       }
     });
 
-    return {
-      items: Object.keys(tree).map(name => ({
-        id: `status:${name}`,
+    return Object.keys(tree).map(name => ({
+        id: `${idPrefix}status:${name}`,
         name: name,
         count: tree[name].count,
         sessionStatuses: tree[name].sessionStatuses ? Object.entries(tree[name].sessionStatuses!).map(([sKey, sData]) => ({
-          id: `status:${name}:session:${sKey}`,
+          id: `${idPrefix}status:${name}:session:${sKey}`,
           name: sKey === 'online' ? 'Session Online' : 'Session Offline',
           count: sData.count,
           bStatuses: Object.entries(sData.bStatuses).sort().map(([bName, bData]) => ({
-            id: `status:${name}:session:${sKey}:billing:${bName}`,
+            id: `${idPrefix}status:${name}:session:${sKey}:billing:${bName}`,
             name: bName,
             count: bData.count,
             barangays: Object.entries(bData.barangays).sort().map(([brgyName, brgyCount]) => ({
-              id: `status:${name}:session:${sKey}:billing:${bName}:brgy:${brgyName}`,
+              id: `${idPrefix}status:${name}:session:${sKey}:billing:${bName}:brgy:${brgyName}`,
               name: brgyName,
               count: brgyCount
             }))
           }))
         })) : undefined,
         bStatuses: !tree[name].sessionStatuses ? Object.entries(tree[name].bStatuses).sort().map(([bName, bData]) => ({
-          id: `status:${name}:billing:${bName}`,
+          id: `${idPrefix}status:${name}:billing:${bName}`,
           name: bName,
           count: bData.count,
           barangays: Object.entries(bData.barangays).sort().map(([brgyName, brgyCount]) => ({
-            id: `status:${name}:billing:${bName}:brgy:${brgyName}`,
+            id: `${idPrefix}status:${name}:billing:${bName}:brgy:${brgyName}`,
             name: brgyName,
             count: brgyCount
           }))
@@ -1103,7 +1123,24 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
         if (indexA !== -1) return -1;
         if (indexB !== -1) return 1;
         return a.name.localeCompare(b.name);
-      }),
+      });
+    };
+
+    const groups = new Map<string, BillingRecord[]>(GENERATION_GROUPS.map(g => [g.key, []]));
+    globalFilteredRecords.forEach((record: BillingRecord) => {
+      groups.get(generationKeyOf(record))!.push(record);
+    });
+
+    return {
+      // "Not Set" only when some account has no generation type — the other two always show.
+      generations: GENERATION_GROUPS
+        .filter(g => g.key !== 'none' || groups.get('none')!.length > 0)
+        .map(g => ({
+          id: `gen:${g.key}`,
+          name: g.label,
+          count: groups.get(g.key)!.length,
+          items: buildStatusItems(groups.get(g.key)!, `gen:${g.key}:`)
+        })),
       total: globalFilteredRecords.length
     };
   }, [globalFilteredRecords]);
@@ -1111,25 +1148,23 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
   // Memoize filtered and sorted records for performance - Building on globalFilteredRecords
   const filteredBillingRecords = useMemo(() => {
     let filtered = globalFilteredRecords.filter((record: BillingRecord) => {
+      // A generation-type selection ("gen:prepaid", or "gen:prepaid:status:..." below it) narrows
+      // to that type first; whatever follows is the status path, matched as before.
+      let location = selectedLocation;
+      if (location.startsWith('gen:')) {
+        const [, genKey, ...rest] = location.split(':');
+        if (generationKeyOf(record) !== genKey) return false;
+        location = rest.length > 0 ? rest.join(':') : 'all';
+      }
+
       // Location hierarchy filter
-      let matchesLocation = selectedLocation === 'all';
+      let matchesLocation = location === 'all';
       if (!matchesLocation) {
-        if (selectedLocation.startsWith('status:')) {
-          const parts = selectedLocation.split(':');
+        if (location.startsWith('status:')) {
+          const parts = location.split(':');
           const statusName = parts[1];
-          const accessStatus = record.status || '';
-          let recordBucket = 'offline';
-          const lowerStatus = accessStatus.toLowerCase();
-          const lowerOnlineStatus = (record.onlineStatus || '').toLowerCase();
 
-          if (lowerStatus === 'restricted' || lowerOnlineStatus === 'restricted') recordBucket = 'restricted';
-          else if (lowerStatus === 'not found' || lowerOnlineStatus === 'not found') recordBucket = 'not found';
-          else if (lowerStatus === 'disconnected' || lowerOnlineStatus === 'disconnected') recordBucket = 'disconnected';
-          else if (lowerStatus === 'inactive') recordBucket = 'offline';
-          else if (['online', 'active', 'connected'].includes(lowerOnlineStatus)) recordBucket = 'online';
-          else if (lowerOnlineStatus && lowerOnlineStatus !== 'offline' && lowerOnlineStatus !== 'empty') recordBucket = lowerOnlineStatus;
-
-          if (recordBucket !== statusName) return false;
+          if (statusBucketOf(record) !== statusName) return false;
           
           let currentLevel = 2;
 
@@ -1935,8 +1970,51 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
             </span>
           </button>
 
+          {/* Generation Type Level: Postpaid / Prepaid, each holding its own status tree */}
+          {statusTree.generations.map((gen) => {
+            const isGenSelected = selectedLocation === gen.id;
+            const isGenExpanded = expandedLocations.has(gen.id);
+
+            return (
+              <div key={gen.id}>
+                <button
+                  aria-label={`Show ${gen.name}`}
+                  onClick={() => setSelectedLocation(gen.id)}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}`}
+                  style={isGenSelected ? {
+                    backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
+                    color: colorPalette?.primary || '#7c3aed'
+                  } : {}}
+                >
+                  <span className={`font-bold uppercase tracking-tight text-xs ${isGenSelected ? '' : (isDarkMode ? 'text-gray-200' : 'text-gray-800')}`}>{gen.name}</span>
+                  <div className="flex items-center space-x-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
+                      {gen.count}
+                    </span>
+                    <button
+                      aria-label={`${isGenExpanded ? 'Collapse' : 'Expand'} ${gen.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedLocations(prev => {
+                          const next = new Set(prev);
+                          if (next.has(gen.id)) next.delete(gen.id);
+                          else next.add(gen.id);
+                          return next;
+                        });
+                      }}
+                      className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}
+                    >
+                      {isGenExpanded ? (
+                        <ChevronDown className="h-3 w-3 text-gray-500" />
+                      ) : (
+                        <ChevronRight className="h-3 w-3 text-gray-500" />
+                      )}
+                    </button>
+                  </div>
+                </button>
+
           {/* Status Level (Flat with expansion) */}
-          {statusTree.items.map((status) => {
+          {isGenExpanded && gen.items.map((status) => {
             const style = getStatusInfo({ status: status.name, onlineStatus: status.name });
             const isSelected = selectedLocation === status.id;
             const isExpanded = expandedLocations.has(status.id);
@@ -1946,7 +2024,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                 <button
                   aria-label={`Show ${status.name}`}
                   onClick={() => setSelectedLocation(status.id)}
-                  className={`w-full flex items-center justify-between px-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                  className={`w-full flex items-center justify-between pl-8 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                     }`}
                   style={isSelected ? {
                     backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -1997,7 +2075,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                         <button
                           aria-label={`Show ${session.name}`}
                           onClick={() => setSelectedLocation(session.id)}
-                          className={`w-full flex items-center justify-between pl-8 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
+                          className={`w-full flex items-center justify-between pl-12 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
                           style={isSessionSelected ? {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
                             color: colorPalette?.primary || '#7c3aed'
@@ -2041,7 +2119,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               <button
                                 aria-label={`Show ${billing.name}`}
                                 onClick={() => setSelectedLocation(billing.id)}
-                                className={`w-full flex items-center justify-between pl-12 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'}`}
+                                className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'}`}
                                 style={isBillingSelected ? {
                                   backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
                                   color: colorPalette?.primary || '#7c3aed'
@@ -2084,7 +2162,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                     aria-label={`Show ${brgy.name}`}
                                     key={brgy.id}
                                     onClick={() => setSelectedLocation(brgy.id)}
-                                    className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-600 hover:bg-gray-800' : 'text-gray-500 hover:bg-gray-100'}`}
+                                    className={`w-full flex items-center justify-between pl-20 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-600 hover:bg-gray-800' : 'text-gray-500 hover:bg-gray-100'}`}
                                     style={isBrgySelected ? {
                                       backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
                                       color: colorPalette?.primary || '#7c3aed'
@@ -2113,7 +2191,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                         <button
                           aria-label={`Show ${billing.name}`}
                           onClick={() => setSelectedLocation(billing.id)}
-                          className={`w-full flex items-center justify-between pl-10 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
+                          className={`w-full flex items-center justify-between pl-14 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
                             }`}
                           style={isBillingSelected ? {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -2157,7 +2235,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               aria-label={`Show ${brgy.name}`}
                               key={brgy.id}
                               onClick={() => setSelectedLocation(brgy.id)}
-                              className={`w-full flex items-center justify-between pl-16 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                              className={`w-full flex items-center justify-between pl-20 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
                                 }`}
                               style={isBrgySelected ? {
                                 backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -2175,6 +2253,9 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                     );
                   })
                 ))}
+              </div>
+            );
+          })}
               </div>
             );
           })}
