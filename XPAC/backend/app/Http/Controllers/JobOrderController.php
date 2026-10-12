@@ -1657,10 +1657,6 @@ class JobOrderController extends Controller
                 'plan_id_stored' => $billingAccount->plan_id
             ]);
 
-            // Use username from job order if exists, otherwise fallback to account number
-            $usernameValue = $jobOrder->pppoe_username ?: ($jobOrder->username ?: $accountNumber);
-            $usernameForTechnical = $usernameValue;
-
             $modemSN = $jobOrder->modem_router_sn;
             if ($modemSN) {
                 // Check if technical detail already exists for this modem SN
@@ -1683,11 +1679,13 @@ class JobOrderController extends Controller
             $napValue = trim($lcpnapData->nap ?? '');
             $portValue = $jobOrder->port ?? '';
 
+            [$generatedUsername, $generatedPassword] = $this->pppoeCredentialsFor($jobOrder, $application, $lcpValue, $napValue, $portValue);
+
             $technicalDetail = TechnicalDetail::create([
                 'account_id' => $billingAccount->id,
                 'account_no' => $accountNumber,
-                'username' => $usernameForTechnical,
-                'pppoe_password' => $jobOrder->pppoe_password,
+                'username' => $generatedUsername,
+                'pppoe_password' => $generatedPassword,
                 // Carried across from the job order, falling back to restricted
                 // rather than NULL. A job order created before the restricted-by-
                 // default rule has no status to copy, and a blank here would read
@@ -1713,10 +1711,6 @@ class JobOrderController extends Controller
             ]);
 
 
-
-            // Use the calculated username and contact number for credentials
-            $generatedUsername = $usernameValue;
-            $generatedPassword = $jobOrder->pppoe_password ?: $customer->contact_number_primary;
 
             // Check if online status already exists for this username
             if (OnlineStatus::where('username', $generatedUsername)->exists()) {
@@ -2440,6 +2434,36 @@ class JobOrderController extends Controller
         }
     }
 
+    private function pppoeCredentialsFor(JobOrder $jobOrder, $application, string $lcp, string $nap, string $port): array
+    {
+        $username = $jobOrder->pppoe_username;
+        $password = $jobOrder->pppoe_password;
+        if (!empty($username) && !empty($password)) {
+            return [$username, $password];
+        }
+
+        $pppoeService = new PppoeUsernameService();
+        $customerData = [
+            'first_name' => $application->first_name ?? '',
+            'middle_initial' => $application->middle_initial ?? '',
+            'last_name' => $application->last_name ?? '',
+            'mobile_number' => $application->mobile_number ?? '',
+            'lcp' => $lcp,
+            'nap' => $nap,
+            'port' => $port,
+            'date_installed' => $jobOrder->date_installed ?? now(),
+        ];
+
+        $username = $username ?: $pppoeService->generateUniqueUsername($customerData, $jobOrder->id);
+        $password = $password ?: $pppoeService->generatePassword($customerData);
+
+        if (empty($username) || empty($password)) {
+            throw new \Exception('Failed to generate PPPoE credentials');
+        }
+
+        return [$username, $password];
+    }
+
     private function createRadiusAccountInternal(JobOrder $jobOrder): array
     {
         $id = $jobOrder->id;
@@ -2473,8 +2497,6 @@ class JobOrderController extends Controller
             $application = $jobOrder->application;
 
             $credentialsExist = !empty($jobOrder->pppoe_username) && !empty($jobOrder->pppoe_password);
-            $pppoeUsername = $jobOrder->pppoe_username;
-            $pppoePassword = $jobOrder->pppoe_password;
             $radiusSubmitted = false;
             $radiusError = null;
 
@@ -2488,27 +2510,9 @@ class JobOrderController extends Controller
             $napValue = trim($lcpnapData->nap ?? '');
             $portValue = $jobOrder->port ?? '';
 
-            if (!$credentialsExist) {
-                $pppoeService = new PppoeUsernameService();
-                
-                $customerData = [
-                    'first_name' => $application->first_name ?? '',
-                    'middle_initial' => $application->middle_initial ?? '',
-                    'last_name' => $application->last_name ?? '',
-                    'mobile_number' => $application->mobile_number ?? '',
-                    'lcp' => $lcpValue,
-                    'nap' => $napValue,
-                    'port' => $portValue,
-                    'date_installed' => $jobOrder->date_installed ?? now(),
-                ];
+            [$pppoeUsername, $pppoePassword] = $this->pppoeCredentialsFor($jobOrder, $application, $lcpValue, $napValue, $portValue);
 
-                $pppoeUsername = $pppoeService->generateUniqueUsername($customerData, $id);
-                $pppoePassword = $pppoeService->generatePassword($customerData);
-                
-                if (empty($pppoeUsername) || empty($pppoePassword)) {
-                    throw new \Exception('Failed to generate PPPoE credentials');
-                }
-                
+            if (!$credentialsExist) {
                 $jobOrder->update([
                     'pppoe_username' => $pppoeUsername,
                     'pppoe_password' => $pppoePassword,
