@@ -228,7 +228,13 @@ const SMSBlastLogs: React.FC = () => {
                 <tbody className={`divide-y ${isDarkMode ? 'bg-gray-900 divide-gray-800' : 'bg-white divide-gray-200'
                   }`}>
                   {filteredLogs.map((log) => (
-                    <tr key={log.id} className={`cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
+                    <tr
+                      key={log.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open sms blast log ${log.messageId}`}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleLogClick(log); } }}
+                      className={`cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       }`} onClick={() => handleLogClick(log)}>
                       <td className={`px-6 py-4 whitespace-nowrap text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                         }`}>

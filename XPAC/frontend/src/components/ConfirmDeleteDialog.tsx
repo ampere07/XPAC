@@ -40,13 +40,13 @@ const ConfirmDeleteDialog: React.FC<ConfirmDeleteDialogProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={cancel}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={cancel} />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirm-delete-title"
-        onClick={(e) => e.stopPropagation()}
-        className={`rounded-lg p-6 max-w-md w-full mx-4 border ${isDarkMode
+        className={`relative rounded-lg p-6 max-w-md w-full mx-4 border ${isDarkMode
           ? 'bg-gray-800 border-gray-700'
           : 'bg-white border-gray-200'
           }`}

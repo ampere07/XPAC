@@ -875,6 +875,10 @@ const LocationList: React.FC = () => {
                   {paginatedLocations.map((location) => (
                     <tr
                       key={`${location.type}-${location.id}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open location ${location.name}`}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleLocationClick(location); } }}
                       className={`cursor-pointer group transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-50'
                         } ${selectedLocation?.id === location.id && selectedLocation?.type === location.type ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''}`}
                       onClick={() => handleLocationClick(location)}

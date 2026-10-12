@@ -98,6 +98,7 @@ const ApprovalConfirmationModal: React.FC<ApprovalConfirmationModalProps> = ({
               Cancel
             </button>
             <button
+              aria-label="Confirm approval"
               onClick={handleConfirm}
               disabled={isDisabled}
               className="px-6 py-2 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

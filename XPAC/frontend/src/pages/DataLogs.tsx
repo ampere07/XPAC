@@ -601,6 +601,10 @@ const DataLogs: React.FC = () => {
                   {displayedColumns.map((column, index) => (
                     <th
                       key={column.key}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Sort by ${column.label}`}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { handleSort(column.key); } }}
                       draggable
                       onDragStart={(e) => handleDragStart(e, column.key)}
                       onDragOver={(e) => handleDragOver(e, column.key)}
@@ -637,6 +641,10 @@ const DataLogs: React.FC = () => {
                 {paginatedLogs.map((row) => (
                   <tr
                     key={`${row.log_type}-${row.id}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open log ${row.id}`}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { setSelectedCompareLog(row); } }}
                     onClick={() => setSelectedCompareLog(row)}
                     className={`border-b cursor-pointer transition-colors hover:bg-slate-500/5 ${isDarkMode ? 'border-gray-800/80 hover:bg-gray-800/30' : 'border-gray-200 hover:bg-gray-100/30'
                       }`}

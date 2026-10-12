@@ -1294,6 +1294,10 @@ const StaggeredPayment: React.FC = () => {
                           {filteredColumns.map((column, index) => (
                             <th
                               key={column.key}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Sort by ${column.label}`}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { handleSort(column.key); } }}
                               draggable
                               onDragStart={(e) => handleDragStart(e, column.key)}
                               onDragOver={(e) => handleDragOver(e, column.key)}
@@ -1330,6 +1334,10 @@ const StaggeredPayment: React.FC = () => {
                         {paginatedRecords.map((record) => (
                           <tr
                             key={record.id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Open staggered payment ${record.staggered_install_no}`}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleRowClick(record); } }}
                             onClick={() => handleRowClick(record)}
                             className={`border-b transition-colors cursor-pointer ${selectedStaggered?.id === record.id
                               ? (isDarkMode ? 'bg-gray-800' : 'bg-blue-50')

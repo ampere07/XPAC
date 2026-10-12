@@ -1086,6 +1086,9 @@ const WorkOrderPage: React.FC = () => {
                       {sortedWorkOrders.map((wo) => (
                         <tr
                           key={wo.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open work order ${wo.id}`}
                           onClick={() => handleEdit(wo)}
                           className={`transition-colors cursor-pointer border-b ${
                             isDarkMode ? 'hover:bg-gray-800/50 border-gray-800' : 'hover:bg-gray-50 border-gray-100'

@@ -972,6 +972,10 @@ const AgentPayout: React.FC = () => {
                                         return (
                                             <th
                                                 key={colKey}
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-label={`Sort by ${colDef.label}`}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') { handleSort(colKey); } }}
                                                 draggable
                                                 onDragStart={(e) => handleDragStart(colKey, e)}
                                                 onDragOver={(e) => handleDragOver(colKey, e)}
@@ -1002,6 +1006,10 @@ const AgentPayout: React.FC = () => {
                                 paginatedData.map((row: any, i) => (
                                     <tr
                                         key={i}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Open payout ${row.id}`}
+                                        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleRowClick(row); } }}
                                         onClick={() => handleRowClick(row)}
                                         className={`border-b transition-colors cursor-pointer ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'}`}
                                         style={(selectedRecord as any)?.id === row.id

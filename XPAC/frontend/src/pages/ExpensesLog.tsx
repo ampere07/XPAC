@@ -211,6 +211,10 @@ const ExpensesLog: React.FC = () => {
                       filteredExpenseRecords.map((record) => (
                         <tr
                           key={record.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open log ${record.date}`}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleRowClick(record); } }}
                           className={`border-b cursor-pointer transition-colors ${isDarkMode
                               ? 'border-slate-800 hover:bg-slate-800'
                               : 'border-gray-200 hover:bg-gray-50'

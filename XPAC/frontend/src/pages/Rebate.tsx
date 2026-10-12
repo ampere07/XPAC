@@ -501,11 +501,6 @@ const Rebate: React.FC = () => {
     <div className={`h-full flex flex-col md:flex-row overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -544,7 +539,12 @@ const Rebate: React.FC = () => {
         <div className="flex-1 overflow-y-auto">
           {/* All Level */}
           <button
-            onClick={() => setSelectedDate('All')}
+            onClick={() => {
+              setSelectedDate('All');
+              if (isMobile) {
+                setMobileViewMode('list');
+              }
+            }}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedDate === 'All'
                 ? ''
@@ -576,7 +576,12 @@ const Rebate: React.FC = () => {
             <button
               aria-label={`Show ${item.date}`}
               key={index}
-              onClick={() => setSelectedDate(item.date)}
+              onClick={() => {
+                setSelectedDate(item.date);
+                if (isMobile) {
+                  setMobileViewMode('list');
+                }
+              }}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                 } ${selectedDate === item.date
                   ? ''
@@ -784,6 +789,14 @@ const Rebate: React.FC = () => {
                       <tr
                         key={record.id}
                         onClick={() => setSelectedRebate(record)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open rebate ${record.id}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && e.target === e.currentTarget) {
+                            setSelectedRebate(record);
+                          }
+                        }}
                         className={`cursor-pointer ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-50'
                           }`}
                       >

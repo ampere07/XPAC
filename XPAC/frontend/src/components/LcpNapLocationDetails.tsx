@@ -607,6 +607,10 @@ const LcpNapLocationDetails: React.FC<LcpNapLocationDetailsProps> = ({
                         {relatedCustomers.slice((customerPage - 1) * 5, customerPage * 5).map((customer, idx) => (
                           <tr
                             key={idx}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Open customer ${customer.account_no}`}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleCustomerClick(customer.account_no); } }}
                             className={`cursor-pointer transition-all ${isDarkMode ? "hover:bg-gray-800" : "hover:bg-gray-100"} shadow-sm`}
                             onClick={() => handleCustomerClick(customer.account_no)}
                           >

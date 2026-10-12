@@ -2085,30 +2085,30 @@ const BillingDetails: React.FC<BillingDetailsProps> = ({
                         <div key={sectionKey} className={`mb-2 border rounded ${isDarkMode ? 'border-gray-700' : 'border-gray-200'
                           }`}>
                           <div
-                            className={`flex items-center justify-between px-3 py-2 cursor-pointer transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'
+                            className={`flex items-center space-x-2 px-3 py-2 transition-colors ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'
                               }`}
-                            onClick={() => toggleSectionExpansion(sectionKey)}
                           >
-                            <div className="flex items-center space-x-2">
-                              <input
-                                aria-label={`Show ${sectionLabel}`}
-                                type="checkbox"
-                                checked={columnVisibility[sectionKey]}
-                                onChange={(e) => {
-                                  e.stopPropagation();
-                                  toggleColumnVisibility(sectionKey);
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                              />
+                            <input
+                              aria-label={`Show ${sectionLabel}`}
+                              type="checkbox"
+                              checked={columnVisibility[sectionKey]}
+                              onChange={() => toggleColumnVisibility(sectionKey)}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <button
+                              type="button"
+                              aria-expanded={expandedSection === sectionKey}
+                              onClick={() => toggleSectionExpansion(sectionKey)}
+                              className="flex flex-1 items-center justify-between cursor-pointer"
+                            >
                               <span className={`font-medium text-sm ${isDarkMode ? 'text-white' : 'text-gray-900'
                                 }`}>{sectionLabel}</span>
-                            </div>
-                            {expandedSection === sectionKey ? (
-                              <ChevronDown size={16} className={isDarkMode ? 'text-gray-400' : 'text-gray-600'} />
-                            ) : (
-                              <ChevronRight size={16} className={isDarkMode ? 'text-gray-400' : 'text-gray-600'} />
-                            )}
+                              {expandedSection === sectionKey ? (
+                                <ChevronDown size={16} className={isDarkMode ? 'text-gray-400' : 'text-gray-600'} />
+                              ) : (
+                                <ChevronRight size={16} className={isDarkMode ? 'text-gray-400' : 'text-gray-600'} />
+                              )}
+                            </button>
                           </div>
                           {expandedSection === sectionKey && (
                             <div className={`px-2 pb-2 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'

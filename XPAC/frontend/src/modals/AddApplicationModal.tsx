@@ -304,11 +304,11 @@ const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50" onClick={handleClose}>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+      <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={handleClose} />
       <div
-        className={`h-full w-full md:w-full md:max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
+        className={`relative h-full w-full md:w-full md:max-w-2xl shadow-2xl transform transition-transform duration-300 ease-in-out overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900' : 'bg-white'
           }`}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className={`px-6 py-4 flex items-center justify-between border-b ${isDarkMode
           ? 'bg-gray-800 border-gray-700'

@@ -644,6 +644,13 @@ const PaymentPortal: React.FC = () => {
     });
   };
 
+  const selectLocation = (locationId: string) => {
+    setSelectedLocation(locationId);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
 
   const userOrgId = useMemo(() => {
     try {
@@ -1097,11 +1104,6 @@ const PaymentPortal: React.FC = () => {
       }`}>
       {/* Location Sidebar Container */}
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -1167,7 +1169,7 @@ const PaymentPortal: React.FC = () => {
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedLocation('all')}
+            onClick={() => selectLocation('all')}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedLocation === 'all'
                 ? ''
@@ -1199,7 +1201,7 @@ const PaymentPortal: React.FC = () => {
             <div key={region.id}>
               <button
                 aria-label={`Show ${region.name}`}
-                onClick={() => setSelectedLocation(region.id)}
+                onClick={() => selectLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
                     ? ''
@@ -1245,7 +1247,7 @@ const PaymentPortal: React.FC = () => {
                 <div key={city.id}>
                   <button
                     aria-label={`Show ${city.name}`}
-                    onClick={() => setSelectedLocation(city.id)}
+                    onClick={() => selectLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
                         ? ''
@@ -1280,7 +1282,7 @@ const PaymentPortal: React.FC = () => {
                     <button
                       aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
-                      onClick={() => setSelectedLocation(barangay.id)}
+                      onClick={() => selectLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         } ${selectedLocation === barangay.id
                           ? ''
@@ -1636,6 +1638,14 @@ const PaymentPortal: React.FC = () => {
                           onDrop={(e) => handleDrop(e, column.key)}
                           onDragEnd={handleDragEnd}
                           onClick={() => handleSort(column.key)}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Sort by ${column.label}`}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleSort(column.key);
+                            }
+                          }}
                           className={`group relative text-left py-3 px-3 font-normal whitespace-nowrap cursor-pointer select-none transition-colors ${isDarkMode ? 'text-gray-400 bg-gray-800 hover:bg-gray-700' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
                             } ${index < filteredColumns.length - 1 ? (isDarkMode ? 'border-r border-gray-700' : 'border-r border-gray-200') : ''
                             } ${dragOverColumn === column.key ? (isDarkMode ? 'border-l-2 border-orange-500' : 'border-l-2 border-orange-600') : ''
@@ -1666,6 +1676,14 @@ const PaymentPortal: React.FC = () => {
                       paginatedRecords.map((record: PaymentPortalRecord) => (
                         <tr
                           key={record.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open payment ${record.reference_no || record.id}`}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && e.target === e.currentTarget) {
+                              handleRowClick(record);
+                            }
+                          }}
                           className={`border-b cursor-pointer transition-colors ${isDarkMode
                             ? 'border-gray-800 hover:bg-gray-900'
                             : 'border-gray-200 hover:bg-gray-50'

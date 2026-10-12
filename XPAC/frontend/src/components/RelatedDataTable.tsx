@@ -124,9 +124,17 @@ const RelatedDataTable: React.FC<RelatedDataTableProps> = ({
           {data.map((row: any, index: number) => (
             <tr
               key={index}
+              role={onRowClick ? 'button' : undefined}
+              tabIndex={onRowClick ? 0 : undefined}
+              aria-label={onRowClick ? `Open row ${index + 1}` : undefined}
+              onKeyDown={(e) => {
+                if (onRowClick && e.key === 'Enter' && e.target === e.currentTarget) {
+                  onRowClick(row);
+                }
+              }}
               className={`transition-colors ${
-                isDarkMode 
-                  ? 'text-white hover:bg-gray-800' 
+                isDarkMode
+                  ? 'text-white hover:bg-gray-800'
                   : 'text-gray-900 hover:bg-gray-50'
               } ${onRowClick ? 'cursor-pointer' : ''}`}
               onClick={(e) => {

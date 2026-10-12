@@ -93,10 +93,10 @@ const ModalUITemplate: React.FC<ModalUITemplateProps> = ({
 
     return (
         <ModalThemeContext.Provider value={{ isDarkMode, colorPalette }}>
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50" onClick={() => closeOnOutsideClick && onClose()}>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-end z-50">
+                <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={() => closeOnOutsideClick && onClose()} />
                 <div
-                    className={`h-full w-full ${maxWidth} shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}
-                    onClick={(e) => e.stopPropagation()}
+                    className={`relative h-full w-full ${maxWidth} shadow-2xl transform transition-transform duration-300 ease-in-out translate-x-0 overflow-hidden flex flex-col ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-black'}`}
                 >
                     <div className={`px-6 py-4 flex items-center justify-between border-b ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-100 border-gray-200'}`}>
                         <h2 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-black'}`}>{title}</h2>

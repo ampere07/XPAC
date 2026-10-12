@@ -1163,16 +1163,18 @@ const Invoice: React.FC = () => {
     exportToCSV('invoices_export', exportColumns, filteredRecords, getExportValue);
   };
 
+  const handleDateSelect = (date: string) => {
+    setSelectedDate(date);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
   return (
     <div className={`h-full flex flex-col md:flex-row overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       {userRole !== 'customer' && (
         <div
-          onClick={() => {
-            if (isMobile) {
-              setMobileViewMode('list');
-            }
-          }}
           className={`${
             mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
           } md:flex border-r flex-shrink-0 flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -1262,7 +1264,12 @@ const Invoice: React.FC = () => {
                       key={status}
                       type="button"
                       aria-pressed={isActive}
-                      onClick={() => setPaymentStatusFilter(isActive ? null : status)}
+                      onClick={() => {
+                        setPaymentStatusFilter(isActive ? null : status);
+                        if (isMobile) {
+                          setMobileViewMode('list');
+                        }
+                      }}
                       className={`px-3 py-1.5 rounded text-xs font-medium border transition-colors ${isActive
                         ? 'text-white'
                         : isDarkMode
@@ -1283,7 +1290,7 @@ const Invoice: React.FC = () => {
 
             {/* All Level */}
             <button
-              onClick={() => setSelectedDate('All')}
+              onClick={() => handleDateSelect('All')}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                 } ${selectedDate === 'All'
                   ? ''
@@ -1342,7 +1349,7 @@ const Invoice: React.FC = () => {
                     <button
                       aria-label={`Show ${item.date}`}
                       key={index}
-                      onClick={() => setSelectedDate(item.date)}
+                      onClick={() => handleDateSelect(item.date)}
                       className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         } ${selectedDate === item.date
                           ? ''
@@ -1734,6 +1741,14 @@ const Invoice: React.FC = () => {
                             {filteredColumns.map((column, index) => (
                               <th
                                 key={column.key}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Sort by ${column.label}`}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    handleSort(column.key);
+                                  }
+                                }}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, column.key)}
                                 onDragOver={(e) => handleDragOver(e, column.key)}
@@ -1770,6 +1785,14 @@ const Invoice: React.FC = () => {
                             paginatedRecords.map((record) => (
                               <tr
                                 key={record.id}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Open ${record.accountNo} ${record.invoiceDate}`}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                    handleRowClick(record);
+                                  }
+                                }}
                                 className={`border-b transition-colors ${isDarkMode
                                   ? 'border-gray-800 hover:bg-gray-900'
                                   : 'border-gray-200 hover:bg-gray-50'

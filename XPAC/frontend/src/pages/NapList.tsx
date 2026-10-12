@@ -217,7 +217,7 @@ const NapList: React.FC = () => {
     }
   };
 
-  const handleEdit = (item: NAP, event: React.MouseEvent) => {
+  const handleEdit = (item: NAP, event: React.SyntheticEvent) => {
     if (!actions.canEdit) return;
     event.stopPropagation();
     setEditingItem(item);
@@ -372,6 +372,10 @@ const NapList: React.FC = () => {
                   }).map((item) => (
                     <div
                       key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open NAP ${item.nap_name}`}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(item, e); } }}
                       onClick={(e) => handleEdit(item, e)}
                       className={`px-4 py-3 cursor-pointer transition-all duration-200 border-b flex items-center justify-between group ${isDarkMode
                         ? 'hover:bg-gray-800/50 border-gray-800'

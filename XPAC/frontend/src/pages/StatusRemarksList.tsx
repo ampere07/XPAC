@@ -238,7 +238,13 @@ const StatusRemarksList: React.FC = () => {
 
   const renderListItem = (remark: StatusRemark) => {
     return (
-      <div key={remark.id} className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
+      <div
+        key={remark.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open status remark ${remark.status_remarks}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(remark); } }}
+        className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
         }`}
         onClick={() => handleEdit(remark)}
       >

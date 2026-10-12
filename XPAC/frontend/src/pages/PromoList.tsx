@@ -333,7 +333,12 @@ const PromoList: React.FC = () => {
 
   const renderListItem = (promo: Promo) => {
     return (
-      <div key={promo.id} className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
+      <div key={promo.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open promo ${promo.name}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(promo); } }}
+        className={`border-b group cursor-pointer transition-colors ${isDarkMode ? 'bg-gray-900 border-gray-800 hover:bg-gray-800/50' : 'bg-white border-gray-200 hover:bg-gray-50'
         }`}
         onClick={() => handleEdit(promo)}
       >

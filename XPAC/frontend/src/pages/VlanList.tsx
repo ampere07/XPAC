@@ -312,6 +312,9 @@ const VlanList: React.FC = () => {
     return (
       <div
         key={vlan.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open VLAN ${vlan.value}`}
         onClick={() => handleEdit(vlan)}
         className={`group px-4 py-3 flex items-center justify-between cursor-pointer transition-all duration-200 border-b border-gray-800/10 dark:divide-white/5 ${isDarkMode
           ? 'hover:bg-white/[0.02]'

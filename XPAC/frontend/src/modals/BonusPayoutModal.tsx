@@ -463,7 +463,16 @@ const BonusPayoutForm: React.FC<{
                             ? 'border-gray-700 bg-gray-800 hover:border-gray-500'
                             : 'border-gray-300 bg-gray-50 hover:border-gray-400'
                             } ${imagePreview ? 'h-auto' : 'h-40'}`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Upload proof"
                         onClick={() => fileInputRef.current?.click()}
+                        onKeyDown={(e) => {
+                            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
                         <input
                             aria-label="Proof"
