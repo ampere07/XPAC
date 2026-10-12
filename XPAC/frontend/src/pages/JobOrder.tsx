@@ -16,6 +16,10 @@ import { userService } from '../services/userService';
 import { User } from '../types/api';
 import { agentJobOrderBand, createAgentReferralMatcher, isAgentUser } from '../utils/agentReferral';
 import {
+  TechnicianFilterModal, TechnicianFilterSidebar, TechnicianFilterValue,
+  buildTechnicianOptions, matchesTechnicianFilter
+} from '../components/TechnicianFilter';
+import {
   deriveVipLabel,
   deriveVatTypeLabel,
   normalizeGenerationType,
@@ -278,6 +282,9 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   const [downloadMode, setDownloadMode] = useState<'default' | 'report'>('default');
   const [dateInstalledFrom, setDateInstalledFrom] = useState<string>('');
   const [dateInstalledTo, setDateInstalledTo] = useState<string>('');
+  // Technician filter (sidebar button + modal): one assigned tech, optionally a date range.
+  const [technicianFilter, setTechnicianFilter] = useState<TechnicianFilterValue | null>(null);
+  const [isTechnicianModalOpen, setIsTechnicianModalOpen] = useState<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -377,7 +384,7 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedLocation, searchQuery, activeFilters, sortColumn, sortDirection, itemsPerPage, dateInstalledFrom, dateInstalledTo]);
+  }, [selectedLocation, searchQuery, activeFilters, sortColumn, sortDirection, itemsPerPage, dateInstalledFrom, dateInstalledTo, technicianFilter]);
 
   // Scroll to top on page change
   useEffect(() => {
@@ -1036,6 +1043,17 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
     });
   };
 
+  // The raw assigned email on a job order — getVal('assignedEmail') returns the tech's name.
+  const assignedEmailOf = (jo: JobOrder): string => String(jo.Assigned_Email || jo.assigned_email || '');
+
+  // Technician filter options: the technicians assigned on a job order this user can see. Built
+  // from the unfiltered list so the options do not vanish as other filters narrow the table.
+  const technicianOptions = useMemo(
+    () => buildTechnicianOptions(users, accessibleJobOrders.map(assignedEmailOf)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accessibleJobOrders, users]
+  );
+
   // 1. Initial search and funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredJobOrders = useMemo(() => {
     let filtered = accessibleJobOrders.filter((jobOrder: JobOrder) => {
@@ -1076,8 +1094,15 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       });
     }
 
+    // Technician filter (sidebar button + modal). Applied here so the status counts follow it;
+    // its dates are on the job order's timestamp.
+    if (technicianFilter) {
+      filtered = filtered.filter(record =>
+        matchesTechnicianFilter(technicianFilter, assignedEmailOf(record), record.Timestamp || record.timestamp));
+    }
+
     return applyFunnelFilters(filtered, activeFilters);
-  }, [accessibleJobOrders, searchQuery, activeFilters, dateInstalledFrom, dateInstalledTo]);
+  }, [accessibleJobOrders, searchQuery, activeFilters, dateInstalledFrom, dateInstalledTo, technicianFilter]);
 
   // Derive statusItems components from the search-filtered set
   const statusItems = useMemo(() => {
@@ -1991,6 +2016,17 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
               </div>
             </div>
           </div>
+
+          {/* Technician filter: one assigned tech, optionally a date range, with their total. */}
+          <TechnicianFilterSidebar
+            value={technicianFilter}
+            count={globalFilteredJobOrders.length}
+            recordLabel="Job Orders"
+            onOpen={() => setIsTechnicianModalOpen(true)}
+            onClear={() => setTechnicianFilter(null)}
+            isDarkMode={isDarkMode}
+            primaryColor={colorPalette?.primary || '#7c3aed'}
+          />
 
           <div className="flex-1 overflow-y-auto">
             {/* All Level */}
@@ -2983,6 +3019,22 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
         }}
         currentFilters={activeFilters}
       />
+
+      {isTechnicianModalOpen && (
+        <TechnicianFilterModal
+          initial={technicianFilter}
+          technicians={technicianOptions}
+          isLoading={isLoadingUsers}
+          dateHint="By job order timestamp."
+          onApply={(value) => {
+            setTechnicianFilter(value);
+            setIsTechnicianModalOpen(false);
+          }}
+          onClose={() => setIsTechnicianModalOpen(false)}
+          isDarkMode={isDarkMode}
+          primaryColor={colorPalette?.primary || '#7c3aed'}
+        />
+      )}
 
       {/* ── Download options ─────────────────────────────────────────────── */}
       {isDownloadModalOpen && (
