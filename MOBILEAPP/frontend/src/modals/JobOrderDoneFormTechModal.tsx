@@ -1106,8 +1106,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
         if (!formData.ip.trim()) newErrors.ip = 'IP is required';
 
       } else if (formData.connectionType === 'Fiber') {
-        if (!formData.lcpnap.trim()) newErrors.lcpnap = 'LCP-NAP is required';
-        if (!formData.port.trim()) newErrors.port = 'PORT is required';
+        if (formData.lcpnap.trim() && !formData.port.trim()) newErrors.port = 'PORT is required';
         if (!formData.vlan.trim()) newErrors.vlan = 'VLAN is required';
       }
 
@@ -3046,7 +3045,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                             <View style={styles.inputGroup}>
                               <View style={styles.inputGroup}>
                                 <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                                  LCP-NAP<Text style={styles.required}>*</Text>
+                                  LCP-NAP
                                 </Text>
                                 <Pressable
                                   onPress={() => {
@@ -3055,7 +3054,7 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   }}
                                   style={[styles.searchContainer, {
                                     backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                                    borderColor: errors.lcpnap ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+                                    borderColor: isDarkMode ? '#374151' : '#d1d5db',
                                     paddingVertical: 12
                                   }]}
                                 >
@@ -3067,19 +3066,11 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                   </Text>
                                   <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
                                 </Pressable>
-                                {errors.lcpnap && (
-                                  <View ref={registerAnchor('lcpnap')} collapsable={false} style={styles.errorContainer}>
-                                    <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
-                                      <Text style={styles.errorIconText}>!</Text>
-                                    </View>
-                                    <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.lcpnap}</Text>
-                                  </View>
-                                )}
                               </View>
 
                               <View style={styles.inputGroup}>
                                 <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                                  PORT<Text style={styles.required}>*</Text>
+                                  PORT{formData.lcpnap ? <Text style={styles.required}>*</Text> : null}
                                 </Text>
                                 <View>
                                   <Pressable
