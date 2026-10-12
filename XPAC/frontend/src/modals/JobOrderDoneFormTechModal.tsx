@@ -1080,7 +1080,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
       } else if (formData.connectionType === 'Fiber') {
         if (formData.lcpnap.trim() && !formData.port.trim()) newErrors.port = 'PORT is required';
-        if (!formData.vlan.trim()) newErrors.vlan = 'VLAN is required';
       } else if (formData.connectionType === 'Local') {
 
       }
@@ -2381,10 +2380,10 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                     <div>
                       <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                        }`}>VLAN<span className="text-red-500">*</span></label>
+                        }`}>VLAN</label>
                       <div className="relative">
                         <select aria-label="VLAN" value={formData.vlan} onChange={(e) => handleInputChange('vlan', e.target.value)} className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
-                          } ${errors.vlan ? 'border-red-500' : (isDarkMode ? 'border-gray-700' : 'border-gray-300')}`}>
+                          } ${isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}>
                           <option value="">Select VLAN</option>
                           <option value="None">None</option>
                           {formData.vlan && !vlans.some(v => v.value.toString() === formData.vlan) && (
@@ -2399,15 +2398,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                         <ChevronDown className={`absolute right-3 top-2.5 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-gray-600'
                           }`} size={20} />
                       </div>
-                      {errors.vlan && (
-                        <div className="flex items-center mt-1">
-                          <div
-                            className="flex items-center justify-center w-4 h-4 rounded-full text-white text-xs mr-2"
-                            style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
-                          >!</div>
-                          <p className="text-xs" style={{ color: colorPalette?.primary || '#7c3aed' }}>This entry is required</p>
-                        </div>
-                      )}
                     </div>
                   </>
                 )}

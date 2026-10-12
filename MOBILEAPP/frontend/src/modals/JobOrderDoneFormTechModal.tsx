@@ -1107,7 +1107,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
       } else if (formData.connectionType === 'Fiber') {
         if (formData.lcpnap.trim() && !formData.port.trim()) newErrors.port = 'PORT is required';
-        if (!formData.vlan.trim()) newErrors.vlan = 'VLAN is required';
       }
 
       if (!formData.visit_by.trim()) newErrors.visit_by = 'Visit By is required';
@@ -3105,14 +3104,14 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
 
                               <View style={styles.inputGroup}>
                                 <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
-                                  VLAN<Text style={styles.required}>*</Text>
+                                  VLAN
                                 </Text>
                                 <View>
                                   <Pressable
                                     onPress={() => setIsVlanMiniModalVisible(true)}
                                     style={[styles.searchContainer, {
                                       backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
-                                      borderColor: errors.vlan ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+                                      borderColor: isDarkMode ? '#374151' : '#d1d5db',
                                       paddingVertical: 12
                                     }]}
                                   >
@@ -3128,14 +3127,6 @@ const JobOrderDoneFormTechModal: React.FC<JobOrderDoneFormTechModalProps> = ({
                                     <ChevronDown size={18} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
                                   </Pressable>
                                 </View>
-                                {errors.vlan && (
-                                  <View ref={registerAnchor('vlan')} collapsable={false} style={styles.errorContainer}>
-                                    <View style={[styles.errorIcon, { backgroundColor: colorPalette?.primary || '#7c3aed' }]}>
-                                      <Text style={styles.errorIconText}>!</Text>
-                                    </View>
-                                    <Text style={[styles.errorText, { color: colorPalette?.primary || '#7c3aed' }]}>{errors.vlan}</Text>
-                                  </View>
-                                )}
                               </View>
                             </View>
                           )}
