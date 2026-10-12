@@ -913,6 +913,16 @@ class XenditPaymentController extends Controller
                 ]);
             }
 
+            // The client replaces its amount with this quote, and nothing under ₱1 can be paid —
+            // quoting it would leave the customer with a ₱0 amount and no way to proceed.
+            if (round((float) $quote['new_balance'], 2) < 1) {
+                return response()->json([
+                    'status' => 'success',
+                    'eligible' => false,
+                    'reason' => 'nothing left to pay on the initial bill'
+                ]);
+            }
+
             return response()->json([
                 'status' => 'success',
                 'eligible' => true,

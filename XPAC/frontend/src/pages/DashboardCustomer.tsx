@@ -968,12 +968,15 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             {/* PAYMENT VERIFY MODAL */}
             {
                 showPaymentVerifyModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-                            <div className="p-6 border-b border-gray-200">
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[110] p-4">
+                        {/* Capped to the viewport: the prepaid options make this taller than a laptop
+                            screen, so the body scrolls while the title and buttons stay in view.
+                            z-[110] on every modal here: the customer header is sticky at z-[100]. */}
+                        <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-full flex flex-col">
+                            <div className="p-6 border-b border-gray-200 shrink-0">
                                 <h3 className="text-xl font-bold text-gray-900 text-center">Confirm Payment</h3>
                             </div>
-                            <div className="p-6">
+                            <div className="px-6 pt-6 pb-2 overflow-y-auto min-h-0">
                                 <div className="bg-gray-100 p-4 rounded mb-4">
                                     <div className="flex justify-between mb-2 text-gray-700">
                                         <span>Account:</span>
@@ -1283,7 +1286,9 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                             : []}
                                     />
                                 )}
+                            </div>
 
+                            <div className="px-6 py-4 border-t border-gray-200 shrink-0">
                                 <div className="flex gap-3">
                                     <button
                                         onClick={handleCloseVerifyModal}
@@ -1310,7 +1315,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             {/* PAYMENT LINK MODAL */}
             {
                 showPaymentLinkModal && paymentLinkData && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[110] p-4">
                         <div className="bg-white rounded-lg shadow-xl max-w-md w-full text-center">
                             <div className="p-6 border-b border-gray-200">
                                 <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
@@ -1345,7 +1350,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             {/* PENDING PAYMENT MODAL */}
             {
                 showPendingPaymentModal && pendingPayment && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[110] p-4">
                         <div className="bg-white rounded-lg shadow-xl max-w-md w-full text-center">
                             <div className="p-6 border-b border-gray-200">
                                 <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 mb-4">
@@ -1398,7 +1403,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
             {/* PAYMENT SUCCESS MODAL */}
             {
                 showPaymentSuccessModal && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[110] p-4">
                         <div className="bg-white rounded-lg shadow-xl max-w-md w-full text-center">
                             <div className="p-6 border-b border-gray-200">
                                 <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">

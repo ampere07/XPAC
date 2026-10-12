@@ -12,6 +12,10 @@ import apiClient from '../config/api';
 import { exportToCSV } from '../utils/exportUtils';
 import { userService } from '../services/userService';
 import { getUserDisplayName, resolveUserDisplayName } from '../utils/userDisplay';
+import {
+  TechnicianFilterModal, TechnicianFilterSidebar, TechnicianFilterValue,
+  buildTechnicianOptions, matchesTechnicianFilter
+} from '../components/TechnicianFilter';
 import { User } from '../types/api';
 import { concernsMatch } from '../utils/concernAliases';
 import { useViewOptions } from '../hooks/useViewOptions';
@@ -368,6 +372,9 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
   const [itemsPerPage, setItemsPerPage] = useState<number>(25);
   const [hasNewData, setHasNewData] = useState<boolean>(false);
   const [isRefreshingManual, setIsRefreshingManual] = useState<boolean>(false);
+  // Technician filter (sidebar button + modal): one assigned tech, optionally a date range.
+  const [technicianFilter, setTechnicianFilter] = useState<TechnicianFilterValue | null>(null);
+  const [isTechnicianModalOpen, setIsTechnicianModalOpen] = useState<boolean>(false);
 
 
   useEffect(() => {
@@ -385,7 +392,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedLocation, searchQuery, activeFilters, sortColumn, sortDirection, itemsPerPage]);
+  }, [selectedLocation, searchQuery, activeFilters, sortColumn, sortDirection, itemsPerPage, technicianFilter]);
 
   // Scroll to top on page change
   useEffect(() => {
@@ -773,6 +780,16 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     }
   }, [userDirectory]);
 
+  // Technician filter options: the technicians assigned on a service order in this user's
+  // organisation. Built from the unfiltered list so the options do not vanish as other filters
+  // narrow the table.
+  const technicianOptions = useMemo(() => buildTechnicianOptions(
+    users,
+    serviceOrders
+      .filter(so => (currentUserOrgId ? so.organization_id === currentUserOrgId : !so.organization_id))
+      .map(so => so.assignedEmail)
+  ), [serviceOrders, currentUserOrgId, users]);
+
   // 1. Initial search and funnel filtering (Global filtered set for sidebar counts)
   const globalFilteredServiceOrders = useMemo(() => {
     const isTechnician = roleId === 2 || userRole.toLowerCase() === 'technician';
@@ -789,6 +806,11 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         if (serviceOrder.organization_id) {
           return false;
         }
+      }
+
+      // Technician filter (sidebar button + modal); its dates are on the timestamp.
+      if (!matchesTechnicianFilter(technicianFilter, serviceOrder.assignedEmail, serviceOrder.timestamp)) {
+        return false;
       }
 
       // 1. Technician 7-Day Filter for 'Resolved' tickets
@@ -923,7 +945,7 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
     });
 
     return filtered;
-  }, [serviceOrders, searchQuery, activeFilters, userRole, roleId, getVal, currentUserOrgId]);
+  }, [serviceOrders, searchQuery, activeFilters, userRole, roleId, getVal, currentUserOrgId, technicianFilter]);
 
   const groupableColumns: Array<GroupableColumn<ServiceOrder>> = useMemo(
     () => [
@@ -1704,6 +1726,18 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
               </h2>
             </div>
           </div>
+
+          {/* Technician filter: one assigned tech, optionally a date range, with their total. */}
+          <TechnicianFilterSidebar
+            value={technicianFilter}
+            count={globalFilteredServiceOrders.length}
+            recordLabel="Service Orders"
+            onOpen={() => setIsTechnicianModalOpen(true)}
+            onClear={() => setTechnicianFilter(null)}
+            isDarkMode={isDarkMode}
+            primaryColor={colorPalette?.primary || '#7c3aed'}
+          />
+
           <div className="flex-1 overflow-y-auto">
             {/* All Level */}
             <button
@@ -2650,6 +2684,22 @@ const ServiceOrderPage: React.FC<ServiceOrderPageProps> = ({ autoOpenServiceOrde
         }}
         currentFilters={activeFilters}
       />
+
+      {isTechnicianModalOpen && (
+        <TechnicianFilterModal
+          initial={technicianFilter}
+          technicians={technicianOptions}
+          isLoading={isLoadingUsers}
+          dateHint="By service order timestamp."
+          onApply={(value) => {
+            setTechnicianFilter(value);
+            setIsTechnicianModalOpen(false);
+          }}
+          onClose={() => setIsTechnicianModalOpen(false)}
+          isDarkMode={isDarkMode}
+          primaryColor={colorPalette?.primary || '#7c3aed'}
+        />
+      )}
 
       {/* ── Download options ─────────────────────────────────────────────── */}
       {isDownloadModalOpen && (

@@ -1418,6 +1418,11 @@ class EnhancedBillingGenerationServiceWithNotifications
      * That is the only window in which the initial bill may be re-priced for a different plan:
      * no service period has started (prepaid_expires_at is NULL, it only gets set on payment) and
      * no money has been taken. Once either is true the bill is history and must not be rewritten.
+     *
+     * "No money taken" covers both payment paths: cashier payments land in `transactions`, online
+     * payments only in `pending_payments`. Checking transactions alone made an account switched
+     * from postpaid by an admin (prepaid_expires_at still NULL) that had only ever paid online
+     * look like a new customer — its last postpaid invoice was quoted as a "first bill" for ₱0.
      */
     public function isUnpaidPrepaidOnboarding(BillingAccount $account): bool
     {
@@ -1429,9 +1434,18 @@ class EnhancedBillingGenerationServiceWithNotifications
             return false;
         }
 
-        return !DB::table('transactions')
+        $hasCashierPayment = DB::table('transactions')
             ->where('account_no', $account->account_no)
             ->where('status', 'Done')
+            ->exists();
+
+        if ($hasCashierPayment) {
+            return false;
+        }
+
+        return !DB::table('pending_payments')
+            ->where('account_no', $account->account_no)
+            ->where('status', 'PAID')
             ->exists();
     }
 

@@ -331,6 +331,30 @@ class ServiceOrderApiController extends Controller
 
             // Rate limit and cooldown logic has been removed as per request to allow unlimited ticket submissions.
 
+            // One open service order per customer, for callers that ask for it: the staff SO
+            // Request form and the customer's Support page send reject_if_open.
+            // `open_service_order` names the blocking ticket so a client can word its own notice.
+            if ($request->boolean('reject_if_open')) {
+                $open = $this->openServiceOrderFor($validated['account_no']);
+
+                if ($open) {
+                    $state = trim(implode(' / ', array_filter([trim((string) $open->support_status), trim((string) $open->visit_status)])));
+
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Account {$validated['account_no']} already has an open service order"
+                            . ($open->ticket_id ? " (Ticket {$open->ticket_id}" . ($state !== '' ? ", {$state}" : '') . ')' : '')
+                            . '. It has to be Done, Resolved or Failed before another one can be created.',
+                        'open_service_order' => [
+                            'id' => $open->id,
+                            'ticket_id' => $open->ticket_id,
+                            'support_status' => $open->support_status,
+                            'visit_status' => $open->visit_status,
+                        ],
+                    ], 422);
+                }
+            }
+
             $ticketId = $this->generateTicketId();
             Log::info('Generated ticket_id: ' . $ticketId);
 
@@ -462,6 +486,33 @@ class ServiceOrderApiController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * The account's newest service order that is still open, or null.
+     *
+     * Open by the rule the Service Order sidebar badge counts by (NavBadgeCountController): the
+     * support status is not Resolved / Failed / Cancelled, and a For Visit order's visit is not
+     * Done / Failed / Cancelled. NULL and blank count as open, and statuses compare
+     * case-insensitively, since they are free text written by several screens.
+     */
+    private function openServiceOrderFor(string $accountNo): ?object
+    {
+        return DB::table('service_orders')
+            ->where('account_no', $accountNo)
+            ->where(function ($q) {
+                $q->whereNull('support_status')
+                    ->orWhereRaw("TRIM(support_status) = ''")
+                    ->orWhereNotIn(DB::raw('LOWER(TRIM(support_status))'), ['resolved', 'failed', 'cancelled']);
+            })
+            ->where(function ($q) {
+                $q->whereRaw("LOWER(TRIM(COALESCE(support_status, ''))) != 'for visit'")
+                    ->orWhereNull('visit_status')
+                    ->orWhereRaw("TRIM(visit_status) = ''")
+                    ->orWhereNotIn(DB::raw('LOWER(TRIM(visit_status))'), ['done', 'completed', 'complete', 'failed', 'cancelled', 'canceled']);
+            })
+            ->orderByDesc('id')
+            ->first(['id', 'ticket_id', 'support_status', 'visit_status']);
     }
 
     private function generateTicketId(): string

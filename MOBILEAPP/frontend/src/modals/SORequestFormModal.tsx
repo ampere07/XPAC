@@ -237,6 +237,9 @@ const SORequestFormModal: React.FC<SORequestFormModalProps> = ({
         visit_status: '',
         created_by_user: getUserEmail(),
         status: 'unused',
+        // The server refuses the save while this customer still has a service order that is not
+        // Done, Resolved or Failed, and its message names that ticket.
+        reject_if_open: true,
         ...(currentUser?.organization_id ? { organization_id: currentUser.organization_id } : {})
       };
 
