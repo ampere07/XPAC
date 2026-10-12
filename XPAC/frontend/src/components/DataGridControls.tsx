@@ -338,6 +338,7 @@ export function GridFilterBar<Row>({
       {filters.map((filter) => (
         <select
           key={filter.key}
+          aria-label={`Filter by ${filter.label}`}
           value={filterValues[filter.key] ?? ''}
           onChange={(event) => onFilterChange(filter.key, event.target.value)}
           title={filter.label}

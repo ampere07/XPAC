@@ -1896,15 +1896,17 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
       return indexA - indexB;
     });
 
+  const handleLocationSelect = (locationId: string) => {
+    setSelectedLocation(locationId);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
   return (
     <div className={`h-full flex flex-col md:flex-row overflow-hidden relative ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex flex-col relative ${
@@ -1943,7 +1945,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedLocation('all')}
+            onClick={() => handleLocationSelect('all')}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedLocation === 'all'
                 ? ''
@@ -2023,7 +2025,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
               <div key={status.id}>
                 <button
                   aria-label={`Show ${status.name}`}
-                  onClick={() => setSelectedLocation(status.id)}
+                  onClick={() => handleLocationSelect(status.id)}
                   className={`w-full flex items-center justify-between pl-8 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                     }`}
                   style={isSelected ? {
@@ -2074,7 +2076,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                       <div key={session.id}>
                         <button
                           aria-label={`Show ${session.name}`}
-                          onClick={() => setSelectedLocation(session.id)}
+                          onClick={() => handleLocationSelect(session.id)}
                           className={`w-full flex items-center justify-between pl-12 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'}`}
                           style={isSessionSelected ? {
                             backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -2118,7 +2120,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                             <div key={billing.id}>
                               <button
                                 aria-label={`Show ${billing.name}`}
-                                onClick={() => setSelectedLocation(billing.id)}
+                                onClick={() => handleLocationSelect(billing.id)}
                                 className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'}`}
                                 style={isBillingSelected ? {
                                   backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -2161,7 +2163,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                                   <button
                                     aria-label={`Show ${brgy.name}`}
                                     key={brgy.id}
-                                    onClick={() => setSelectedLocation(brgy.id)}
+                                    onClick={() => handleLocationSelect(brgy.id)}
                                     className={`w-full flex items-center justify-between pl-20 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-600 hover:bg-gray-800' : 'text-gray-500 hover:bg-gray-100'}`}
                                     style={isBrgySelected ? {
                                       backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)',
@@ -2190,7 +2192,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                       <div key={billing.id}>
                         <button
                           aria-label={`Show ${billing.name}`}
-                          onClick={() => setSelectedLocation(billing.id)}
+                          onClick={() => handleLocationSelect(billing.id)}
                           className={`w-full flex items-center justify-between pl-14 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100'
                             }`}
                           style={isBillingSelected ? {
@@ -2234,7 +2236,7 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                             <button
                               aria-label={`Show ${brgy.name}`}
                               key={brgy.id}
-                              onClick={() => setSelectedLocation(brgy.id)}
+                              onClick={() => handleLocationSelect(brgy.id)}
                               className={`w-full flex items-center justify-between pl-20 pr-4 py-1 text-[10px] transition-colors ${isDarkMode ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-100'
                                 }`}
                               style={isBrgySelected ? {
@@ -2789,6 +2791,14 @@ const Customer: React.FC<CustomerProps> = ({ initialSearchQuery, autoOpenAccount
                               paginatedRecords.map((record) => (
                                 <tr
                                   key={record.id}
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Open ${record.applicationId}`}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                      handleRecordClick(record);
+                                    }
+                                  }}
                                   className={`border-b cursor-pointer transition-colors ${isDarkMode
                                     ? 'border-gray-800 hover:bg-gray-900'
                                     : 'border-gray-200 hover:bg-gray-50'

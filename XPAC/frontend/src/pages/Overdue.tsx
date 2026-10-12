@@ -739,11 +739,6 @@ const OverduePage: React.FC = () => {
       }`}>
       {/* Sidebar Container */}
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -809,7 +804,12 @@ const OverduePage: React.FC = () => {
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedDate('All')}
+            onClick={() => {
+              setSelectedDate('All');
+              if (isMobile) {
+                setMobileViewMode('list');
+              }
+            }}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedDate === 'All'
                 ? ''
@@ -839,10 +839,7 @@ const OverduePage: React.FC = () => {
           {/* Overdue Month Dropdown */}
           <div className={`p-0 ${isDarkMode ? 'border-b border-gray-800' : 'border-b border-gray-100'}`}>
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsDateDropdownOpen(!isDateDropdownOpen);
-              }}
+              onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
               className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                 } ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}
             >
@@ -868,7 +865,12 @@ const OverduePage: React.FC = () => {
                   <button
                     aria-label={`Show ${item.date}`}
                     key={index}
-                    onClick={() => setSelectedDate(item.date)}
+                    onClick={() => {
+                      setSelectedDate(item.date);
+                      if (isMobile) {
+                        setMobileViewMode('list');
+                      }
+                    }}
                     className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedDate === item.date
                         ? ''
@@ -1148,6 +1150,14 @@ const OverduePage: React.FC = () => {
                               onDrop={(e) => handleDrop(e, column.key)}
                               onDragEnd={handleDragEnd}
                               onClick={() => handleSort(column.key)}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Sort by ${column.label}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleSort(column.key);
+                                }
+                              }}
                               className={`group relative text-left py-3 px-3 font-normal whitespace-nowrap cursor-pointer select-none transition-colors ${isDarkMode ? 'text-gray-400 bg-gray-800 hover:bg-gray-700' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
                                 } ${index < filteredColumns.length - 1 ? (isDarkMode ? 'border-r border-gray-700' : 'border-r border-gray-200') : ''
                                 } ${dragOverColumn === column.key ? (isDarkMode ? 'border-l-2 border-orange-500' : 'border-l-2 border-orange-600') : ''

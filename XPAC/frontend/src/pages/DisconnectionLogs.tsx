@@ -910,6 +910,10 @@ const DisconnectionLogs: React.FC = () => {
                         {displayedColumns.map((column, index) => (
                           <th
                             key={column.key}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Sort by ${column.label}`}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { handleSort(column.key); } }}
                             draggable
                             onDragStart={(e) => handleDragStart(e, column.key)}
                             onDragOver={(e) => handleDragOver(e, column.key)}
@@ -947,6 +951,10 @@ const DisconnectionLogs: React.FC = () => {
                         paginatedRecords.map((record) => (
                           <tr
                             key={record.id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Open disconnection ${record.id}`}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleRowClick(record); } }}
                             className={`border-b cursor-pointer transition-colors ${isDarkMode
                               ? 'border-gray-800 hover:bg-gray-900'
                               : 'border-gray-200 hover:bg-gray-50'

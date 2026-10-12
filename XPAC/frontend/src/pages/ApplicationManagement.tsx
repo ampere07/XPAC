@@ -1313,11 +1313,6 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       }`}>
       {/* Sidebar - responsive toggling */}
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
           } md:flex border-r flex-shrink-0 flex-col relative z-40 ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
           }`} style={{ width: isMobile ? '100%' : `${sidebarWidth}px` }}>
@@ -1353,7 +1348,7 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
         </div>
         <div className="flex-1 overflow-y-auto">
           {/* Date Range Filter Section */}
-          <div className={`px-4 py-3 border-b space-y-3 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`} onClick={(e) => e.stopPropagation()}>
+          <div className={`px-4 py-3 border-b space-y-3 ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
             <div className="flex items-center justify-between">
               <span className={`text-[10px] font-bold uppercase tracking-wider ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
                 Timestamp Range
@@ -2021,6 +2016,14 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
                           paginatedApplications.map((application) => (
                             <tr
                               key={application.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Open application ${application.customer_name || application.id}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                  handleRowClick(application);
+                                }
+                              }}
                               className={`border-b cursor-pointer transition-colors ${isDarkMode ? 'border-gray-800 hover:bg-gray-900' : 'border-gray-200 hover:bg-gray-50'
                                 } ${selectedApplication?.id === application.id ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''}`}
                               onClick={() => handleRowClick(application)}
@@ -2209,12 +2212,10 @@ const ApplicationManagement: React.FC<ApplicationManagementProps> = ({ onNavigat
       {isDownloadModalOpen && (
         <div
           className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
-          onClick={() => setIsDownloadModalOpen(false)}
         >
+          <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={() => setIsDownloadModalOpen(false)} />
           <div
             className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
-            // The backdrop closes the chooser; a click inside it must not.
-            onClick={(e) => e.stopPropagation()}
           >
             <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>

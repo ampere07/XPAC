@@ -315,7 +315,11 @@ const WorkCategoryList: React.FC = () => {
   const renderListItem = (wc: WorkCategory) => {
     return (
       <div 
-        key={wc.id} 
+        key={wc.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open work category ${wc.category}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(wc); } }}
         onClick={() => handleEdit(wc)}
         className={`group px-4 py-3 flex items-center justify-between cursor-pointer transition-all duration-200 border-b border-gray-800/10 dark:divide-white/5 ${isDarkMode 
           ? 'hover:bg-white/[0.02]' 

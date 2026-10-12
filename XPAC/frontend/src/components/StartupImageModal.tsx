@@ -26,12 +26,12 @@ const StartupImageModal: React.FC<StartupImageModalProps> = ({ isOpen, onClose }
   return (
     <div
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 p-4"
-      onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Announcement"
     >
-      <div className="relative" onClick={(e) => e.stopPropagation()}>
+      <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={onClose} />
+      <div className="relative">
         <button
           type="button"
           onClick={onClose}

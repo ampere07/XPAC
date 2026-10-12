@@ -384,6 +384,10 @@ const PlanList: React.FC<PlanListProps> = ({ onNavigate, initialSearchQuery = ''
     return (
       <div 
         key={plan.id} 
+        role="button"
+        tabIndex={0}
+        aria-label={`Open plan ${plan.name}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { setSelectedPlan(plan); } }}
         onClick={() => setSelectedPlan(plan)}
         className={`border-b group cursor-pointer transition-colors ${
           isSelected 

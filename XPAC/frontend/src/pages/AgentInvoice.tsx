@@ -107,7 +107,7 @@ const StatusSelect: React.FC<{
     const options = STATUS_OPTIONS.includes(status) ? STATUS_OPTIONS : [...STATUS_OPTIONS, status];
 
     return (
-        <div className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <div className="inline-flex items-center gap-1.5" data-no-row-click>
             <select
                 value={status}
                 disabled={saving}
@@ -609,7 +609,10 @@ const AgentInvoice: React.FC = () => {
                                         <button
                                             aria-label={`Open ${cell(record, 'invoice_number')}`}
                                             key={record.id}
-                                            onClick={() => handleOpenDetails(record)}
+                                            onClick={(e) => {
+                                                if ((e.target as HTMLElement).closest('[data-no-row-click]')) return;
+                                                handleOpenDetails(record);
+                                            }}
                                             className={`w-full rounded-lg border p-4 text-left transition-colors ${
                                                 isDarkMode
                                                     ? 'bg-gray-900 border-gray-800 text-gray-200 hover:bg-gray-800/60'
@@ -675,7 +678,13 @@ const AgentInvoice: React.FC = () => {
                                             week; the count and total describe what is in the
                                             group on this page, not across every page. */}
                                         <tr
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${group.label}`}
                                             onClick={() => togglePeriod(group.key)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && e.target === e.currentTarget) togglePeriod(group.key);
+                                            }}
                                             className={`border-b cursor-pointer select-none transition-colors ${
                                                 isDarkMode
                                                     ? 'bg-gray-800/70 hover:bg-gray-800 border-gray-700 text-gray-100'
@@ -704,7 +713,16 @@ const AgentInvoice: React.FC = () => {
                                         {isOpen && group.records.map(record => (
                                             <tr
                                                 key={record.id}
-                                                onClick={() => handleOpenDetails(record)}
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-label={`Open invoice ${record.invoice_number}`}
+                                                onClick={(e) => {
+                                                    if ((e.target as HTMLElement).closest('[data-no-row-click]')) return;
+                                                    handleOpenDetails(record);
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && e.target === e.currentTarget) handleOpenDetails(record);
+                                                }}
                                                 className={`border-b cursor-pointer transition-colors ${isDarkMode ? 'border-gray-800 hover:bg-gray-800/60 text-gray-200' : 'border-gray-100 hover:bg-gray-50 text-gray-700'} ${
                                                     selected?.id === record.id ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : ''
                                                 }`}

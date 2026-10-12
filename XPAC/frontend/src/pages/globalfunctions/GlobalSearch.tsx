@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { ColorPalette } from '../../services/settingsColorPaletteService';
 
@@ -23,7 +23,6 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({
   placeholder = "Search records..." 
 }) => {
   const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   return (
     <div className="relative flex-1 group">
@@ -39,22 +38,23 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({
             ? `0 0 0 1px ${colorPalette?.primary || '#7c3aed'}` 
             : 'none'
         }}
-        onClick={() => searchInputRef.current?.focus()}
       >
         <Search className={`absolute left-3 h-4 w-4 pointer-events-none transition-colors ${
           isSearchFocused ? (isDarkMode ? 'text-white' : 'text-gray-900') : (isDarkMode ? 'text-gray-400' : 'text-gray-500')
         }`} />
         
         {searchQuery && !isSearchFocused ? (
-          <div 
-            className="ml-9 flex items-center cursor-text pr-10 w-full h-full"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsSearchFocused(true);
-            }}
+          <div
+            className="relative ml-9 flex items-center cursor-text pr-10 w-full h-full"
           >
-            <div 
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border leading-none"
+            <button
+              type="button"
+              aria-label={`Edit search ${searchQuery}`}
+              onClick={() => setIsSearchFocused(true)}
+              className="absolute inset-0 h-full w-full cursor-text"
+            />
+            <div
+              className="relative pointer-events-none flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border leading-none"
               style={{
                 backgroundColor: hexToRgba(colorPalette?.primary || '#ef4444', 0.08),
                 borderColor: hexToRgba(colorPalette?.primary || '#ef4444', 0.25),
@@ -64,11 +64,12 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({
               <span>{searchQuery}</span>
               <div 
                 role="button"
+                aria-label="Clear search"
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   setSearchQuery('');
                 }}
-                className="hover:scale-110 transition-transform p-0.5"
+                className="pointer-events-auto hover:scale-110 transition-transform p-0.5"
               >
                 <X className="h-2.5 w-2.5" />
               </div>
@@ -76,8 +77,8 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({
           </div>
         ) : (
           <input
-            ref={searchInputRef}
             type="text"
+            aria-label={placeholder}
             autoFocus={isSearchFocused}
             placeholder={isSearchFocused ? "" : placeholder}
             value={searchQuery}

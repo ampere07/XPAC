@@ -150,7 +150,7 @@ const ConcernConfig: React.FC = () => {
     }
   };
 
-  const handleEdit = (item: Concern, event: React.MouseEvent) => {
+  const handleEdit = (item: Concern, event: React.SyntheticEvent) => {
     if (!actions.canEdit) return;
     event.stopPropagation();
     setEditingItem(item);
@@ -206,7 +206,11 @@ const ConcernConfig: React.FC = () => {
   const renderListItem = (item: Concern) => {
     return (
       <div 
-        key={item.id} 
+        key={item.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open concern ${item.concern_name}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(item, e); } }}
         onClick={(e) => handleEdit(item, e)}
         className={`group px-4 py-3 flex items-center justify-between cursor-pointer transition-all duration-200 border-b border-gray-800/10 dark:divide-white/5 ${isDarkMode 
           ? 'hover:bg-white/[0.02]' 

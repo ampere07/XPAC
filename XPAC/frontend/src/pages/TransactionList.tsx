@@ -640,6 +640,13 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     });
   };
 
+  const selectLocation = (locationId: string) => {
+    setSelectedLocation(locationId);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
   const formatDate = (dateStr?: string, includeTime: boolean = false): string => {
     if (!dateStr) return 'No date';
     try {
@@ -1486,11 +1493,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
     <div className={`h-full flex flex-col md:flex-row overflow-hidden relative ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -1553,10 +1555,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
               </div>
               {isMobile && (
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMobileViewMode('list');
-                  }}
+                  onClick={() => setMobileViewMode('list')}
                   className="w-full mt-2 text-white py-1.5 rounded text-xs transition-colors font-medium"
                   style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}
                 >
@@ -1641,7 +1640,6 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
             <select
               aria-label="Filter by payment method"
               value={paymentMethodFilter}
-              onClick={(e) => e.stopPropagation()}
               onChange={(e) => setPaymentMethodFilter(e.target.value)}
               className={`w-full px-2 py-1.5 rounded text-xs focus:outline-none border ${isDarkMode
                 ? 'bg-gray-800 border-gray-700 text-white'
@@ -1658,7 +1656,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedLocation('all')}
+            onClick={() => selectLocation('all')}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedLocation === 'all'
                 ? ''
@@ -1690,7 +1688,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
             <div key={region.id}>
               <button
                 aria-label={`Show ${region.name}`}
-                onClick={() => setSelectedLocation(region.id)}
+                onClick={() => selectLocation(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
                     ? ''
@@ -1736,7 +1734,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 <div key={city.id}>
                   <button
                     aria-label={`Show ${city.name}`}
-                    onClick={() => setSelectedLocation(city.id)}
+                    onClick={() => selectLocation(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
                         ? ''
@@ -1771,7 +1769,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                     <button
                       aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
-                      onClick={() => setSelectedLocation(barangay.id)}
+                      onClick={() => selectLocation(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         } ${selectedLocation === barangay.id
                           ? ''
@@ -2165,6 +2163,14 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                             onDrop={(e) => handleDrop(e, column.key)}
                             onDragEnd={handleDragEnd}
                             onClick={() => handleSort(column.key)}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Sort by ${column.label}`}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleSort(column.key);
+                              }
+                            }}
                             className={`group relative text-left py-3 px-3 font-normal whitespace-nowrap cursor-pointer select-none transition-colors ${isDarkMode ? 'text-gray-400 bg-gray-800 hover:bg-gray-700' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'} ${index < filteredColumns.length - 1 ? (isDarkMode ? 'border-r border-gray-700' : 'border-r border-gray-200') : ''} ${dragOverColumn === column.key ? (isDarkMode ? 'border-l-2 border-orange-500' : 'border-l-2 border-orange-600') : ''} ${draggedColumn === column.key ? 'opacity-50' : ''}`}
                             style={{
                               width: columnWidths[column.key] ? `${columnWidths[column.key]}px` : undefined,
@@ -2195,12 +2201,25 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                           return (
                             <tr
                               key={transaction.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Open transaction ${transaction.id}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                  handleRowClick(transaction);
+                                }
+                              }}
                               className={`border-b transition-colors ${canSelect ? 'cursor-pointer' : isBatchApproveMode ? 'cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'} ${!isSelected && selectedTransaction?.id === transaction.id ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : !isSelected && isBatchApproveMode && !isPending ? (isDarkMode ? 'bg-gray-800 opacity-50' : 'bg-gray-200 opacity-50') : ''}`}
                               style={isSelected ? { backgroundColor: colorPalette?.primary ? `${colorPalette.primary}33` : 'rgba(249, 115, 22, 0.2)' } : {}}
-                              onClick={() => handleRowClick(transaction)}
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest('[data-no-row-click]')) {
+                                  return;
+                                }
+                                handleRowClick(transaction);
+                              }}
                             >
                               {isBatchApproveMode && (
-                                <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                                <td className="px-4 py-3" data-no-row-click>
                                   <input
                                     aria-label={`Select transaction ${transaction.id}`}
                                     type="checkbox"
@@ -2415,10 +2434,10 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
         </div>
       )}
       {isCollectorModalOpen && canUseCollectorFilter && (
-        <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black bg-opacity-50 p-4" onClick={() => setIsCollectorModalOpen(false)}>
+        <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={() => setIsCollectorModalOpen(false)} />
           <div
-            className={`w-full max-w-md rounded-lg shadow-xl ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}
-            onClick={(e) => e.stopPropagation()}
+            className={`relative w-full max-w-md rounded-lg shadow-xl ${isDarkMode ? 'bg-gray-900 text-white' : 'bg-white text-gray-900'}`}
           >
             <div className={`flex items-center justify-between px-5 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <h3 className="text-lg font-semibold">Collector Filter</h3>

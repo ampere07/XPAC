@@ -325,8 +325,9 @@ const CustomerImages: React.FC = () => {
 
       {/* Full-screen viewer */}
       {viewing && createPortal(
-        <div className="fixed inset-0 z-[9999] bg-black/95 flex flex-col" onClick={() => setViewerIndex(null)}>
-          <div className="flex items-start justify-between gap-3 p-4 text-white" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[9999] bg-black/95 flex flex-col">
+          <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={() => setViewerIndex(null)} />
+          <div className="relative flex items-start justify-between gap-3 p-4 text-white">
             <div className="min-w-0 text-sm">
               <div className="font-semibold">{viewing.source} — {viewing.field_label}</div>
               <div className="text-gray-300 text-xs mt-0.5">
@@ -356,7 +357,7 @@ const CustomerImages: React.FC = () => {
                 <ChevronLeft size={28} />
               </button>
             )}
-            <div onClick={e => e.stopPropagation()} className="max-w-full max-h-full flex items-center justify-center">
+            <div className="max-w-full max-h-full flex items-center justify-center">
               <FallbackImage
                 key={viewing.id}
                 sources={[viewing.full_url, viewing.fallback_url, viewing.thumbnail_url]}

@@ -823,15 +823,17 @@ const Discounts: React.FC = () => {
     }
   };
 
+  const handleLocationSelect = (locationId: string) => {
+    setSelectedLocation(locationId);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
   return (
     <div className={`h-full flex flex-col md:flex-row overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -897,7 +899,7 @@ const Discounts: React.FC = () => {
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedLocation('all')}
+            onClick={() => handleLocationSelect('all')}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedLocation === 'all'
                 ? ''
@@ -929,7 +931,7 @@ const Discounts: React.FC = () => {
             <div key={region.id}>
               <button
                 aria-label={`Show ${region.name}`}
-                onClick={() => setSelectedLocation(region.id)}
+                onClick={() => handleLocationSelect(region.id)}
                 className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                   } ${selectedLocation === region.id
                     ? ''
@@ -975,7 +977,7 @@ const Discounts: React.FC = () => {
                 <div key={city.id}>
                   <button
                     aria-label={`Show ${city.name}`}
-                    onClick={() => setSelectedLocation(city.id)}
+                    onClick={() => handleLocationSelect(city.id)}
                     className={`w-full flex items-center justify-between pl-10 pr-4 py-2 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedLocation === city.id
                         ? ''
@@ -1015,7 +1017,7 @@ const Discounts: React.FC = () => {
                     <button
                       aria-label={`Show ${barangay.name}`}
                       key={barangay.id}
-                      onClick={() => setSelectedLocation(barangay.id)}
+                      onClick={() => handleLocationSelect(barangay.id)}
                       className={`w-full flex items-center justify-between pl-16 pr-4 py-1.5 text-xs transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                         } ${selectedLocation === barangay.id
                           ? ''
@@ -1404,6 +1406,14 @@ const Discounts: React.FC = () => {
                           sortedDiscountRecords.map((record) => (
                             <tr
                               key={record.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Open ${record.accountNo}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.target === e.currentTarget) {
+                                  handleRecordClick(record);
+                                }
+                              }}
                               className={`border-b cursor-pointer transition-colors ${isDarkMode
                                 ? 'border-gray-800 hover:bg-gray-900'
                                 : 'border-gray-200 hover:bg-gray-50'

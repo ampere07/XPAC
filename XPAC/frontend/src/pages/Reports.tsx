@@ -769,6 +769,9 @@ const Reports: React.FC = () => {
                                     {orderedVisibleColumns.map(col => (
                                         <th
                                             key={col.key}
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-label={`Sort by ${col.label}`}
                                             className={`sticky top-0 z-20 px-3 py-2.5 text-left font-semibold border-b border-r whitespace-nowrap select-none cursor-pointer ${thCls}`}
                                             onClick={() => handleSort(col.key)}
                                         >

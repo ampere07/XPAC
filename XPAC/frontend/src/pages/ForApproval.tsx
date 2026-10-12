@@ -438,16 +438,26 @@ const ForApproval: React.FC = () => {
       const transaction = record.category === 'transactions' ? record.transaction : null;
       const isPending = transaction ? isPendingTransaction(transaction) : false;
       const isChecked = batchMode && transaction ? selectedTransactionIds.includes(String(transaction.id)) : false;
+      const activateRow = () => (batchMode && transaction ? toggleTransactionSelection(transaction) : setSelected(record));
 
       return (
         <tr
           key={key}
-          onClick={() => (batchMode && transaction ? toggleTransactionSelection(transaction) : setSelected(record))}
+          role="button"
+          tabIndex={0}
+          aria-label={record.category === 'transactions' ? `Open transaction ${record.transaction.id}` : `Open job order ${record.jobOrder.id}`}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('[data-no-row-click]')) return;
+            activateRow();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && e.target === e.currentTarget) activateRow();
+          }}
           className={`border-b transition-colors ${batchMode && !isPending ? 'cursor-not-allowed' : 'cursor-pointer'} ${isDarkMode ? 'border-gray-800 hover:bg-gray-800' : 'border-gray-200 hover:bg-gray-50'} ${!isChecked && selectedKey === key ? (isDarkMode ? 'bg-gray-800' : 'bg-gray-100') : !isChecked && batchMode && !isPending ? (isDarkMode ? 'bg-gray-800 opacity-50' : 'bg-gray-200 opacity-50') : ''}`}
           style={isChecked ? { backgroundColor: `${primaryColor}33` } : undefined}
         >
           {batchMode && transaction && (
-            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+            <td className="px-4 py-3" data-no-row-click>
               <input
                 aria-label={`Select transaction ${transaction.id}`}
                 type="checkbox"

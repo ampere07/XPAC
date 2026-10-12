@@ -749,16 +749,18 @@ const DCNoticePage: React.FC = () => {
     exportToCSV('dc_notice_export', exportColumns, filteredRecords, renderCellValue);
   };
 
+  const handleDateSelect = (date: string) => {
+    setSelectedDate(date);
+    if (isMobile) {
+      setMobileViewMode('list');
+    }
+  };
+
   return (
     <div className={`h-full flex flex-col md:flex-row overflow-hidden ${isDarkMode ? 'bg-gray-950' : 'bg-gray-50'
       }`}>
       {/* Sidebar Container */}
       <div
-        onClick={() => {
-          if (isMobile) {
-            setMobileViewMode('list');
-          }
-        }}
         className={`${
           mobileViewMode === 'sidebar' ? 'flex w-full' : 'hidden'
         } md:flex border-r flex-shrink-0 flex flex-col relative ${isDarkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
@@ -824,7 +826,7 @@ const DCNoticePage: React.FC = () => {
 
           {/* All Level */}
           <button
-            onClick={() => setSelectedDate('All')}
+            onClick={() => handleDateSelect('All')}
             className={`w-full flex items-center justify-between px-4 py-3 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
               } ${selectedDate === 'All'
                 ? ''
@@ -883,7 +885,7 @@ const DCNoticePage: React.FC = () => {
                   <button
                     aria-label={`Show ${item.date}`}
                     key={index}
-                    onClick={() => setSelectedDate(item.date)}
+                    onClick={() => handleDateSelect(item.date)}
                     className={`w-full flex items-center justify-between px-6 py-2.5 text-sm transition-colors ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'
                       } ${selectedDate === item.date
                         ? ''
@@ -1156,6 +1158,14 @@ const DCNoticePage: React.FC = () => {
                           {filteredColumns.map((column, index) => (
                             <th
                               key={column.key}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Sort by ${column.label}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleSort(column.key);
+                                }
+                              }}
                               draggable
                               onDragStart={(e) => handleDragStart(e, column.key)}
                               onDragOver={(e) => handleDragOver(e, column.key)}

@@ -315,7 +315,11 @@ const UsageTypeList: React.FC = () => {
   const renderListItem = (usageType: UsageType) => {
     return (
       <div 
-        key={usageType.id} 
+        key={usageType.id}
+        role="button"
+        tabIndex={0}
+        aria-label={`Open usage type ${usageType.usage_name}`}
+        onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { handleEdit(usageType); } }}
         onClick={() => handleEdit(usageType)}
         className={`group px-4 py-3 flex items-center justify-between cursor-pointer transition-all duration-200 border-b border-gray-800/10 dark:divide-white/5 ${isDarkMode 
           ? 'hover:bg-white/[0.02]' 

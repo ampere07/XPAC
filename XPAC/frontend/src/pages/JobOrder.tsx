@@ -2847,6 +2847,10 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
                           paginatedJobOrders.map((jobOrder) => (
                             <tr
                               key={jobOrder.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Open job order ${getClientFullName(jobOrder)}`}
+                              onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { window.innerWidth < 768 ? handleMobileRowClick(jobOrder) : handleRowClick(jobOrder); } }}
                               className={`border-b cursor-pointer transition-colors ${isDarkMode
                                 ? `border-gray-800 hover:bg-gray-900 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-800' : ''}`
                                 : `border-gray-200 hover:bg-gray-100 ${selectedJobOrder?.id === jobOrder.id ? 'bg-gray-100' : ''}`
@@ -3040,12 +3044,10 @@ const JobOrderPage: React.FC<JobOrderPageProps> = ({ autoOpenJobOrderId }) => {
       {isDownloadModalOpen && (
         <div
           className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[100] p-4"
-          onClick={() => setIsDownloadModalOpen(false)}
         >
+          <button type="button" aria-label="Close dialog" tabIndex={-1} className="absolute inset-0 h-full w-full cursor-default" onClick={() => setIsDownloadModalOpen(false)} />
           <div
             className={`relative rounded-lg shadow-2xl w-full max-w-md ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}
-            // The backdrop closes the chooser; a click inside it must not.
-            onClick={(e) => e.stopPropagation()}
           >
             <div className={`flex items-center justify-between px-6 py-4 border-b ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <h2 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
