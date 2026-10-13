@@ -71,9 +71,9 @@ class TransactionController extends Controller
                 $query->where('organization_id', $organizationId);
             }
 
-            // An agent sees only the transactions they processed (AgentScope).
-            $isAgent = \App\Support\AgentScope::isAgent($authUser);
-            if ($isAgent) {
+            // An agent or technician sees only the transactions they processed (AgentScope).
+            $ownOnly = \App\Support\AgentScope::seesOwnTransactionsOnly($authUser);
+            if ($ownOnly) {
                 \App\Support\AgentScope::limitTransactions($query, $authUser);
             }
             $totalQuery = clone $query;
@@ -109,7 +109,7 @@ class TransactionController extends Controller
                 'success' => true,
                 'data' => $transactions,
                 'count' => $transactions->count(),
-                'total' => $isAgent
+                'total' => $ownOnly
                     ? $totalQuery->count()
                     : ($isSuperAdmin ? Transaction::count() : Transaction::where('organization_id', $organizationId)->count())
             ]);
@@ -201,8 +201,7 @@ class TransactionController extends Controller
 
             // An agent records a payment Under My Account (a customer they referred, with the
             // Agent Collected split) or Under XPACS (any customer, no split) — see
-            // denyAgentSplitOnForeignAccount(). Either way it is recorded as themselves, which is
-            // what scopes their Transaction List (AgentScope).
+            // denyAgentSplitOnForeignAccount(). Either way it is recorded as themselves (below).
             $authUserForScope = auth()->user();
             if (\App\Support\AgentScope::isAgent($authUserForScope)) {
                 if (empty($validated['account_no'])) {
@@ -216,10 +215,14 @@ class TransactionController extends Controller
                 if ($denied = $this->denyAgentSplitOnForeignAccount($authUserForScope, $validated['account_no'], $validated)) {
                     return $denied;
                 }
+            }
 
-                $agentEmail = \App\Support\AgentScope::email($authUserForScope);
-                $validated['processed_by_user'] = $agentEmail;
-                $validated['created_by_user'] = $agentEmail;
+            // Agents and technicians are recorded as their own email, whatever Processed By the
+            // request names — that is what scopes their Transaction List (AgentScope).
+            if (\App\Support\AgentScope::seesOwnTransactionsOnly($authUserForScope)) {
+                $ownEmail = \App\Support\AgentScope::email($authUserForScope);
+                $validated['processed_by_user'] = $ownEmail;
+                $validated['created_by_user'] = $ownEmail;
             }
 
             \Log::info('Transaction validation passed', [
@@ -368,8 +371,8 @@ class TransactionController extends Controller
                 ], 403);
             }
 
-            // An agent may only open transactions they processed (AgentScope).
-            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+            // An agent or technician may only open transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::seesOwnTransactionsOnly($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction not found'
@@ -423,8 +426,8 @@ class TransactionController extends Controller
                 ], 403);
             }
 
-            // An agent may only open transactions they processed (AgentScope).
-            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+            // An agent or technician may only open transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::seesOwnTransactionsOnly($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction not found'
@@ -1366,8 +1369,8 @@ class TransactionController extends Controller
                 ], 403);
             }
 
-            // An agent may only edit transactions they processed (AgentScope).
-            if (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
+            // An agent or technician may only edit transactions they processed (AgentScope).
+            if (\App\Support\AgentScope::seesOwnTransactionsOnly($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction)) {
                 DB::rollBack();
                 return response()->json([
                     'success' => false,

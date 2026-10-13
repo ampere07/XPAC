@@ -15,8 +15,6 @@ import { useBillingStore } from '../store/billingStore';
 import { createAgentReferralMatcher, getStoredAgentIdentity } from '../utils/agentReferral';
 import { stampTextTopRight } from '../utils/imageWatermark';
 import { getBillingRecordDetails } from '../services/billingService';
-import { technicianService } from '../services/technicianService';
-import { Technician } from '../types/api';
 
 interface ModalConfig {
   isOpen: boolean;
@@ -114,8 +112,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   const accountRecords = useBillingStore(s => s.billingRecords);
   const fetchAccountRecords = useBillingStore(s => s.fetchBillingRecords);
 
-  // A technician records who collected the payment by picking from the technicians table;
-  // everyone else is recorded as themselves, as before.
+  // Technicians get the account picker on the Transaction List "+", as agents do. Processed By is
+  // the signed-in user's email for everyone, read-only.
   const isTechnicianUser = (() => {
     try {
       const u = JSON.parse(localStorage.getItem('authData') || '{}');
@@ -144,7 +142,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // The split — Collected Payment + Agent Collected, Received Payment derived — is Under My
   // Account only. Under XPACS an agent enters Received Payment like everyone else.
   const isAgentSplit = isAgentUser && collectionScope === 'mine';
-  const [technicians, setTechnicians] = useState<Technician[]>([]);
 
   // The account picker is for the "+" on the Transaction List, which technicians and agents get.
   // Every other caller passes the account in, and keeps the fixed account field.
@@ -441,11 +438,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
 
     fetchImageSizeSettings();
 
-    // Refresh processedBy from authData when modal opens. A technician picks it from the
-    // technicians list instead, so theirs starts empty (or keeps an edited row's value).
-    if (isOpen && isTechnicianUser) {
-      setFormData(prev => ({ ...prev, processedBy: initialTransactionData?.processed_by_user || '' }));
-    } else if (isOpen) {
+    // Refresh processedBy from authData when modal opens.
+    if (isOpen) {
       const authData = localStorage.getItem('authData');
       if (authData) {
         try {
@@ -461,14 +455,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     }
   }, [isOpen]);
 
-  // Technicians table, for the technician's Processed By dropdown.
-  useEffect(() => {
-    if (!isOpen || !isTechnicianUser) return;
-    technicianService.getAllTechnicians()
-      .then(res => setTechnicians(Array.isArray(res?.data) ? res.data : []))
-      .catch(() => setTechnicians([]));
-  }, [isOpen, isTechnicianUser]);
-
   // No account given (opened from the Transaction List): load the accounts to pick from.
   // fetchBillingRecords() is a no-op when the list is already loaded.
   useEffect(() => {
@@ -478,9 +464,6 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
       setChosenCollectionScope('mine');
     }
   }, [isOpen, showAccountPicker, fetchAccountRecords]);
-
-  const technicianName = (t: Technician) =>
-    [t.first_name, t.middle_initial ? `${t.middle_initial}.` : '', t.last_name].filter(Boolean).join(' ').trim();
 
   // Account picker: the first 10 accounts until something is typed, then every account whose
   // number or name matches (capped, so a short query never renders thousands of rows).
@@ -1411,37 +1394,14 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
               }`}>
               Processed By<span className="text-red-500">*</span>
             </label>
-            {isTechnicianUser ? (
-              // Technicians pick who collected the payment from the technicians table.
-              <div className="relative">
-                <select
-                  aria-label="Processed By"
-                  value={formData.processedBy}
-                  onChange={(e) => handleInputChange('processedBy', e.target.value)}
-                  className={`w-full px-3 py-2 border rounded focus:outline-none focus:border-orange-500 appearance-none ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'
-                    } ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}
-                >
-                  <option value="">Select technician</option>
-                  {formData.processedBy && !technicians.some(t => technicianName(t) === formData.processedBy) && (
-                    // An edited row's stored value that is not a current technician name.
-                    <option value={formData.processedBy}>{formData.processedBy}</option>
-                  )}
-                  {technicians.map(t => (
-                    <option key={t.id} value={technicianName(t)}>{technicianName(t)}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-2.5 text-gray-400" size={20} />
-              </div>
-            ) : (
-              <input
-                aria-label="Processed By"
-                type="text"
-                value={formData.processedBy}
-                readOnly
-                className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
-                  }`}
-              />
-            )}
+            <input
+              aria-label="Processed By"
+              type="text"
+              value={formData.processedBy}
+              readOnly
+              className={`w-full px-3 py-2 border rounded focus:outline-none cursor-not-allowed opacity-75 ${errors.processedBy ? 'border-red-500' : isDarkMode ? 'border-gray-700 bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 text-gray-600'
+                }`}
+            />
             {errors.processedBy && <p className="text-red-500 text-xs mt-1">{errors.processedBy}</p>}
           </div>
 

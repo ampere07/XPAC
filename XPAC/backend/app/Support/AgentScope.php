@@ -13,6 +13,9 @@ namespace App\Support;
  *                 settled with. referred_by holds the agent's id (picker-made referrals) or older
  *                 free text (their name/email); both are covered.
  *
+ * Technicians share the transaction half: they record payments from the Transaction List as
+ * agents do, are recorded as their own email, and see only those (seesOwnTransactionsOnly()).
+ *
  * Enforced server-side so a direct API call sees exactly what the screen does.
  */
 class AgentScope
@@ -27,12 +30,28 @@ class AgentScope
             || strtolower(trim((string) ($user->role->role_name ?? ''))) === 'agent';
     }
 
+    public static function isTechnician($user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return (int) ($user->role_id ?? 0) === \App\Models\Role::TECHNICIAN
+            || strtolower(trim((string) ($user->role->role_name ?? ''))) === 'technician';
+    }
+
+    /** Agents and technicians: only the transactions recorded as them (limitTransactions()). */
+    public static function seesOwnTransactionsOnly($user): bool
+    {
+        return self::isAgent($user) || self::isTechnician($user);
+    }
+
     public static function email($user): string
     {
         return trim((string) ($user->email_address ?? $user->email ?? ''));
     }
 
-    /** Limit a transactions query to the agent's own rows. */
+    /** Limit a transactions query to the agent's (or technician's) own rows. */
     public static function limitTransactions($query, $user): void
     {
         $email = self::email($user);
@@ -47,7 +66,7 @@ class AgentScope
         });
     }
 
-    /** May this agent see this transaction? */
+    /** May this agent (or technician) see this transaction? */
     public static function ownsTransaction($user, $transaction): bool
     {
         $email = strtolower(self::email($user));

@@ -8,7 +8,6 @@ import { X, Calendar } from 'lucide-react-native';
 import apiClient from '../config/api';
 import { useBillingStore } from '../store/billingStore';
 import { transactionService } from '../services/transactionService';
-import { technicianService, Technician } from '../services/technicianService';
 import { paymentMethodService, PaymentMethod } from '../services/paymentMethodService';
 import { planService, Plan } from '../services/planService';
 import { settingsColorPaletteService } from '../services/settingsColorPaletteService';
@@ -25,7 +24,7 @@ import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
  *   - transaction types depend on prepaid/postpaid ('Top Up' vs 'Recurring Fee');
  *   - a prepaid Top Up buys a plan, preselected to the queued or current plan, and the
  *     amount is that plan's price;
- *   - Processed By is picked from the technicians table;
+ *   - Processed By is the signed-in user's email, read-only (the server records it regardless);
  *   - the payment is created Pending — approval stays with staff.
  */
 
@@ -51,7 +50,7 @@ interface PickedAccount {
   pendingPlanId: number | null;
 }
 
-type PickerKind = 'account' | 'type' | 'plan' | 'method' | 'technician' | null;
+type PickerKind = 'account' | 'type' | 'plan' | 'method' | null;
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -60,7 +59,6 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const accountRecords = useBillingStore(s => s.billingRecords);
   const fetchAccountRecords = useBillingStore(s => s.fetchBillingRecords);
 
-  const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
 
@@ -102,17 +100,14 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
       try {
         const u = JSON.parse(raw || '{}');
         setIsAgentUser(String(u.role_id) === '4' || String(u.role || '').toLowerCase().trim() === 'agent');
+        setProcessedBy(String(u.email_address || u.email || '').trim());
       } catch { setIsAgentUser(false); }
     }).catch(() => {});
     settingsColorPaletteService.getActive().then(p => p?.primary && setPrimary(p.primary)).catch(() => {});
     fetchAccountRecords();
-    technicianService.getAllTechnicians().then(r => setTechnicians(Array.isArray(r?.data) ? r.data : [])).catch(() => {});
     paymentMethodService.getAll().then(r => setMethods((Array.isArray(r?.data) ? r.data : []).filter(m => m.is_active !== false))).catch(() => {});
     planService.getAllPlans().then(p => setPlans((p || []).filter(x => Number(x.price) > 0))).catch(() => {});
   }, [isOpen]);
-
-  const technicianName = (t: Technician) =>
-    [t.first_name, t.middle_initial ? `${t.middle_initial}.` : '', t.last_name].filter(Boolean).join(' ').trim();
 
   const isPrepaid = !!account?.isPrepaid;
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
@@ -153,12 +148,10 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         return plans.map(p => ({ value: p.id, label: `${p.name} - P${Number(p.price).toFixed(2)}` })).filter(o => match(o.label));
       case 'method':
         return methods.map(m => ({ value: m.payment_method, label: m.payment_method })).filter(o => match(o.label));
-      case 'technician':
-        return technicians.map(t => ({ value: technicianName(t), label: technicianName(t) })).filter(o => match(o.label));
       default:
         return [];
     }
-  }, [picker, search, accountOptions, typeOptions, plans, methods, technicians]);
+  }, [picker, search, accountOptions, typeOptions, plans, methods]);
 
   const openPicker = (kind: PickerKind) => { setSearch(''); setPicker(kind); };
 
@@ -230,9 +223,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         break;
       case 'plan': applyPlan(plans.find(p => p.id === value) || null); break;
       case 'method': setPaymentMethod(value); break;
-      case 'technician': setProcessedBy(value); break;
     }
-    if (picker) setErrors(e => ({ ...e, [picker === 'type' ? 'transactionType' : picker === 'method' ? 'paymentMethod' : picker === 'technician' ? 'processedBy' : picker]: '' }));
+    if (picker) setErrors(e => ({ ...e, [picker === 'type' ? 'transactionType' : picker === 'method' ? 'paymentMethod' : picker]: '' }));
     setPicker(null);
   };
 
@@ -346,7 +338,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   );
 
   const pickerTitle: Record<string, string> = {
-    account: 'Select Account', type: 'Transaction Type', plan: 'Select Plan', method: 'Payment Method', technician: 'Processed By',
+    account: 'Select Account', type: 'Transaction Type', plan: 'Select Plan', method: 'Payment Method',
   };
 
   return (
@@ -432,8 +424,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
           {input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
           {input('OR No.', orNo, setOrNo, 'orNo')}
 
-          <SearchablePickerTrigger label="Processed By" required value={processedBy} placeholder="Select technician"
-            onPress={() => openPicker('technician')} error={errors.processedBy} />
+          {input('Processed By', processedBy, setProcessedBy, 'processedBy', { readOnly: true })}
 
           {input('Remarks', remarks, setRemarks, 'remarks', { multiline: true, optional: true })}
 

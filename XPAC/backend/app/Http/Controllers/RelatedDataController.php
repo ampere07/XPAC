@@ -95,9 +95,9 @@ class RelatedDataController extends Controller
                 ->leftJoin('payment_methods', 'transactions.payment_method', '=', 'payment_methods.id')
                 ->where('transactions.account_no', $accountNo);
 
-            // An agent sees only the transactions they processed (AgentScope).
+            // An agent or technician sees only the transactions they processed (AgentScope).
             $authUser = auth()->user();
-            if (\App\Support\AgentScope::isAgent($authUser)) {
+            if (\App\Support\AgentScope::seesOwnTransactionsOnly($authUser)) {
                 $email = \App\Support\AgentScope::email($authUser);
                 $query->where(function ($q) use ($email) {
                     $q->where('transactions.processed_by_user', $email)
@@ -894,11 +894,11 @@ class RelatedDataController extends Controller
                 ])
                 ->first();
 
-            // An agent may only open transactions they processed (AgentScope) — this is the route
-            // GET /transactions/{id} actually resolves to.
+            // An agent or technician may only open transactions they processed (AgentScope) — this
+            // is the route GET /transactions/{id} actually resolves to.
             $authUser = auth()->user();
             if (!$transaction
-                || (\App\Support\AgentScope::isAgent($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction))) {
+                || (\App\Support\AgentScope::seesOwnTransactionsOnly($authUser) && !\App\Support\AgentScope::ownsTransaction($authUser, $transaction))) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction not found'
@@ -1042,8 +1042,9 @@ class RelatedDataController extends Controller
      * The agents and technicians who have processed transactions — the Transaction List's
      * "collector" filter.
      *
-     * transactions.processed_by_user holds whatever the recording form wrote: an agent's EMAIL
-     * (their own login) or a technician's NAME (picked from the technicians list, "First M. Last").
+     * transactions.processed_by_user holds whatever the recording form wrote: an agent's or
+     * technician's EMAIL (their own login), or — on technician rows recorded before that — a NAME
+     * picked from the technicians list ("First M. Last").
      * Each distinct value is classified by matching it against:
      *   agent       users with role 4, by email
      *   technician  the technicians table, by full name; users with role 2, by email or full name

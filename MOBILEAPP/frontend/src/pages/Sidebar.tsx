@@ -163,6 +163,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
       title: 'Billing',
       items: [
         { id: 'customer-bills', label: billingNavLabel, icon: ReceiptText, onlyRoles: [ROLE.CUSTOMER] },
+        // Technicians and agents record payments here. Administrators reach it from the Menu.
+        { id: 'transaction-list', label: 'Transactions', icon: Receipt, onlyRoles: [ROLE.TECHNICIAN, ROLE.AGENT] },
         { id: 'overdue', label: 'Overdue', icon: Clock },
       ],
     },
