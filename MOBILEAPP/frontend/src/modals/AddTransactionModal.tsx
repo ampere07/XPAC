@@ -112,6 +112,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const isPrepaid = !!account?.isPrepaid;
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
   const showPlanPicker = isPrepaid && transactionType === 'Top Up';
+  const isCashPayment = paymentMethod.trim().toLowerCase() === 'cash';
   const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
   const accountDiscounts = useAccountDiscounts(account?.accountNo, isOpen);
   const planPrice = Number(selectedPlan?.price ?? 0);
@@ -238,8 +239,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
     if (!receivedPayment.trim() || isNaN(Number(receivedPayment))) e.receivedPayment = 'Received Payment is required';
     if (!paymentDate.trim()) e.paymentDate = 'Payment Date is required';
     if (!paymentMethod.trim()) e.paymentMethod = 'Payment Method is required';
-    if (!referenceNo.trim()) e.referenceNo = 'Reference No. is required';
-    if (!orNo.trim()) e.orNo = 'OR No. is required';
+    if (!isCashPayment && !referenceNo.trim()) e.referenceNo = 'Reference No. is required';
+    if (!isCashPayment && !orNo.trim()) e.orNo = 'OR No. is required';
     if (!processedBy.trim()) e.processedBy = 'Processed By is required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -280,8 +281,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         processed_by_user: processedBy,
         created_by_user: processedBy,
         payment_method: paymentMethod,
-        reference_no: referenceNo.trim(),
-        or_no: orNo.trim(),
+        reference_no: isCashPayment ? null : referenceNo.trim(),
+        or_no: isCashPayment ? null : orNo.trim(),
         remarks: remarks || '',
         status: 'Pending',
         ...(imageUrl ? { image_url: imageUrl } : {}),
@@ -421,8 +422,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
           <SearchablePickerTrigger label="Payment Method" required value={paymentMethod} placeholder="Select payment method"
             onPress={() => openPicker('method')} error={errors.paymentMethod} />
 
-          {input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
-          {input('OR No.', orNo, setOrNo, 'orNo')}
+          {!isCashPayment && input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
+          {!isCashPayment && input('OR No.', orNo, setOrNo, 'orNo')}
 
           {input('Processed By', processedBy, setProcessedBy, 'processedBy', { readOnly: true })}
 

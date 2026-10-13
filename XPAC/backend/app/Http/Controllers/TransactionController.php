@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\RequiredIf;
 use App\Services\ManualRadiusOperationsService;
 use App\Events\TransactionUpdated;
 use App\Events\TransactionViewingUpdate;
@@ -151,6 +153,11 @@ class TransactionController extends Controller
         };
     }
 
+    private function requiredUnlessCash(Request $request): RequiredIf
+    {
+        return Rule::requiredIf(fn () => mb_strtolower(trim((string) $request->input('payment_method'))) !== 'cash');
+    }
+
     public function store(Request $request): JsonResponse
     {
         try {
@@ -173,8 +180,8 @@ class TransactionController extends Controller
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => ['required', 'string', 'max:255', $this->uniqueReferenceNoRule()],
-                'or_no' => 'required|string|max:255',
+                'reference_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule()],
+                'or_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255'],
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
                 'image_url' => 'nullable|string|max:255',

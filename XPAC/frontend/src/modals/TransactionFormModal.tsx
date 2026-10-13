@@ -259,6 +259,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // stops it. Postpaid never gets a picker at all; its plan field stays read-only.
   const showPlanPicker = isPrepaid && formData.transactionType === 'Top Up';
   const showActivateNow = showPlanPicker && isPlanSwitch;
+  const isCashPayment = formData.paymentMethod.trim().toLowerCase() === 'cash';
 
   // ── Prepaid discount / rebate, as Pay Now on the customer dashboard ─────────
   // The account's unused discounts and rebates come off the plan price: ₱1,000 plan with ₱100 on
@@ -727,8 +728,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (!formData.receivedPayment.trim()) newErrors.receivedPayment = 'Received Payment is required';
     if (!formData.processedBy.trim()) newErrors.processedBy = 'Processed By is required';
     if (!formData.paymentMethod.trim()) newErrors.paymentMethod = 'Payment Method is required';
-    if (!formData.referenceNo.trim()) newErrors.referenceNo = 'Reference No. is required';
-    if (!formData.orNo.trim()) newErrors.orNo = 'OR No. is required';
+    if (!isCashPayment && !formData.referenceNo.trim()) newErrors.referenceNo = 'Reference No. is required';
+    if (!isCashPayment && !formData.orNo.trim()) newErrors.orNo = 'OR No. is required';
     if (!formData.transactionType.trim()) newErrors.transactionType = 'Transaction Type is required';
     // An edit may keep the proof already on file; anything else needs a new image chosen.
     if (!formData.image && !initialTransactionData?.image_url) newErrors.image = 'Payment Proof Image is required';
@@ -804,8 +805,8 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         date_processed: new Date().toISOString(),
         processed_by_user: formData.processedBy,
         payment_method: formData.paymentMethod,
-        reference_no: formData.referenceNo,
-        or_no: formData.orNo,
+        reference_no: isCashPayment ? null : formData.referenceNo,
+        or_no: isCashPayment ? null : formData.orNo,
         remarks: formData.remarks || '',
         status: 'Pending',
         image_url: imageUrl,
@@ -1432,6 +1433,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             {errors.paymentMethod && <p className="text-red-500 text-xs mt-1">{errors.paymentMethod}</p>}
           </div>
 
+          {!isCashPayment && (<>
           {/* Reference No */}
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -1467,6 +1469,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
             />
             {errors.orNo && <p className="text-red-500 text-xs mt-1">{errors.orNo}</p>}
           </div>
+          </>)}
 
           {/* Transaction Type */}
           <div>
