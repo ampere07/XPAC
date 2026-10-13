@@ -22,8 +22,8 @@ interface CreateTransactionPayload {
   date_processed: string;
   processed_by_user_id?: number;
   payment_method: string;
-  reference_no: string;
-  or_no: string;
+  reference_no: string | null;
+  or_no: string | null;
   remarks?: string;
   status: string;
   image_url?: string;
