@@ -14,6 +14,7 @@ import { settingsColorPaletteService } from '../services/settingsColorPaletteSer
 import { SearchablePicker, SearchablePickerTrigger } from '../components/SearchablePicker';
 import ImagePreview from '../components/ImagePreview';
 import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
+import { isCashPaymentMethod } from '../utils/paymentMethod';
 
 /**
  * A technician recording a payment from the Transaction List — the mobile counterpart of the
@@ -71,6 +72,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   // That sum is what approval applies to the account; both parts are stored too
   // (transactions.collected_payment / agent_collected).
   const [isAgentUser, setIsAgentUser] = useState(false);
+  const [isTechnicianUser, setIsTechnicianUser] = useState(false);
   const [collectedPayment, setCollectedPayment] = useState('');
   const [agentCollected, setAgentCollected] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
@@ -100,8 +102,9 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
       try {
         const u = JSON.parse(raw || '{}');
         setIsAgentUser(String(u.role_id) === '4' || String(u.role || '').toLowerCase().trim() === 'agent');
+        setIsTechnicianUser(String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician');
         setProcessedBy(String(u.email_address || u.email || '').trim());
-      } catch { setIsAgentUser(false); }
+      } catch { setIsAgentUser(false); setIsTechnicianUser(false); }
     }).catch(() => {});
     settingsColorPaletteService.getActive().then(p => p?.primary && setPrimary(p.primary)).catch(() => {});
     fetchAccountRecords();
@@ -112,7 +115,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const isPrepaid = !!account?.isPrepaid;
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
   const showPlanPicker = isPrepaid && transactionType === 'Top Up';
-  const isCashPayment = paymentMethod.trim().toLowerCase() === 'cash';
+  const hidesReceiptNumbers = isTechnicianUser && isCashPaymentMethod(paymentMethod);
   const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
   const accountDiscounts = useAccountDiscounts(account?.accountNo, isOpen);
   const planPrice = Number(selectedPlan?.price ?? 0);
@@ -239,8 +242,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
     if (!receivedPayment.trim() || isNaN(Number(receivedPayment))) e.receivedPayment = 'Received Payment is required';
     if (!paymentDate.trim()) e.paymentDate = 'Payment Date is required';
     if (!paymentMethod.trim()) e.paymentMethod = 'Payment Method is required';
-    if (!isCashPayment && !referenceNo.trim()) e.referenceNo = 'Reference No. is required';
-    if (!isCashPayment && !orNo.trim()) e.orNo = 'OR No. is required';
+    if (!hidesReceiptNumbers && !referenceNo.trim()) e.referenceNo = 'Reference No. is required';
+    if (!hidesReceiptNumbers && !orNo.trim()) e.orNo = 'OR No. is required';
     if (!processedBy.trim()) e.processedBy = 'Processed By is required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -281,8 +284,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
         processed_by_user: processedBy,
         created_by_user: processedBy,
         payment_method: paymentMethod,
-        reference_no: isCashPayment ? null : referenceNo.trim(),
-        or_no: isCashPayment ? null : orNo.trim(),
+        reference_no: hidesReceiptNumbers ? null : referenceNo.trim(),
+        or_no: hidesReceiptNumbers ? null : orNo.trim(),
         remarks: remarks || '',
         status: 'Pending',
         ...(imageUrl ? { image_url: imageUrl } : {}),
@@ -422,8 +425,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
           <SearchablePickerTrigger label="Payment Method" required value={paymentMethod} placeholder="Select payment method"
             onPress={() => openPicker('method')} error={errors.paymentMethod} />
 
-          {!isCashPayment && input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
-          {!isCashPayment && input('OR No.', orNo, setOrNo, 'orNo')}
+          {!hidesReceiptNumbers && input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
+          {!hidesReceiptNumbers && input('OR No.', orNo, setOrNo, 'orNo')}
 
           {input('Processed By', processedBy, setProcessedBy, 'processedBy', { readOnly: true })}
 

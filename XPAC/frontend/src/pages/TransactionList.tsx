@@ -58,6 +58,14 @@ const transactionTableColumns = [
   { key: 'account_balance', label: 'Account Balance', width: 'min-w-36' },
 ];
 
+type CollectorRole = 'agent' | 'technician' | 'administrator';
+
+const collectorBadgeClasses: Record<CollectorRole, { light: string; dark: string }> = {
+  agent: { light: 'bg-blue-100 text-blue-700', dark: 'bg-blue-900 text-blue-200' },
+  technician: { light: 'bg-green-100 text-green-700', dark: 'bg-green-900 text-green-200' },
+  administrator: { light: 'bg-orange-100 text-orange-700', dark: 'bg-orange-900 text-orange-200' },
+};
+
 interface PaginationControlsProps {
   totalPages: number;
   itemsPerPage: number;
@@ -247,7 +255,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   // sidebar filters, and totals what that collector took in: Collected Payment for an agent,
   // Received Payment for a technician. Administrators and SuperAdmins only.
   const canUseCollectorFilter = isAdministratorUser();
-  type Collector = { value: string; label: string; role: 'agent' | 'technician' };
+  type Collector = { value: string; label: string; role: CollectorRole };
   const [collectorFilter, setCollectorFilter] = useState<{ collector: Collector; dateFrom: string; dateTo: string } | null>(null);
   const [isCollectorModalOpen, setIsCollectorModalOpen] = useState(false);
   const [collectors, setCollectors] = useState<Collector[]>([]);
@@ -2457,7 +2465,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   value={isCollectorListOpen ? collectorQuery : (draftCollector?.label ?? collectorQuery)}
                   onChange={(e) => { setCollectorQuery(e.target.value); setIsCollectorListOpen(true); }}
                   onFocus={() => { setCollectorQuery(''); setIsCollectorListOpen(true); }}
-                  placeholder={isLoadingCollectors ? 'Loading…' : 'Search agent or technician…'}
+                  placeholder={isLoadingCollectors ? 'Loading…' : 'Search agent, technician or administrator…'}
                   className={`w-full px-3 py-2 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
                 />
                 {isCollectorListOpen && (
@@ -2467,20 +2475,18 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                       const shown = collectors.filter(c => !q || c.label.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
                       if (isLoadingCollectors) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Loading…</p>;
                       if (collectorsError) return <p className="px-3 py-2 text-sm text-red-500">Could not load collectors: {collectorsError}</p>;
-                      if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No agents or technicians found</p>;
-                      return shown.map(c => (
+                      if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No agents, technicians or administrators found</p>;
+                      return shown.map(({ value, label, role }) => (
                         <button
-                          aria-label={`Select collector ${c.label}`}
-                          key={`${c.role}:${c.value}`}
+                          aria-label={`Select collector ${label}`}
+                          key={`${role}:${value}`}
                           type="button"
-                          onClick={() => { setDraftCollector(c); setIsCollectorListOpen(false); setCollectorQuery(''); }}
-                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-sm ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draftCollector?.value === c.value ? (isDarkMode ? 'bg-gray-700' : 'bg-gray-100') : ''}`}
+                          onClick={() => { setDraftCollector({ value, label, role }); setIsCollectorListOpen(false); setCollectorQuery(''); }}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-sm ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${draftCollector?.value === value ? (isDarkMode ? 'bg-gray-700' : 'bg-gray-100') : ''}`}
                         >
-                          <span className="break-all">{c.label}</span>
-                          <span className={`ml-2 flex-shrink-0 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${c.role === 'agent'
-                            ? (isDarkMode ? 'bg-blue-900 text-blue-200' : 'bg-blue-100 text-blue-700')
-                            : (isDarkMode ? 'bg-green-900 text-green-200' : 'bg-green-100 text-green-700')}`}>
-                            {c.role}
+                          <span className="break-all">{label}</span>
+                          <span className={`ml-2 flex-shrink-0 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${collectorBadgeClasses[role][isDarkMode ? 'dark' : 'light']}`}>
+                            {role}
                           </span>
                         </button>
                       ));
