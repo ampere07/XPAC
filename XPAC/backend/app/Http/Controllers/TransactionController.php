@@ -153,9 +153,22 @@ class TransactionController extends Controller
         };
     }
 
-    private function requiredUnlessCash(Request $request): RequiredIf
+    private function isTechnicianCashPayment(?string $paymentMethod): bool
     {
-        return Rule::requiredIf(fn () => mb_strtolower(trim((string) $request->input('payment_method'))) !== 'cash');
+        return mb_strtolower(trim((string) $paymentMethod)) === 'cash'
+            && \App\Support\AgentScope::isTechnician(auth()->user());
+    }
+
+    private function requiredUnlessTechnicianCash(Request $request): RequiredIf
+    {
+        return Rule::requiredIf(fn () => !$this->isTechnicianCashPayment($request->input('payment_method')));
+    }
+
+    private function discardReceiptNumbersForTechnicianCash(Request $request, ?string $storedPaymentMethod = null): void
+    {
+        if ($this->isTechnicianCashPayment($request->input('payment_method', $storedPaymentMethod))) {
+            $request->merge(['reference_no' => null, 'or_no' => null]);
+        }
     }
 
     public function store(Request $request): JsonResponse
@@ -164,6 +177,8 @@ class TransactionController extends Controller
             \Log::info('Transaction store request received', [
                 'request_data' => $request->all()
             ]);
+
+            $this->discardReceiptNumbersForTechnicianCash($request);
 
             $validated = $request->validate([
                 'account_no' => 'nullable|exists:billing_accounts,account_no',
@@ -180,8 +195,8 @@ class TransactionController extends Controller
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule()],
-                'or_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255'],
+                'reference_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule()],
+                'or_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255'],
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
                 'image_url' => 'nullable|string|max:255',
@@ -1340,8 +1355,9 @@ class TransactionController extends Controller
             // what decides whether 'Top Up' or 'Recurring Fee' is the legal recurring type here —
             // and because the row's existing type stays permitted even if it has since been
             // retired, so an old pending transaction remains editable.
-            $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type', 'received_payment', 'collected_payment', 'agent_collected']);
+            $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type', 'received_payment', 'collected_payment', 'agent_collected', 'payment_method']);
             $existingAccountNo = $existing->account_no ?? null;
+            $this->discardReceiptNumbersForTechnicianCash($request, $existing->payment_method ?? null);
 
             $validated = $request->validate([
                 'transaction_type' => $this->resolveTypeRule($existingAccountNo, false, $existing->transaction_type ?? null),
