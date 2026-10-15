@@ -14,7 +14,7 @@ import { settingsColorPaletteService } from '../services/settingsColorPaletteSer
 import { SearchablePicker, SearchablePickerTrigger } from '../components/SearchablePicker';
 import ImagePreview from '../components/ImagePreview';
 import { useAccountDiscounts } from '../hooks/useAccountDiscounts';
-import { isCashPaymentMethod } from '../utils/paymentMethod';
+import { isCashPaymentMethod, isChequePaymentMethod, referenceNumberLabel } from '../utils/paymentMethod';
 
 /**
  * A technician recording a payment from the Transaction List — the mobile counterpart of the
@@ -116,6 +116,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
   const showPlanPicker = isPrepaid && transactionType === 'Top Up';
   const hidesReceiptNumbers = isTechnicianUser && isCashPaymentMethod(paymentMethod);
+  const referenceNoLabel = referenceNumberLabel(paymentMethod);
   const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
   const accountDiscounts = useAccountDiscounts(account?.accountNo, isOpen);
   const planPrice = Number(selectedPlan?.price ?? 0);
@@ -242,7 +243,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
     if (!receivedPayment.trim() || isNaN(Number(receivedPayment))) e.receivedPayment = 'Received Payment is required';
     if (!paymentDate.trim()) e.paymentDate = 'Payment Date is required';
     if (!paymentMethod.trim()) e.paymentMethod = 'Payment Method is required';
-    if (!hidesReceiptNumbers && !referenceNo.trim()) e.referenceNo = 'Reference No. is required';
+    if (!hidesReceiptNumbers && !referenceNo.trim()) e.referenceNo = `${referenceNoLabel} is required`;
     if (!hidesReceiptNumbers && !orNo.trim()) e.orNo = 'OR No. is required';
     if (!processedBy.trim()) e.processedBy = 'Processed By is required';
     setErrors(e);
@@ -297,7 +298,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
           [{ text: 'OK', onPress: () => { onSaved(); onClose(); } }]);
       } else if (result.errors?.reference_no?.length) {
         setErrors(e => ({ ...e, referenceNo: result.errors!.reference_no[0] }));
-        Alert.alert('Duplicate Reference No.', result.errors.reference_no[0]);
+        Alert.alert(`Duplicate ${referenceNoLabel}`, result.errors.reference_no[0]);
       } else {
         const fieldMessages = result.errors ? Object.values(result.errors).flat().join('\n') : '';
         Alert.alert('Error', `Failed to create transaction: ${fieldMessages || result.message}`);
@@ -425,7 +426,7 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
           <SearchablePickerTrigger label="Payment Method" required value={paymentMethod} placeholder="Select payment method"
             onPress={() => openPicker('method')} error={errors.paymentMethod} />
 
-          {!hidesReceiptNumbers && input('Reference No.', referenceNo, setReferenceNo, 'referenceNo', { placeholder: 'e.g. GCash ref no.' })}
+          {!hidesReceiptNumbers && input(referenceNoLabel, referenceNo, setReferenceNo, 'referenceNo', { placeholder: isChequePaymentMethod(paymentMethod) ? 'Number printed on the cheque' : 'e.g. GCash ref no.' })}
           {!hidesReceiptNumbers && input('OR No.', orNo, setOrNo, 'orNo')}
 
           {input('Processed By', processedBy, setProcessedBy, 'processedBy', { readOnly: true })}

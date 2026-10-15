@@ -133,9 +133,9 @@ class TransactionController extends Controller
      * the same payment. $ignoreId is the transaction being edited, so re-saving it with its own
      * reference number is allowed.
      */
-    private function uniqueReferenceNoRule(?int $ignoreId = null): \Closure
+    private function uniqueReferenceNoRule(string $label, ?int $ignoreId = null): \Closure
     {
-        return function (string $attribute, $value, \Closure $fail) use ($ignoreId) {
+        return function (string $attribute, $value, \Closure $fail) use ($label, $ignoreId) {
             $normalized = mb_strtolower(trim((string) $value));
             if ($normalized === '') {
                 return;
@@ -146,11 +146,16 @@ class TransactionController extends Controller
                 ->first(['id', 'account_no']);
 
             if ($existing) {
-                $fail('Reference No. "' . trim((string) $value) . '" is already used by transaction #' . $existing->id
+                $fail($label . ' "' . trim((string) $value) . '" is already used by transaction #' . $existing->id
                     . ($existing->account_no ? ' (account ' . $existing->account_no . ')' : '')
                     . '. Each payment needs its own reference number.');
             }
         };
+    }
+
+    private function referenceNumberLabel(?string $paymentMethod): string
+    {
+        return in_array(mb_strtolower(trim((string) $paymentMethod)), ['cheque', 'check'], true) ? 'Cheque No.' : 'Reference No.';
     }
 
     private function isTechnicianCashPayment(?string $paymentMethod): bool
@@ -179,6 +184,7 @@ class TransactionController extends Controller
             ]);
 
             $this->discardReceiptNumbersForTechnicianCash($request);
+            $referenceNoLabel = $this->referenceNumberLabel($request->input('payment_method'));
 
             $validated = $request->validate([
                 'account_no' => 'nullable|exists:billing_accounts,account_no',
@@ -195,7 +201,7 @@ class TransactionController extends Controller
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule()],
+                'reference_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule($referenceNoLabel)],
                 'or_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255'],
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
@@ -205,7 +211,7 @@ class TransactionController extends Controller
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
                 // Prepaid only: start that plan immediately, forfeiting the rest of the period.
                 'activate_now' => 'nullable|boolean',
-            ]);
+            ], [], ['reference_no' => $referenceNoLabel]);
 
             $this->assertPrepaidOnlyFields($request);
 
@@ -1358,6 +1364,7 @@ class TransactionController extends Controller
             $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type', 'received_payment', 'collected_payment', 'agent_collected', 'payment_method']);
             $existingAccountNo = $existing->account_no ?? null;
             $this->discardReceiptNumbersForTechnicianCash($request, $existing->payment_method ?? null);
+            $referenceNoLabel = $this->referenceNumberLabel($request->input('payment_method', $existing->payment_method ?? null));
 
             $validated = $request->validate([
                 'transaction_type' => $this->resolveTypeRule($existingAccountNo, false, $existing->transaction_type ?? null),
@@ -1366,7 +1373,7 @@ class TransactionController extends Controller
                 'agent_collected' => 'nullable|numeric|min:0',
                 'payment_date' => 'nullable|date',
                 'payment_method' => 'nullable|string|max:255',
-                'reference_no' => ['nullable', 'string', 'max:255', $this->uniqueReferenceNoRule((int) $id)],
+                'reference_no' => ['nullable', 'string', 'max:255', $this->uniqueReferenceNoRule($referenceNoLabel, (int) $id)],
                 'or_no' => 'nullable|string|max:255',
                 'remarks' => 'nullable|string',
                 'image_url' => 'nullable|string|max:255',
@@ -1374,7 +1381,7 @@ class TransactionController extends Controller
                 // be corrected before approval acts on it.
                 'selected_plan_id' => 'nullable|integer|exists:plan_list,id',
                 'activate_now' => 'nullable|boolean',
-            ]);
+            ], [], ['reference_no' => $referenceNoLabel]);
 
             $this->assertPrepaidOnlyFields($request, $existingAccountNo);
 

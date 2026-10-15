@@ -15,7 +15,7 @@ import { useBillingStore } from '../store/billingStore';
 import { createAgentReferralMatcher, getStoredAgentIdentity } from '../utils/agentReferral';
 import { stampTextTopRight } from '../utils/imageWatermark';
 import { getBillingRecordDetails } from '../services/billingService';
-import { isCashPaymentMethod } from '../utils/paymentMethod';
+import { isCashPaymentMethod, isChequePaymentMethod, referenceNumberLabel } from '../utils/paymentMethod';
 
 interface ModalConfig {
   isOpen: boolean;
@@ -261,6 +261,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   const showPlanPicker = isPrepaid && formData.transactionType === 'Top Up';
   const showActivateNow = showPlanPicker && isPlanSwitch;
   const hidesReceiptNumbers = isTechnicianUser && isCashPaymentMethod(formData.paymentMethod);
+  const referenceNoLabel = referenceNumberLabel(formData.paymentMethod);
 
   // ── Prepaid discount / rebate, as Pay Now on the customer dashboard ─────────
   // The account's unused discounts and rebates come off the plan price: ₱1,000 plan with ₱100 on
@@ -729,7 +730,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
     if (!formData.receivedPayment.trim()) newErrors.receivedPayment = 'Received Payment is required';
     if (!formData.processedBy.trim()) newErrors.processedBy = 'Processed By is required';
     if (!formData.paymentMethod.trim()) newErrors.paymentMethod = 'Payment Method is required';
-    if (!hidesReceiptNumbers && !formData.referenceNo.trim()) newErrors.referenceNo = 'Reference No. is required';
+    if (!hidesReceiptNumbers && !formData.referenceNo.trim()) newErrors.referenceNo = `${referenceNoLabel} is required`;
     if (!hidesReceiptNumbers && !formData.orNo.trim()) newErrors.orNo = 'OR No. is required';
     if (!formData.transactionType.trim()) newErrors.transactionType = 'Transaction Type is required';
     // An edit may keep the proof already on file; anything else needs a new image chosen.
@@ -887,7 +888,7 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
         setModal({
           isOpen: true,
           type: 'error',
-          title: 'Duplicate Reference No.',
+          title: `Duplicate ${referenceNoLabel}`,
           message
         });
       } else {
@@ -1439,10 +1440,10 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
           <div>
             <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
               }`}>
-              Reference No.<span className="text-red-500">*</span>
+              {referenceNoLabel}<span className="text-red-500">*</span>
             </label>
             <input
-              aria-label="Reference No."
+              aria-label={isChequePaymentMethod(formData.paymentMethod) ? 'Cheque No.' : 'Reference No.'}
               type="text"
               value={formData.referenceNo}
               onChange={(e) => handleInputChange('referenceNo', e.target.value)}
