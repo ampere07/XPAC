@@ -58,12 +58,13 @@ const transactionTableColumns = [
   { key: 'account_balance', label: 'Account Balance', width: 'min-w-36' },
 ];
 
-type CollectorRole = 'agent' | 'technician' | 'administrator';
+type CollectorRole = 'agent' | 'technician' | 'administrator' | 'superadmin';
 
 const collectorBadgeClasses: Record<CollectorRole, { light: string; dark: string }> = {
   agent: { light: 'bg-blue-100 text-blue-700', dark: 'bg-blue-900 text-blue-200' },
   technician: { light: 'bg-green-100 text-green-700', dark: 'bg-green-900 text-green-200' },
   administrator: { light: 'bg-orange-100 text-orange-700', dark: 'bg-orange-900 text-orange-200' },
+  superadmin: { light: 'bg-purple-100 text-purple-700', dark: 'bg-purple-900 text-purple-200' },
 };
 
 interface PaginationControlsProps {
@@ -2465,7 +2466,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                   value={isCollectorListOpen ? collectorQuery : (draftCollector?.label ?? collectorQuery)}
                   onChange={(e) => { setCollectorQuery(e.target.value); setIsCollectorListOpen(true); }}
                   onFocus={() => { setCollectorQuery(''); setIsCollectorListOpen(true); }}
-                  placeholder={isLoadingCollectors ? 'Loading…' : 'Search agent, technician or administrator…'}
+                  placeholder={isLoadingCollectors ? 'Loading…' : 'Search collector…'}
                   className={`w-full px-3 py-2 rounded border text-sm focus:outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
                 />
                 {isCollectorListOpen && (
@@ -2475,7 +2476,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                       const shown = collectors.filter(c => !q || c.label.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
                       if (isLoadingCollectors) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Loading…</p>;
                       if (collectorsError) return <p className="px-3 py-2 text-sm text-red-500">Could not load collectors: {collectorsError}</p>;
-                      if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No agents, technicians or administrators found</p>;
+                      if (shown.length === 0) return <p className={`px-3 py-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No collectors found</p>;
                       return shown.map(({ value, label, role }) => (
                         <button
                           aria-label={`Select collector ${label}`}

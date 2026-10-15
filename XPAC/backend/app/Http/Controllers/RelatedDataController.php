@@ -1040,7 +1040,7 @@ class RelatedDataController extends Controller
     }
 
     /**
-     * The agents, technicians and administrators who have processed transactions — the Transaction List's
+     * The agents, technicians, administrators and SuperAdmins who have processed transactions — the Transaction List's
      * "collector" filter.
      *
      * transactions.processed_by_user holds whatever the recording form wrote: an agent's or
@@ -1050,7 +1050,8 @@ class RelatedDataController extends Controller
      *   agent       users with role 4, by email
      *   technician  the technicians table, by full name; users with role 2, by email or full name
      *   administrator  users with role 1, by email
-     * Values that match none of these (SuperAdmins, other roles, free text) are left out.
+     *   superadmin     users with role 7, by email
+     * Values that match none of these (other roles, free text) are left out.
      *
      * @return array<int, array{value:string, label:string, role:string}>
      */
@@ -1088,14 +1089,15 @@ class RelatedDataController extends Controller
             foreach (DB::table('users')
                 ->leftJoin('roles', 'users.role_id', '=', 'roles.id')
                 ->where(function ($q) {
-                    $q->whereIn('users.role_id', [Role::ADMINISTRATOR, Role::TECHNICIAN, Role::AGENT])
-                      ->orWhereRaw("LOWER(TRIM(roles.role_name)) IN ('agent', 'technician', 'administrator')");
+                    $q->whereIn('users.role_id', [Role::ADMINISTRATOR, Role::SUPER_ADMIN, Role::TECHNICIAN, Role::AGENT])
+                      ->orWhereRaw("LOWER(TRIM(roles.role_name)) IN ('agent', 'technician', 'administrator', 'superadmin')");
                 })
                 ->get(['users.email_address', 'users.first_name', 'users.middle_initial', 'users.last_name', 'users.role_id', 'roles.role_name']) as $u) {
                 $roleName = strtolower(trim((string) $u->role_name));
                 $role = match (true) {
                     (int) $u->role_id === Role::AGENT || $roleName === 'agent' => 'agent',
                     (int) $u->role_id === Role::ADMINISTRATOR || $roleName === 'administrator' => 'administrator',
+                    (int) $u->role_id === Role::SUPER_ADMIN || $roleName === 'superadmin' => 'superadmin',
                     default => 'technician',
                 };
                 $name = $fullName($u->first_name, $u->middle_initial, $u->last_name);
