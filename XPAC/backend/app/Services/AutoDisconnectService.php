@@ -63,10 +63,20 @@ class AutoDisconnectService
      */
     private const PREPAID_RESTRICTION_REMARKS = 'Prepaid Period Expired';
 
+    /** Remark stamped by {@see enforceRestrictedInRadius()} on the restriction it re-applies. */
+    private const RESTRICTION_ENFORCEMENT_REMARKS = 'Restriction Enforcement';
+
+    /**
+     * Billing statuses that already withhold service. An account in one of them is never
+     * disconnected a second time (no second fee or notice); a re-run only makes sure RADIUS
+     * agrees — see {@see restrictOnRadiusOnly()}.
+     */
+    private const SERVICE_WITHHELD_STATUSES = ['Inactive', 'Pullout', 'Disconnected', 'Offline', 'Restricted', 'Pullout Restricted'];
+
     /**
      * Grace days a prepaid customer keeps AFTER their days left reach 0. Zero: there is no
-     * separate grace — the 4 grace days are built into the 34-day period
-     * (PrepaidRenewalService::PREPAID_PERIOD_DAYS = 30 days of service + 4).
+     * separate grace — service ends with the 31-day period
+     * (PrepaidRenewalService::PREPAID_PERIOD_DAYS).
      *
      * "Days left" is counted the way the Customer page shows it: the expiry date itself is the
      * last day ("1 day left"), and the day after it reads 0 ("Expired"). So with 0 grace an
@@ -74,7 +84,7 @@ class AutoDisconnectService
      * 07/31 — the first run that day (the 02:00 sweep) cuts it off.
      *
      * The rule works on the expiry's CALENDAR DATE, deliberately ignoring its time-of-day.
-     * prepaid_expires_at is written as payment date + 34 days, so it inherits the payment's clock
+     * prepaid_expires_at is written as payment date + 30 days, so it inherits the payment's clock
      * time — most live rows sit at 00:00:00 but a handful carry times like 17:24. Anchoring on the
      * raw timestamp would cut customers off at a different hour depending on when they paid.
      *
@@ -122,16 +132,20 @@ class AutoDisconnectService
     private const PREPAID_PULLOUT_REMARKS = 'Prepaid Auto Pullout';
 
     /**
-     * Concern values that count as an existing pullout request when de-duplicating.
-     *
-     * 'for pullout' is the spelling {@see createPulloutRequest()} has always written, so it has to
-     * be matched too — under a case-sensitive collation the canonical spellings alone would miss
-     * every row the postpaid flow created and we would raise a second pullout for the same account.
+     * Concern values (compared lower-cased) that make a service order a pullout. The postpaid flow
+     * writes 'for pullout', the prepaid flow 'Pullout'.
      */
-    private const PULLOUT_CONCERNS = ['Pullout', 'For Pullout', 'for pullout'];
+    private const PULLOUT_CONCERNS = ['pullout', 'for pullout'];
 
-    /** A pullout service order in one of these states is finished and no longer blocks a new one. */
-    private const PULLOUT_CLOSED_STATUSES = ['Completed', 'Cancelled', 'Failed'];
+    /*
+     * A pullout is finished once any of its status columns says so (compared lower-cased).
+     * support_status / visit_status are what the technician and PulloutServiceOrderCloser set —
+     * Resolved / Done when the equipment was collected, Failed when a payment voided it.
+     * `status` is only written by the prepaid flow ('Pending') and rarely moved after that.
+     */
+    private const PULLOUT_DONE_SUPPORT_STATUSES = ['resolved', 'failed', 'cancelled', 'closed'];
+    private const PULLOUT_DONE_VISIT_STATUSES = ['done', 'failed', 'cancelled'];
+    private const PULLOUT_DONE_STATUSES = ['completed', 'cancelled', 'failed'];
 
     private const DC_OFFSET_DAYS = 10;
     private const ADDITIONAL_INVOICE_OFFSET_DAYS = 7;
@@ -229,6 +243,7 @@ class AutoDisconnectService
                 return [
                     'success' => true,
                     'processed' => 0,
+                    'radius_only' => 0,
                     'skipped' => 0,
                     'queued' => 0,
                     'errors' => [],
@@ -240,6 +255,7 @@ class AutoDisconnectService
             $this->writeLog("─────────────────────────────────────────────────────────────────");
 
             $processedCount = 0;
+            $radiusOnlyCount = 0;
             $skippedCount = 0;
             $queuedCount = 0;
             $errors = [];
@@ -261,7 +277,10 @@ class AutoDisconnectService
                     continue;
                 }
 
-                if ($result['success']) {
+                if ($result['success'] && !empty($result['radius_only'])) {
+                    $radiusOnlyCount++;
+                    $this->writeLog("[{$counter}/{$totalCount}] ✓ RADIUS RESTRICTED - billing was already disconnected");
+                } elseif ($result['success']) {
                     $processedCount++;
                     $this->writeLog("[{$counter}/{$totalCount}] ✓ SUCCESS - Transaction Committed");
                 } elseif (!empty($result['queued'])) {
@@ -286,6 +305,7 @@ class AutoDisconnectService
             $this->writeLog("Summary:");
             $this->writeLog("  • Total Found: {$totalCount}");
             $this->writeLog("  • Successfully Processed: {$processedCount}");
+            $this->writeLog("  • Restricted on RADIUS only (billing already disconnected): {$radiusOnlyCount}");
             $this->writeLog("  • Queued for Retry: {$queuedCount}");
             $this->writeLog("  • Skipped: {$skippedCount}");
             $this->writeLog("  • Errors: " . count($errors));
@@ -305,6 +325,7 @@ class AutoDisconnectService
             return [
                 'success' => true,
                 'processed' => $processedCount,
+                'radius_only' => $radiusOnlyCount,
                 'skipped' => $skippedCount,
                 'queued' => $queuedCount,
                 'errors' => $errors,
@@ -396,19 +417,60 @@ class AutoDisconnectService
             return ['success' => false, 'reason' => 'VIP account (comped)'];
         }
 
-        if (in_array($billingStatus, ['Inactive', 'Pullout', 'Disconnected', 'Offline', 'Restricted', 'Pullout Restricted'])) {
-            $this->writeLog("  [SKIP] Status is already {$billingStatus}");
-            return ['success' => false, 'reason' => "Already {$billingStatus}"];
-        }
-
         // Get technical details for username
         $technicalDetail = $billingAccount->technicalDetails->first();
-        if (!$technicalDetail || empty($technicalDetail->username)) {
+        $username = $technicalDetail ? trim((string) $technicalDetail->username) : '';
+
+        /*
+         * Already disconnected in billing — a re-run of this sweep, or an account restricted some
+         * other way. Never disconnect it twice (no second fee, status change or notice); only make
+         * sure RADIUS agrees:
+         *   restricted on RADIUS too      → skip;
+         *   still in a plan group          → restrict on RADIUS only, billing status kept as it is.
+         */
+        if (in_array($billingStatus, self::SERVICE_WITHHELD_STATUSES, true)) {
+            if ($username === '') {
+                $this->writeLog("  [SKIP] Status is already {$billingStatus} (no PPPoE username to check on RADIUS)");
+                return ['success' => false, 'reason' => "Already {$billingStatus}"];
+            }
+
+            $this->writeLog("  [INFO] Username: {$username}");
+            $this->writeLog("  [INFO] Already {$billingStatus} in billing — checking RADIUS...");
+            $check = $this->restrictOnRadiusOnly($accountNo, $username, $billingStatus, 'Auto DC');
+
+            switch ($check['outcome']) {
+                case 'restricted':
+                    $this->writeLog("  [RADIUS] ✓ Was '{$check['group']}' on RADIUS — restricted there (billing left {$billingStatus}, no fee, no notice)");
+                    return ['success' => true, 'radius_only' => true];
+                case 'already_restricted':
+                    $this->writeLog("  [SKIP] Already {$billingStatus} in billing and '{$check['group']}' on RADIUS");
+                    return ['success' => false, 'reason' => "Already {$billingStatus} (restricted on RADIUS too)"];
+                case 'not_in_radius':
+                    $this->writeLog("  [SKIP] Already {$billingStatus}; username not found on any RADIUS server — fix the username");
+                    return ['success' => false, 'reason' => "Already {$billingStatus}; not found on RADIUS"];
+                case 'unreachable':
+                    $this->writeLog("  [SKIP] Already {$billingStatus}; RADIUS unreachable, could not check it");
+                    return ['success' => false, 'reason' => "Already {$billingStatus}; RADIUS unreachable"];
+                default:
+                    $this->writeLog("  [RADIUS] ✗ RADIUS-only restrict failed: {$check['reason']}. Queueing for retry.");
+                    $this->queueRadiusOperation(
+                        $billingAccount,
+                        $username,
+                        $accountNo,
+                        'restricted_user',
+                        'Auto DC',
+                        'RADIUS restrict failed (billing already ' . $billingStatus . '): ' . $check['reason'],
+                        $billingStatus
+                    );
+                    return ['success' => false, 'queued' => true, 'reason' => "Already {$billingStatus}; RADIUS restrict queued for retry"];
+            }
+        }
+
+        if ($username === '') {
             $this->writeLog("  [SKIP] PPPoE username not found");
             return ['success' => false, 'reason' => 'PPPoE username not found'];
         }
 
-        $username = $technicalDetail->username;
         $this->writeLog("  [INFO] Username: {$username}");
 
         // Pre-flight: make sure the RADIUS server is reachable BEFORE we mutate anything.
@@ -587,7 +649,7 @@ class AutoDisconnectService
      * No separate grace: a prepaid customer keeps service through their expiry date and is
      * restricted once the days left reach 0 — an account whose prepaid_expires_at is 07/30 is
      * restricted from 00:00 on 07/31 (see {@see PREPAID_GRACE_DAYS}, {@see prepaidRestrictFrom()}).
-     * The 4 grace days are built into the 34-day period. It runs in the 02:00 sweep and again at
+     * There is no grace beyond the 31-day period. It runs in the 02:00 sweep and again at
      * 12:00 (prepaid:restrict-expired) as a retry. The expiry itself is set/extended by
      * {@see PrepaidRenewalService} when they pay. Once the days left reach 0, this restricts them
      * via the EXISTING RADIUS restriction workflow
@@ -602,7 +664,11 @@ class AutoDisconnectService
      *     are Active again with a future expiry — so an account is never restricted twice for the
      *     same period, yet is correctly re-restricted each time a new period lapses.
      *   - RADIUS-unreachable / restrict-failure paths queue (deduped) for retry instead of
-     *     aborting the run.
+     *     aborting the run. A failed restrict puts the billing status back to Active, so the
+     *     account is never shown Restricted while RADIUS still serves it.
+     *
+     * Ends with {@see enforceRestrictedInRadius()}, which restricts on RADIUS any account billing
+     * already calls Restricted but RADIUS still serves.
      *
      * Sends the SMS 'Disconnected' notice (same template/mechanism as postpaid's
      * {@see processDisconnection()}) the moment an account completes this disconnect — RADIUS
@@ -611,7 +677,7 @@ class AutoDisconnectService
      * that transition having just completed here, so a customer already Restricted for an unrelated
      * reason is never mistakenly texted "disconnected" by this sweep.
      *
-     * @return array{success:bool, restricted:int, skipped:int, queued:int, errors:array, duration:int}
+     * @return array{success:bool, restricted:int, skipped:int, queued:int, errors:array, enforcement?:array, duration:int}
      */
     public function processPrepaidRestrictions(): array
     {
@@ -664,10 +730,11 @@ class AutoDisconnectService
             $this->writeLog("");
 
             if ($totalCount === 0) {
-                $duration = Carbon::now()->diffInSeconds($startTime);
                 $this->writeLog("[INFO] No prepaid accounts to process.");
+                $enforcement = $this->enforceRestrictedInRadius();
+                $duration = Carbon::now()->diffInSeconds($startTime);
                 $this->writeLog("[PREPAID] Summary: Restricted 0, Queued 0, Skipped 0, Errors 0, Duration {$duration}s");
-                return ['success' => true, 'restricted' => 0, 'skipped' => 0, 'queued' => 0, 'errors' => [], 'duration' => $duration];
+                return ['success' => true, 'restricted' => 0, 'skipped' => 0, 'queued' => 0, 'errors' => [], 'enforcement' => $enforcement, 'duration' => $duration];
             }
 
             $counter = 0;
@@ -772,6 +839,20 @@ class AutoDisconnectService
                         $reason = $restrictResult['message'] ?? 'Unknown RADIUS error';
                         $this->writeLog("  [RADIUS] Restrict failed: {$reason}. Queueing for retry.");
                         \Log::channel('radiusrelated')->error('[PREPAID RESTRICT FAILURE] Account: ' . $accountNo . ' - Reason: ' . $reason);
+
+                        // restrictedUser() writes the Restricted billing status even when RADIUS refused
+                        // the change (ManualRadiusOperationsService::radiusOps). Put Active back, as the
+                        // postpaid path's rollback does, so the account is not shown Restricted while
+                        // RADIUS still serves it.
+                        DB::table('billing_accounts')
+                            ->where('id', $account->id)
+                            ->update([
+                                'billing_status_id' => $activeStatusId,
+                                'updated_by' => 'System',
+                                'updated_at' => Carbon::now(),
+                            ]);
+                        $this->writeLog("  [DB] Billing status restored to Active (ID: {$activeStatusId}) — RADIUS was not restricted");
+
                         $this->queueRadiusOperation(
                             $account,
                             $username,
@@ -791,6 +872,8 @@ class AutoDisconnectService
                 }
             }
 
+            $enforcement = $this->enforceRestrictedInRadius();
+
             $duration = Carbon::now()->diffInSeconds($startTime);
             $this->writeLog("");
             $this->writeLog("╔════════════════════════════════════════════════════════════════╗");
@@ -805,7 +888,7 @@ class AutoDisconnectService
             $this->writeLog("  • Duration: {$duration} second(s)");
             $this->writeLog("");
 
-            return ['success' => true, 'restricted' => $restricted, 'skipped' => $skipped, 'queued' => $queued, 'errors' => $errors, 'duration' => $duration];
+            return ['success' => true, 'restricted' => $restricted, 'skipped' => $skipped, 'queued' => $queued, 'errors' => $errors, 'enforcement' => $enforcement, 'duration' => $duration];
 
         } catch (Throwable $e) {
             $duration = Carbon::now()->diffInSeconds($startTime);
@@ -813,6 +896,204 @@ class AutoDisconnectService
             $this->writeLog("[TRACE] " . $e->getTraceAsString());
             return ['success' => false, 'restricted' => $restricted, 'skipped' => $skipped, 'queued' => $queued, 'errors' => $errors, 'error' => $e->getMessage(), 'duration' => $duration];
         }
+    }
+
+    /**
+     * Restrict on RADIUS the accounts billing already withholds but RADIUS still serves.
+     *
+     * The two drift apart because ManualRadiusOperationsService::restrictedUser() writes the
+     * Restricted billing status even when the RADIUS change failed, and a queued retry that never
+     * succeeds is eventually marked failed and dropped. A reconnect made directly on the router
+     * leaves the same mismatch. The prepaid sweep above only selects Active accounts, so without
+     * this the customer stays shown RESTRICTED while still online.
+     *
+     * Candidates:
+     *   - any account whose billing status is Restricted;
+     *   - prepaid accounts past their expiry whose billing status already withholds service
+     *     (SERVICE_WITHHELD_STATUSES — usually Inactive, what the sweep sets).
+     * They come from online_status (the 2-minute sync) to keep the list short; each one is then
+     * checked on the live RADIUS servers by {@see restrictOnRadiusOnly()} before anything changes:
+     *   - already Restricted / Disconnected on RADIUS — skipped, the sync has not caught up;
+     *   - not found on any server — reported only: the username needs fixing by hand;
+     *   - in a plan group — restricted on RADIUS (group moved, session cut). The billing status is
+     *     kept and no SMS is sent, as the customer was already treated as restricted.
+     * Accounts with a restrict already waiting in the RADIUS queue are left to the queue.
+     *
+     * Runs at the end of every prepaid sweep (02:00 and the 12:00 retry).
+     *
+     * @return array{enforced:int, already_restricted:int, not_in_radius:int, queued:int, skipped:int, errors:array}
+     */
+    public function enforceRestrictedInRadius(): array
+    {
+        $stats = ['enforced' => 0, 'already_restricted' => 0, 'not_in_radius' => 0, 'queued' => 0, 'skipped' => 0, 'errors' => []];
+
+        $this->writeLog("");
+        $this->writeLog("[ENFORCE] Withheld in billing but not restricted on RADIUS — checking...");
+
+        try {
+            $withheldStatusIds = DB::table('billing_status')
+                ->whereIn('status_name', self::SERVICE_WITHHELD_STATUSES)
+                ->pluck('id', 'status_name');
+            if ($withheldStatusIds->isEmpty()) {
+                $this->writeLog("[ENFORCE] None of the withheld billing statuses exist — nothing to check.");
+                return $stats;
+            }
+            $restrictedStatusId = $withheldStatusIds['Restricted'] ?? null;
+            $restrictFrom = self::prepaidRestrictFrom(Carbon::now());
+
+            $accounts = BillingAccount::with(['technicalDetails', 'billingStatus'])
+                ->where(function ($q) use ($restrictedStatusId, $withheldStatusIds, $restrictFrom) {
+                    if ($restrictedStatusId) {
+                        $q->where('billing_status_id', $restrictedStatusId);
+                    }
+                    $q->orWhere(function ($prepaid) use ($withheldStatusIds, $restrictFrom) {
+                        $prepaid->whereIn('generation_type', BillingAccount::PREPAID_ALIASES)
+                            ->whereIn('billing_status_id', $withheldStatusIds->values())
+                            ->whereNotNull('prepaid_expires_at')
+                            ->where('prepaid_expires_at', '<', $restrictFrom);
+                    });
+                })
+                ->whereDoesntHave('onlineStatus', function ($q) {
+                    $q->whereIn('session_status', ['Restricted', 'Disconnected']);
+                })
+                ->get();
+
+            $total = $accounts->count();
+            $this->writeLog("[ENFORCE] {$total} candidate(s) from online_status.");
+
+            if ($total === 0) {
+                return $stats;
+            }
+
+            if (!$this->isRadiusReachable()) {
+                $this->writeLog("[ENFORCE] RADIUS unreachable — skipping; the next sweep tries again.");
+                $stats['skipped'] = $total;
+                return $stats;
+            }
+
+            foreach ($accounts as $account) {
+                $accountNo = $account->account_no;
+
+                try {
+                    $username = trim((string) optional($account->technicalDetails->first())->username);
+                    if ($username === '') {
+                        $stats['skipped']++;
+                        $this->writeLog("  [ENFORCE] {$accountNo}: no PPPoE username — skipped");
+                        continue;
+                    }
+
+                    $pendingQueued = DB::table('radius_operation_queue')
+                        ->where('account_no', $accountNo)
+                        ->where('operation', 'restricted_user')
+                        ->whereIn('status', ['pending', 'processing'])
+                        ->exists();
+                    if ($pendingQueued) {
+                        $stats['skipped']++;
+                        $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): restrict already queued — left to the queue");
+                        continue;
+                    }
+
+                    $billingStatus = (string) optional($account->billingStatus)->status_name;
+                    $check = $this->restrictOnRadiusOnly($accountNo, $username, $billingStatus, self::RESTRICTION_ENFORCEMENT_REMARKS);
+
+                    switch ($check['outcome']) {
+                        case 'restricted':
+                            $stats['enforced']++;
+                            $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): ✓ was '{$check['group']}' on RADIUS — restricted (billing left {$billingStatus})");
+                            \Log::channel('radiusrelated')->info("[ENFORCE RESTRICTED] {$accountNo} ({$username}) moved from '{$check['group']}' to Restricted on RADIUS (billing {$billingStatus}).");
+                            break;
+                        case 'already_restricted':
+                            $stats['already_restricted']++;
+                            $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): already '{$check['group']}' on RADIUS — online status not yet synced");
+                            break;
+                        case 'not_in_radius':
+                            $stats['not_in_radius']++;
+                            $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): NOT FOUND on any RADIUS server — fix the username or create the user");
+                            \Log::channel('radiusrelated')->warning("[ENFORCE RESTRICTED] {$accountNo} ({$username}) is {$billingStatus} in billing but not found on any RADIUS server.");
+                            break;
+                        case 'unreachable':
+                            $stats['skipped']++;
+                            $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): RADIUS unreachable — skipped");
+                            break;
+                        default:
+                            $this->writeLog("  [ENFORCE] {$accountNo} ({$username}): ✗ restrict failed: {$check['reason']}");
+                            $this->queueRadiusOperation(
+                                $account,
+                                $username,
+                                $accountNo,
+                                'restricted_user',
+                                self::RESTRICTION_ENFORCEMENT_REMARKS,
+                                'RADIUS restrict failed during restriction enforcement: ' . $check['reason'],
+                                $billingStatus
+                            );
+                            $stats['queued']++;
+                    }
+                } catch (Throwable $e) {
+                    $stats['errors'][] = "Account {$accountNo}: " . $e->getMessage();
+                    $this->writeLog("  [ENFORCE] {$accountNo}: ✗ ERROR (isolated, continuing): " . $e->getMessage());
+                }
+            }
+        } catch (Throwable $e) {
+            $stats['errors'][] = $e->getMessage();
+            $this->writeLog("[ENFORCE] ✗ Pass failed: " . $e->getMessage());
+        }
+
+        $this->writeLog(sprintf(
+            "[ENFORCE] Summary: Enforced %d, Already restricted %d, Not in RADIUS %d, Queued %d, Skipped %d, Errors %d",
+            $stats['enforced'],
+            $stats['already_restricted'],
+            $stats['not_in_radius'],
+            $stats['queued'],
+            $stats['skipped'],
+            count($stats['errors'])
+        ));
+
+        return $stats;
+    }
+
+    /**
+     * Bring RADIUS in line with a billing status that already withholds service, and nothing
+     * else: no fee, no billing status change, no SMS or email.
+     *
+     * Checks the live RADIUS servers first:
+     *   'already_restricted'  the user sits in Restricted / Disconnected — nothing to do;
+     *   'restricted'          the user was in a plan group and has now been restricted;
+     *   'not_in_radius'       no server has the username — a restrict cannot succeed;
+     *   'unreachable'         RADIUS could not be checked;
+     *   'failed'              the restrict was refused (see 'reason').
+     *
+     * restrictedUser() writes a billing status of its own (Restricted by default), so the
+     * account's current one is passed as dbStatus to leave it unchanged.
+     *
+     * @return array{outcome:string, group?:string, reason?:string}
+     */
+    private function restrictOnRadiusOnly(string $accountNo, string $username, string $billingStatus, string $remarks): array
+    {
+        if (!$this->isRadiusReachable()) {
+            return ['outcome' => 'unreachable'];
+        }
+
+        $group = $this->radiusService->findUserGroup($username);
+        if ($group === null) {
+            return ['outcome' => 'not_in_radius'];
+        }
+
+        $bareGroup = strtolower(trim(preg_replace('/^Mikrotik-Group:/i', '', $group)));
+        if (in_array($bareGroup, ['restricted', 'disconnected'], true)) {
+            return ['outcome' => 'already_restricted', 'group' => $group];
+        }
+
+        $result = $this->radiusService->restrictedUser([
+            'username' => $username,
+            'accountNumber' => $accountNo,
+            'remarks' => $remarks,
+            'updatedBy' => 'System',
+            'dbStatus' => $billingStatus,
+        ]);
+
+        return ($result['status'] ?? '') === 'success'
+            ? ['outcome' => 'restricted', 'group' => $group]
+            : ['outcome' => 'failed', 'group' => $group, 'reason' => $result['message'] ?? 'Unknown RADIUS error'];
     }
 
     /**
@@ -905,16 +1186,10 @@ class AutoDisconnectService
                 $this->writeLog("[ACCOUNT] {$accountNo}");
                 
                 try {
-                    // Check if pullout request already exists for this month
-                    $existingPullout = ServiceOrder::where('account_no', $accountNo)
-                        ->whereIn('concern', ['Pullout', 'For Pullout', 'for pullout'])
-                        ->whereNotIn('support_status', ['Closed', 'Cancelled'])
-                        ->whereMonth('created_at', Carbon::now()->month)
-                        ->whereYear('created_at', Carbon::now()->year)
-                        ->exists();
-
-                    if ($existingPullout) {
-                        $this->writeLog("  [SKIP] Pullout request already exists for this month");
+                    // An unfinished pullout service order — raised this month or any earlier one —
+                    // means the pullout is already under way: never raise a second.
+                    if ($this->hasOpenPullout($accountNo)) {
+                        $this->writeLog("  [SKIP] An open pullout service order already exists");
                         $this->writeLog("[{$counter}/{$totalCount}] ⊘ SKIPPED");
                         $skippedCount++;
                         continue;
@@ -1219,18 +1494,8 @@ class AutoDisconnectService
                         . " | days past due: {$dueDate->diffInDays(Carbon::now())}"
                     );
 
-                    // Dedup guard: a pullout that is still open (or has no status yet) blocks a new
-                    // one. NULL statuses are matched explicitly — `status NOT IN (...)` evaluates to
-                    // NULL for them in SQL, which would silently let duplicates through.
-                    $existingPullout = ServiceOrder::where('account_no', $accountNo)
-                        ->whereIn('concern', self::PULLOUT_CONCERNS)
-                        ->where(function ($query) {
-                            $query->whereNull('status')
-                                ->orWhereNotIn('status', self::PULLOUT_CLOSED_STATUSES);
-                        })
-                        ->exists();
-
-                    if ($existingPullout) {
+                    // Dedup guard: an unfinished pullout service order blocks a new one.
+                    if ($this->hasOpenPullout($accountNo)) {
                         $log("  [SKIP] An open pullout service order already exists");
                         $log("[{$counter}/{$totalCount}] ⊘ SKIPPED");
                         $skippedCount++;
@@ -1346,6 +1611,33 @@ class AutoDisconnectService
         $serviceOrder->save();
 
         return (int) $serviceOrder->id;
+    }
+
+    /**
+     * Does the account already have a pullout service order that is not finished?
+     *
+     * Shared by both pullout flows, so neither raises a second pullout while one is under way —
+     * whenever the first was raised, and whichever flow raised it. Finished means any status
+     * column says so (PULLOUT_DONE_*); a NULL column counts as not finished, through COALESCE,
+     * since `NOT IN` on NULL would otherwise drop the row and let a duplicate through.
+     */
+    private function hasOpenPullout(string $accountNo): bool
+    {
+        $notIn = function ($query, string $column, array $values): void {
+            $placeholders = implode(', ', array_fill(0, count($values), '?'));
+            $query->whereRaw("LOWER(TRIM(COALESCE({$column}, ''))) NOT IN ({$placeholders})", $values);
+        };
+
+        $query = ServiceOrder::where('account_no', $accountNo)
+            ->whereRaw(
+                "LOWER(TRIM(COALESCE(concern, ''))) IN (" . implode(', ', array_fill(0, count(self::PULLOUT_CONCERNS), '?')) . ")",
+                self::PULLOUT_CONCERNS
+            );
+        $notIn($query, 'support_status', self::PULLOUT_DONE_SUPPORT_STATUSES);
+        $notIn($query, 'visit_status', self::PULLOUT_DONE_VISIT_STATUSES);
+        $notIn($query, 'status', self::PULLOUT_DONE_STATUSES);
+
+        return $query->exists();
     }
 
     /**
@@ -1579,6 +1871,9 @@ class AutoDisconnectService
      * safe to run repeatedly. The queued payload carries everything the retry needs
      * (customer, operation, username/remarks payload) plus the failure reason and timestamps.
      *
+     * @param ?string $dbStatus Billing status the retried restrict writes, for an account whose
+     *                          status must not change (see restrictOnRadiusOnly()). Null keeps
+     *                          restrictedUser()'s default, Restricted.
      * @return bool True when a row was queued (or an equivalent one already exists); false on failure.
      */
     private function queueRadiusOperation(
@@ -1587,7 +1882,8 @@ class AutoDisconnectService
         string $accountNo,
         string $operation,
         string $remarks,
-        string $reason
+        string $reason,
+        ?string $dbStatus = null
     ): bool {
         try {
             // Dedup guard: skip if an identical operation is already waiting to run.
@@ -1613,7 +1909,7 @@ class AutoDisconnectService
                     'accountNumber' => $accountNo,
                     'remarks'       => $remarks,
                     'updatedBy'     => 'System',
-                ],
+                ] + ($dbStatus !== null && $dbStatus !== '' ? ['dbStatus' => $dbStatus] : []),
                 'last_error'      => $reason,
                 'created_by'      => 'System',
             ]);

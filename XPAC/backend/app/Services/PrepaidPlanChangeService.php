@@ -137,7 +137,7 @@ class PrepaidPlanChangeService
      *
      *   1. It paid at least one period of the plan — renews, even if a balance is still owed.
      *      A ₱1,000 top-up against a ₱1,120 first bill (plan + VAT) leaves ₱120 owing but buys
-     *      its 34 days; withholding them over the ₱120 gave the customer no days at all.
+     *      its 31 days; withholding them over the ₱120 gave the customer no days at all.
      *   2. It cleared the balance while the customer had NO active period — renews. This is a
      *      bill paid in parts (₱600 + ₱520 of a ₱1,120 first bill): the part that settles it
      *      starts the period.

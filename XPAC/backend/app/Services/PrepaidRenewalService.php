@@ -22,22 +22,22 @@ use Carbon\Carbon;
 class PrepaidRenewalService
 {
     /**
-     * Length of one prepaid service period, in days: 30 days of service plus a built-in 4-day
-     * grace, so there is no separate grace after expiry (AutoDisconnectService::PREPAID_GRACE_DAYS
-     * is 0 and restricts as soon as the days left reach 0).
+     * Length of one prepaid service period (one top-up), in days. There is no separate grace
+     * after expiry (AutoDisconnectService::PREPAID_GRACE_DAYS is 0 and restricts as soon as the
+     * days left reach 0).
      */
-    public const PREPAID_PERIOD_DAYS = 34;
+    public const PREPAID_PERIOD_DAYS = 31;
 
     /**
-     * A FRESH period counts the payment day itself as day 1, so its expiry is payment date + 33.
+     * A FRESH period counts the payment day itself as day 1, so its expiry is payment date + 30.
      *
      * Service runs through the whole expiry date (restriction starts the day after — see
      * AutoDisconnectService::prepaidRestrictionDue()), and the Customer page counts "days left"
-     * the same way. With +34 a top-up on 09/30 expired 11/03: 09/30..11/03 is 35 days of service,
-     * shown as "35 days left". With +33 it is 09/30..11/02 — exactly 34 days, shown as 34.
+     * the same way. With +31 a top-up on 09/30 would expire 10/31: 09/30..10/31 is 32 days of
+     * service, shown as "32 days left". With +30 it is 09/30..10/30 — exactly 31 days, shown as 31.
      *
      * An EXTENSION (topping up while still active) keeps +PREPAID_PERIOD_DAYS: the current
-     * expiry day is already counted in the remaining days, so adding 34 adds exactly 34.
+     * expiry day is already counted in the remaining days, so adding 31 adds exactly 31.
      */
     private function freshPeriodExpiry(Carbon $paymentDate, int $periods = 1): Carbon
     {
@@ -51,8 +51,8 @@ class PrepaidRenewalService
      *
      * Rules (see spec):
      *   - Still active (prepaid_expires_at is in the future relative to the payment): EXTEND from
-     *     the current expiry (+34 days) so an early payer never loses their remaining days.
-     *   - Expired or never set (null / in the past): start a FRESH 34-day period from the
+     *     the current expiry (+31 days) so an early payer never loses their remaining days.
+     *   - Expired or never set (null / in the past): start a FRESH 31-day period from the
      *     payment date.
      *   - $activateNow: start a fresh period from the payment date REGARDLESS, forfeiting any
      *     remaining days. See the parameter note below.
@@ -63,7 +63,7 @@ class PrepaidRenewalService
      *   Forfeiting days for a same-plan top-up would be pure loss to the customer.
      * @param int $periods Advance payment: how many periods this payment buys (1, 2, 3 or 5
      *   months from the customer dashboard). Each is PREPAID_PERIOD_DAYS, so 3 periods extend an
-     *   active account by 102 days, or start a fresh 102-day window. Anything below 1 is treated as 1.
+     *   active account by 93 days, or start a fresh 93-day window. Anything below 1 is treated as 1.
      *
      * @return array{prepaid:bool, mode?:string, previous_expiry?:?string, new_expiry?:string, forfeited_days?:int, error?:string}
      */
@@ -109,7 +109,7 @@ class PrepaidRenewalService
             $mode = 'activated';
         } elseif ($current && $current->greaterThan($paymentDate)) {
             // Early payment while still active — extend from the EXISTING expiry, preserving
-            // every remaining prepaid day (e.g. expiry Jul 31 + pay Jul 20 => Aug 30).
+            // every remaining prepaid day (e.g. expiry Jul 31 + pay Jul 20 => Aug 31).
             $newExpiry = $current->copy()->addDays(self::PREPAID_PERIOD_DAYS * $periods);
             $mode = 'extended';
         } else {

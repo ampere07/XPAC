@@ -263,7 +263,7 @@ class PaymentWorkerService
             // Postpaid -> prepaid switch: inside this transaction, BEFORE the balance is read for
             // the settlement decision below — the plan part of the payment is credit on a postpaid
             // account and becomes the prepaid period once switched, so the balance reads 0 and the
-            // fresh 34-day period is granted further down.
+            // fresh 31-day period is granted further down.
             if ($result['success'] && $migrateTo === \App\Services\BillingTypeMigrationService::TO_PREPAID) {
                 app(\App\Services\BillingTypeMigrationService::class)->toPrepaid($accountNo, $ref);
                 $this->workerLog("Ref $ref: account switched to prepaid");

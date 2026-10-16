@@ -81,7 +81,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
     // (server-side — see CheckoutDiscountService). Fetched when the pay modal opens. 0 = none.
     const [availableDiscount, setAvailableDiscount] = useState<number>(0);
     // Prepaid-only advance payment: how many periods to buy at once. 1 = an ordinary top-up; the
-    // amount becomes plan price × months and the expiry moves by 34 × months days.
+    // amount becomes plan price × months and the expiry moves by 31 × months days.
     const [advanceMonths, setAdvanceMonths] = useState<number>(1);
     // Billing type switch chosen at Pay Now. null = stay on the current type. Carried with the
     // payment and applied by the server only once it settles (BillingTypeMigrationService).
@@ -1027,7 +1027,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                     {migrateTo === 'prepaid' && (
                                         <p className="text-xs text-gray-600 mt-2">
                                             {currentPlan
-                                                ? <>You pay ₱{formatPeso(switchToPrepaidAmount)}: one period of {currentPlan.name} (₱{formatPeso(Number(currentPlan.price ?? 0))}){balance > 0 ? ` plus your ₱${formatPeso(balance)} balance` : balance < 0 ? ` less your ₱${formatPeso(-balance)} credit` : ''}. Your 34 prepaid days start once the payment is confirmed, and monthly bills stop.</>
+                                                ? <>You pay ₱{formatPeso(switchToPrepaidAmount)}: one period of {currentPlan.name} (₱{formatPeso(Number(currentPlan.price ?? 0))}){balance > 0 ? ` plus your ₱${formatPeso(balance)} balance` : balance < 0 ? ` less your ₱${formatPeso(-balance)} credit` : ''}. Your 31 prepaid days start once the payment is confirmed, and monthly bills stop.</>
                                                 : 'Your current plan could not be found, so the switch cannot be made online. Please contact support.'}
                                         </p>
                                     )}
@@ -1161,7 +1161,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                                 {activateNow ? (
                                                     <div className="mt-2 rounded border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                                                         <strong>Heads up:</strong> {selectedPlan?.name} starts as soon as
-                                                        your payment is confirmed and your service period resets to {34 * advanceMonths} days
+                                                        your payment is confirmed and your service period resets to {31 * advanceMonths} days
                                                         from today. You will lose the{' '}
                                                         {prepaidDaysLeft !== null && prepaidDaysLeft > 0
                                                             ? `${prepaidDaysLeft} day${prepaidDaysLeft === 1 ? '' : 's'}`
@@ -1179,7 +1179,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
 
                                         {/* Advance payment: buy several periods at once. The amount
                                             becomes plan price × months and the expiry moves by
-                                            34 × months days, stacked onto any days still left. */}
+                                            31 × months days, stacked onto any days still left. */}
                                         {canPayAdvance && (
                                             <div className="mt-3 pt-3 border-t border-gray-200">
                                                 <p className="text-sm font-medium text-gray-700 mb-2">Pay in advance</p>
@@ -1206,7 +1206,7 @@ const DashboardCustomer: React.FC<DashboardCustomerProps> = ({ onNavigate, autoO
                                                 {advanceMonths > 1 && selectedPlan && (
                                                     <p className="text-xs text-gray-500 mt-2">
                                                         ₱{formatPeso(Number(selectedPlan.price ?? 0))} × {advanceMonths} months
-                                                        = ₱{formatPeso(Number(selectedPlan.price ?? 0) * advanceMonths)} · adds {34 * advanceMonths} days
+                                                        = ₱{formatPeso(Number(selectedPlan.price ?? 0) * advanceMonths)} · adds {31 * advanceMonths} days
                                                         {isPrepaidPeriodActive ? ' on top of your remaining days' : ''}
                                                     </p>
                                                 )}

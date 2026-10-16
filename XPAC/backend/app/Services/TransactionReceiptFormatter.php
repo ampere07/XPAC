@@ -219,8 +219,8 @@ class TransactionReceiptFormatter
      * pre-approval expiry and balance, which are the only inputs the rules depend on:
      *   - no renewal unless the payment cleared the balance or covered the plan price
      *     (PrepaidPlanChangeService::qualifiesForRenewal);
-     *   - still active at payment time -> extended: day after the old expiry, +34 days total;
-     *   - lapsed, never set, or a genuine Activate Now plan switch -> fresh: payment day + 33.
+     *   - still active at payment time -> extended: day after the old expiry, +31 days total;
+     *   - lapsed, never set, or a genuine Activate Now plan switch -> fresh: payment day + 30.
      *
      * Postpaid: the billing cycles of the invoices this payment settled. An invoice is dated at
      * the END of its cycle (see EnhancedBillingGenerationService::calculateProrateAmount), so an

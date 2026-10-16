@@ -213,7 +213,7 @@ class XenditPaymentController extends Controller
             }
 
             // Prepaid advance payment: buy 2, 3 or 5 periods at once (₱1,000 plan × 3 = ₱3,000,
-            // expiry +34 × 3 days). Only on a plan purchase — "Pay Current Balance" and an unpaid
+            // expiry +31 × 3 days). Only on a plan purchase — "Pay Current Balance" and an unpaid
             // onboarding bill pay one existing bill, not periods.
             //
             // The amount is checked against plan price × months rather than trusted: the months
@@ -445,7 +445,7 @@ class XenditPaymentController extends Controller
 
             // Advance months ride in the invoice metadata, which is stored with the row in
             // json_payload: PaymentWorkerService reads it back at settlement to grant
-            // advance_months × 34 days. Omitted for an ordinary one-period top-up.
+            // advance_months × 31 days. Omitted for an ordinary one-period top-up.
             $metadata = [];
             if ($advanceMonths > 1) {
                 $metadata['advance_months'] = $advanceMonths;

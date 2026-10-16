@@ -40,6 +40,9 @@ class RestrictExpiredPrepaid extends Command
                 ['Restricted', $result['restricted']],
                 ['Queued', $result['queued']],
                 ['Skipped', $result['skipped']],
+                ['Restricted on RADIUS only', $result['enforcement']['enforced'] ?? 0],
+                ['Already restricted on both', $result['enforcement']['already_restricted'] ?? 0],
+                ['Not found on RADIUS', $result['enforcement']['not_in_radius'] ?? 0],
                 ['Duration', $result['duration'] . 's'],
             ]
         );

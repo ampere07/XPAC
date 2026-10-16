@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
  * the request is valid for the account and that the amount covers what the switch requires.
  *
  *   To prepaid   The payment covered the postpaid balance plus one period of the plan. The
- *                balance is cleared, the leftover is that period, and the 34-day prepaid window
+ *                balance is cleared, the leftover is that period, and the 31-day prepaid window
  *                starts on the payment date (the caller renews right after).
  *   To postpaid  The prepaid days already paid for are kept. billing_day becomes the day the
  *                prepaid period ends, and billing generation skips any cycle that would start

@@ -90,6 +90,7 @@ class ProcessAutoDisconnectPullout extends Command
                         ['Metric', 'Count'],
                         [
                             ['Processed', $dcResult['processed']],
+                            ['Restricted on RADIUS only', $dcResult['radius_only'] ?? 0],
                             ['Skipped', $dcResult['skipped']],
                             ['Duration', $dcResult['duration'] . 's']
                         ]
@@ -160,6 +161,9 @@ class ProcessAutoDisconnectPullout extends Command
                             ['Restricted', $prepaidResult['restricted']],
                             ['Queued', $prepaidResult['queued']],
                             ['Skipped', $prepaidResult['skipped']],
+                            ['Restricted on RADIUS only', $prepaidResult['enforcement']['enforced'] ?? 0],
+                            ['Already restricted on both', $prepaidResult['enforcement']['already_restricted'] ?? 0],
+                            ['Not found on RADIUS', $prepaidResult['enforcement']['not_in_radius'] ?? 0],
                             ['Duration', $prepaidResult['duration'] . 's']
                         ]
                     );

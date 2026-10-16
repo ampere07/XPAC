@@ -1108,7 +1108,7 @@ class TransactionController extends Controller
      * Needed because attemptReconnectionAfterApproval() runs AFTER the approval commits
      * and changes fields nothing else recorded, leaving a revert unable to undo them:
      *
-     *   PrepaidRenewalService     moves prepaid_expires_at forward (+30 days)
+     *   PrepaidRenewalService     moves prepaid_expires_at forward (+31 days per top-up)
      *   PrepaidPlanChangeService  either switches plan_id immediately, or queues the
      *                             switch via pending_plan_id / pending_plan_effective_at
      *

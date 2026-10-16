@@ -545,7 +545,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
   };
 
   /**
-   * Prepaid accounts have no billing day: they are billed on a rolling 34-day period that starts
+   * Prepaid accounts have no billing day: they are billed on a rolling 31-day period that starts
    * when they pay, and are excluded from the fixed-billing-day generator entirely. So the Billing
    * Day field is hidden and not required for them.
    *
@@ -1287,7 +1287,7 @@ const JOAssignFormModal: React.FC<JOAssignFormModalProps> = ({
                     ? 'text-gray-400 border-gray-700 bg-gray-800'
                     : 'text-gray-500 border-gray-300 bg-gray-50'
                     }`}>
-                    Not applicable to prepaid accounts — billing runs on a rolling 34-day period
+                    Not applicable to prepaid accounts — billing runs on a rolling 31-day period
                     that starts when the customer pays.
                   </p>
                 </div>
