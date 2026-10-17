@@ -25,8 +25,12 @@ jest.mock('../config/api', () => ({
   API_BASE_URL: '',
 }));
 
-const signInAs = (roleId: number, role: string) =>
-  localStorage.setItem('authData', JSON.stringify({ id: 1, role, role_id: roleId, email_address: 'approver@example.com' }));
+// `can_approve_transactions` is the server's answer (Permissions::canApproveTransactions): the
+// designated approver among Administrators. The SuperAdmin approves without it.
+const signInAs = (roleId: number, role: string, extra: Record<string, unknown> = {}) =>
+  localStorage.setItem('authData', JSON.stringify({ id: 1, role, role_id: roleId, email_address: 'approver@example.com', ...extra }));
+
+const signInAsApprover = () => signInAs(1, 'administrator', { can_approve_transactions: true });
 
 const pendingTransaction: ForApprovalRecord = {
   category: 'transactions',
@@ -67,7 +71,7 @@ afterEach(() => {
 });
 
 test('approves a pending transaction through the Transaction List approval', async () => {
-  signInAs(1, 'administrator');
+  signInAsApprover();
   (transactionService.approveTransaction as jest.Mock).mockResolvedValue({ success: true, data: {} });
   const onApproved = renderPanel(pendingTransaction);
 
@@ -82,7 +86,7 @@ test('approves a pending transaction through the Transaction List approval', asy
 });
 
 test('shows the server refusal and does not report an approval', async () => {
-  signInAs(1, 'administrator');
+  signInAsApprover();
   (transactionService.approveTransaction as jest.Mock).mockResolvedValue({
     success: false, message: 'Only pending transactions can be approved',
   });
@@ -124,6 +128,18 @@ test('draws no Approve button for a role without the approve key', () => {
   signInAs(2, 'technician');
   renderPanel(pendingTransaction);
   expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull();
+});
+
+test('draws no transaction Approve button for an Administrator who is not the designated approver', () => {
+  signInAs(1, 'administrator');
+  renderPanel(pendingTransaction);
+  expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull();
+});
+
+test('draws the transaction Approve button for the SuperAdmin without the flag', () => {
+  signInAs(7, 'superadmin');
+  renderPanel(pendingTransaction);
+  expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
 });
 
 test('draws no Approve button for a job order whose billing is already Done', () => {

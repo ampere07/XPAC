@@ -208,7 +208,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
   const [invoicesCount, setInvoicesCount] = useState(0);
   const [expandedModalSection, setExpandedModalSection] = useState<string | null>(null);
 
-  const { can } = usePermissions();
+  // canApproveTransactions: Approve is the SuperAdmin's and the configured approvers' only.
+  const { can, canApproveTransactions } = usePermissions();
 
   // One answer for every role, from config/permissions.ts: the seeded role's
   // table (as the web draws it) or a custom role's server-resolved list.
@@ -791,7 +792,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           </div>
 
           <div className="flex items-center space-x-3">
-            {canApproveTransaction(transaction.status, hasPermission) && (
+            {canApproveTransaction(transaction.status, hasPermission, canApproveTransactions) && (
               <button
                 onClick={handleApproveTransaction}
                 disabled={loading}

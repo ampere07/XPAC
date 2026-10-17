@@ -260,7 +260,9 @@ const TransactionFormModal: React.FC<TransactionFormModalProps> = memo(({
   // stops it. Postpaid never gets a picker at all; its plan field stays read-only.
   const showPlanPicker = isPrepaid && formData.transactionType === 'Top Up';
   const showActivateNow = showPlanPicker && isPlanSwitch;
-  const hidesReceiptNumbers = isTechnicianUser && isCashPaymentMethod(formData.paymentMethod);
+  // A Cash payment has no Reference No. or OR No., whoever records it: both are hidden, not
+  // required, and sent empty. The server drops them for Cash as well (TransactionController).
+  const hidesReceiptNumbers = isCashPaymentMethod(formData.paymentMethod);
   const referenceNoLabel = referenceNumberLabel(formData.paymentMethod);
 
   // ── Prepaid discount / rebate, as Pay Now on the customer dashboard ─────────

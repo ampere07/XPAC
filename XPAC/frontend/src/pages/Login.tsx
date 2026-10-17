@@ -118,6 +118,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           permissions_resolved: Object.prototype.hasOwnProperty.call(response.data.user, 'home'),
           // A custom role saved before per-action keys existed (bell shortcuts).
           permissions_legacy: response.data.user.permissions_legacy === true,
+          // Approve / Batch Approve on transactions — the server's decision, see canApproveTransactions.
+          can_approve_transactions: response.data.user.can_approve_transactions === true,
           organization: response.data.user.organization
         };
         setShowForceLoginModal(false);

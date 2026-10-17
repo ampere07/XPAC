@@ -21,6 +21,9 @@ use Illuminate\Support\Facades\Auth;
 
 class ServiceOrderApiController extends Controller
 {
+    /** The concern whose Resolved save changes the account's PPPoE credentials (applyPppoeUpdate()). */
+    private const PPPOE_UPDATE_CONCERN = 'PPPoE Update';
+
     /** True when at least one failed RADIUS operation was successfully queued for retry. */
     private bool $radiusQueued = false;
 
@@ -115,31 +118,13 @@ class ServiceOrderApiController extends Controller
                 $limit = $request->input('limit', 1000);
             }
 
-            $userRole = strtolower($request->query('user_role', ''));
-            $userEmail = $request->query('user_email', '');
-
-            if ($userRole === 'agent' && $userEmail) {
-                $user = DB::table('users')->where('email_address', $userEmail)->first();
-                if ($user) {
-                    $agentName = trim($user->first_name . ' ' . ($user->middle_initial ? $user->middle_initial . ' ' : '') . $user->last_name);
-
-                    // A referral made through the agent picker is stored as the
-                    // agent's user id, which holds none of their name — matched
-                    // alongside the name so both forms reach the same agent.
-                    $tagged = \App\Support\AgentReferral::encode($user->id ?? null);
-
-                    $query->where(function ($q) use ($agentName, $tagged) {
-                        $q->where('so.referred_by', 'LIKE', '%' . $agentName . '%');
-                        if ($tagged !== null) {
-                            $q->orWhere('so.referred_by', $tagged);
-                        }
-                    });
-
-                    \Log::info('Filtering service orders for agent role using referred_by column', [
-                        'agent_name' => $agentName,
-                        'agent_email' => $userEmail
-                    ]);
-                }
+            // An agent sees the service orders of every account whose customer they referred,
+            // whoever raised them (AgentScope) — their Support page. Decided from the signed-in
+            // user: the filter this replaces was switched on by user_role / user_email query
+            // parameters, so it held only for clients that chose to send them, and it read
+            // service_orders.referred_by, which tickets are not stamped with.
+            if (\App\Support\AgentScope::isAgent($authUser)) {
+                $query->whereIn('so.account_no', \App\Support\AgentScope::referredAccountNumbers($authUser));
             }
 
             // Handle Search
@@ -271,6 +256,14 @@ class ServiceOrderApiController extends Controller
                 return $so;
             });
 
+            // Agents raise and follow tickets; the accounts' PPPoE passwords are not theirs to read.
+            if (\App\Support\AgentScope::isAgent($authUser)) {
+                $mappedOrders = $mappedOrders->map(function ($so) {
+                    $so->pppoe_password = null;
+                    return $so;
+                });
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => $mappedOrders->values(),
@@ -331,10 +324,38 @@ class ServiceOrderApiController extends Controller
 
             // Rate limit and cooldown logic has been removed as per request to allow unlimited ticket submissions.
 
+            // An agent (their Support page) raises a ticket only for a customer they referred, and
+            // only as a plain request — Pending, recorded as themselves, none of the staff fields —
+            // the same ticket a customer's own Support page raises. Checked here, not only by the
+            // account list the form offers.
+            $authUser = auth()->user();
+            $isAgent = \App\Support\AgentScope::isAgent($authUser);
+            if ($isAgent) {
+                if (!\App\Support\AgentScope::ownsAccount($authUser, $validated['account_no'])) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'You can only raise a support ticket for a customer you referred.',
+                        'errors' => ['account_no' => ['Select the account of a customer you referred.']],
+                    ], 403);
+                }
+
+                $agentEmail = \App\Support\AgentScope::email($authUser);
+                $validated = [
+                    'account_no' => $validated['account_no'],
+                    'concern' => $validated['concern'],
+                    'concern_remarks' => $validated['concern_remarks'] ?? null,
+                    'support_status' => 'Pending',
+                    'visit_status' => 'Pending',
+                    'requested_by' => $agentEmail,
+                    'created_by_user' => $agentEmail,
+                ];
+            }
+
             // One open service order per customer, for callers that ask for it: the staff SO
-            // Request form and the customer's Support page send reject_if_open.
+            // Request form and the customer's Support page send reject_if_open. Always for an
+            // agent, as on the customer's page.
             // `open_service_order` names the blocking ticket so a client can word its own notice.
-            if ($request->boolean('reject_if_open')) {
+            if ($request->boolean('reject_if_open') || $isAgent) {
                 $open = $this->openServiceOrderFor($validated['account_no']);
 
                 if ($open) {
@@ -398,8 +419,8 @@ class ServiceOrderApiController extends Controller
                 'end_time' => $validated['end_time'] ?? null,
                 'created_by_user' => $validated['created_by_user'] ?? null,
                 'updated_by_user' => $validated['updated_by_user'] ?? null,
-                'proof_image_url' => $request->input('proof_image_url'),
-                'image4' => $request->input('image4') ?? ($validated['image4'] ?? null),
+                'proof_image_url' => $isAgent ? null : $request->input('proof_image_url'),
+                'image4' => $isAgent ? null : ($request->input('image4') ?? ($validated['image4'] ?? null)),
                 'organization_id' => auth()->user() ? auth()->user()->organization_id : null,
                 'created_at' => now(),
                 'updated_at' => now()
@@ -417,9 +438,10 @@ class ServiceOrderApiController extends Controller
                 'inserted_data' => (array)$serviceOrder
             ]);
 
-            // Trigger Reconnection if concern is 'Reconnect'
-            $currentConcern = trim($request->input('concern'));
-            $supportStatus = strtolower(trim($request->input('support_status') ?? ''));
+            // Trigger Reconnection if concern is 'Reconnect'. Read from what was saved, not the raw
+            // request, so an agent's forced Pending can never be bypassed into a reconnect.
+            $currentConcern = trim((string) ($validated['concern'] ?? ''));
+            $supportStatus = strtolower(trim((string) ($validated['support_status'] ?? '')));
 
             \Log::info('Reconnection check (store) debug:', [
                 'current_concern' => $currentConcern,
@@ -484,6 +506,47 @@ class ServiceOrderApiController extends Controller
                 'success' => false,
                 'message' => 'Failed to create service order',
                 'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * The accounts an agent may raise a support ticket for: the account number and customer name
+     * of every customer they referred (AgentScope::referredAccountNumbers()). Feeds the Account
+     * No. field of an agent's Support page; store() applies the same rule to what is submitted.
+     *
+     * Its own endpoint rather than GET billing: that list is closed to agents in
+     * ApiPermissionMap, since its scope=all would hand them every account.
+     */
+    public function agentAccounts(): JsonResponse
+    {
+        $authUser = auth()->user();
+        if (!\App\Support\AgentScope::isAgent($authUser)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only agents choose an account here; everyone else raises tickets for their own account.'
+            ], 403);
+        }
+
+        try {
+            $accounts = DB::table('billing_accounts as ba')
+                ->join('customers as c', 'c.id', '=', 'ba.customer_id')
+                ->whereIn('ba.account_no', \App\Support\AgentScope::referredAccountNumbers($authUser))
+                ->orderBy('ba.account_no')
+                ->get(['ba.account_no', 'c.first_name', 'c.middle_initial', 'c.last_name'])
+                ->map(fn ($row) => [
+                    'account_no' => (string) $row->account_no,
+                    'customer_name' => trim(preg_replace('/\s+/', ' ', ($row->first_name ?? '') . ' ' . ($row->middle_initial ?? '') . ' ' . ($row->last_name ?? ''))),
+                ])
+                ->values();
+
+            return response()->json(['success' => true, 'data' => $accounts]);
+        } catch (\Exception $e) {
+            Log::error('Failed to load agent support accounts: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to load your customers\' accounts'
             ], 500);
         }
     }
@@ -598,11 +661,22 @@ class ServiceOrderApiController extends Controller
 
             $serviceOrder = $query->first();
 
+            // An agent opens only the service orders of customers they referred, as index() lists.
+            $isAgent = \App\Support\AgentScope::isAgent($authUser);
+            if ($serviceOrder && $isAgent && !\App\Support\AgentScope::ownsAccount($authUser, $serviceOrder->account_no)) {
+                $serviceOrder = null;
+            }
+
             if (!$serviceOrder) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Service order not found or unauthorized access'
                 ], 404);
+            }
+
+            // Agents raise and follow tickets; the account's PPPoE password is not theirs to read.
+            if ($isAgent) {
+                $serviceOrder->pppoe_password = null;
             }
 
             if (!$serviceOrder) {
@@ -642,13 +716,23 @@ class ServiceOrderApiController extends Controller
         try {
             Log::info('Service order update request', [
                 'id' => $id,
-                'data' => $request->all()
+                // A PPPoE Update carries the new password; it never goes to the log.
+                'data' => $request->except(['pppoe_password'])
+                    + ($request->has('pppoe_password') ? ['pppoe_password' => '(hidden)'] : [])
             ]);
 
             $authUser = auth()->user();
             $organizationId = $authUser ? $authUser->organization_id : null;
             $roleId = $authUser ? $authUser->role_id : null;
             $isSuperAdmin = !$authUser || $roleId == 7 || !$organizationId;
+
+            // Agents raise and follow support tickets (store / index); working them is staff's.
+            if (\App\Support\AgentScope::isAgent($authUser)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Agents can raise and view support tickets but cannot change them.'
+                ], 403);
+            }
 
             $serviceOrder = DB::table('service_orders')->where('id', $id)->first();
 
@@ -737,6 +821,24 @@ class ServiceOrderApiController extends Controller
             $data['updated_at'] = now();
 
             Log::info('Filtered data for update', ['data' => $data]);
+
+            // ── PPPoE Update: new credentials, before anything else is written ──
+            // A "PPPoE Update" order saved as Resolved changes the account's PPPoE username and
+            // password in RADIUS and technical_details. It runs ahead of every other write in this
+            // method — the plan change, the service charge, the order row itself — so a failure
+            // leaves the order un-resolved and nothing else touched.
+            $pppoeUpdateStatus = null;
+            $effectiveConcern = trim((string) ($request->has('concern') ? $request->input('concern') : ($serviceOrder->concern ?? '')));
+            $effectiveSupportStatus = strtolower(trim((string) ($request->has('support_status') ? $request->input('support_status') : ($serviceOrder->support_status ?? ''))));
+
+            if ($effectiveConcern === self::PPPOE_UPDATE_CONCERN && $effectiveSupportStatus === 'resolved') {
+                $wasResolved = strtolower(trim((string) ($serviceOrder->support_status ?? ''))) === 'resolved';
+                $pppoeOutcome = $this->applyPppoeUpdate($request, $serviceOrder, (string) $updatedByUser, !$wasResolved);
+                if ($pppoeOutcome instanceof JsonResponse) {
+                    return $pppoeOutcome;
+                }
+                $pppoeUpdateStatus = $pppoeOutcome;
+            }
 
             // Handle technical details update if new values are provided
             $hasNewTechnicalDetails =
@@ -1411,8 +1513,11 @@ class ServiceOrderApiController extends Controller
                         
                         $newVal = $table['new']->$key ?? null;
                         if ($oldVal != $newVal) {
-                            $oldDataToLog[$table['name']][$key] = $oldVal;
-                            $newDataToLog[$table['name']][$key] = $newVal;
+                            // Recorded as changed without the values, so the change log never
+                            // shows a password (as CustomerDetailUpdateController does).
+                            $isSecret = $key === 'pppoe_password';
+                            $oldDataToLog[$table['name']][$key] = $isSecret ? '(hidden)' : $oldVal;
+                            $newDataToLog[$table['name']][$key] = $isSecret ? '(changed)' : $newVal;
                         }
                     }
                 }
@@ -1474,6 +1579,7 @@ class ServiceOrderApiController extends Controller
                 'restricted_status' => $restrictedStatus,
                 'pullout_status' => $pulloutStatus,
                 'migration_status' => $migrationStatus,
+                'pppoe_update_status' => $pppoeUpdateStatus,
                 'radius_queued' => $this->radiusQueued,
                 'radius_queue_failed' => $this->radiusQueueFailed,
                 'radius_steps' => $this->radiusSteps
@@ -1736,6 +1842,122 @@ class ServiceOrderApiController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Apply a "PPPoE Update" service order: give the account the PPPoE username and password the
+     * request names, in RADIUS and in technical_details (ManualRadiusOperationsService::
+     * changePppoeCredentials(), RADIUS first, all or nothing).
+     *
+     * $required is true when this save moves the order to Resolved: the new credentials must then
+     * be in the request. Re-saving an order that is already Resolved applies them only if sent.
+     *
+     * Returns 'success', 'unchanged' (the account already has these credentials) or 'skipped'
+     * (already Resolved and none sent), or the error response to return as-is — in which case
+     * nothing has been changed and the order must not be saved. Never echoes the password.
+     *
+     * @return string|JsonResponse
+     */
+    private function applyPppoeUpdate(Request $request, object $serviceOrder, string $updatedByUser, bool $required)
+    {
+        $fail = fn (string $message, int $code = 422, array $extra = []) => response()->json(array_merge([
+            'success' => false,
+            'message' => $message,
+            'pppoe_update_status' => 'failed',
+        ], $extra), $code);
+
+        $sent = $request->has('pppoe_username') || $request->has('pppoe_password');
+        if (!$sent) {
+            return $required
+                ? $fail('A PPPoE Update can only be resolved with the new PPPoE username and password. Enter both and save again.', 422, [
+                    'errors' => ['pppoe_username' => ['PPPoE Username is required'], 'pppoe_password' => ['PPPoE Password is required']],
+                ])
+                : 'skipped';
+        }
+
+        $validator = \Illuminate\Support\Facades\Validator::make(
+            [
+                'pppoe_username' => trim((string) $request->input('pppoe_username')),
+                'pppoe_password' => trim((string) $request->input('pppoe_password')),
+            ],
+            [
+                'pppoe_username' => ['required', 'string', 'max:255', 'regex:/^\S+$/'],
+                'pppoe_password' => ['required', 'string', 'max:255'],
+            ],
+            [
+                'pppoe_username.required' => 'PPPoE Username is required',
+                'pppoe_username.regex' => 'PPPoE Username cannot contain spaces',
+                'pppoe_password.required' => 'PPPoE Password is required',
+            ]
+        );
+        if ($validator->fails()) {
+            return $fail('Check the PPPoE credentials: ' . implode(' ', $validator->errors()->all()), 422, ['errors' => $validator->errors()]);
+        }
+        $newUsername = $validator->validated()['pppoe_username'];
+        $newPassword = $validator->validated()['pppoe_password'];
+
+        $billingAccount = DB::table('billing_accounts')->where('account_no', $serviceOrder->account_no)->first();
+        if (!$billingAccount) {
+            return $fail('This service order is not linked to a billing account, so there are no PPPoE credentials to update.');
+        }
+
+        $technical = DB::table('technical_details')->where('account_id', $billingAccount->id)->first();
+        $currentUsername = $technical ? trim((string) $technical->username) : '';
+        if ($currentUsername === '') {
+            return $fail('This account has no PPPoE username in its technical details yet, so there is no RADIUS user to update.');
+        }
+
+        // The current password: technical_details, else the newest job order — as show() reads it.
+        $currentPassword = ($technical->pppoe_password ?? '') !== ''
+            ? (string) $technical->pppoe_password
+            : DB::table('job_orders')
+                ->where('account_id', $billingAccount->id)
+                ->whereNotNull('pppoe_password')
+                ->where('pppoe_password', '!=', '')
+                ->orderByDesc('id')
+                ->value('pppoe_password');
+
+        if ($newUsername === $currentUsername && $newPassword === (string) $currentPassword) {
+            return 'unchanged';
+        }
+
+        if ($newUsername !== $currentUsername) {
+            $taken = DB::table('technical_details')->where('username', $newUsername)->where('account_id', '!=', $billingAccount->id)->exists()
+                || DB::table('job_orders')->where('pppoe_username', $newUsername)->where(function ($q) use ($billingAccount) {
+                    $q->whereNull('account_id')->orWhere('account_id', '!=', $billingAccount->id);
+                })->exists();
+            if ($taken) {
+                return $fail("PPPoE Username '{$newUsername}' is already used by another account.", 422, [
+                    'errors' => ['pppoe_username' => ["'{$newUsername}' is already used by another account"]],
+                ]);
+            }
+        }
+
+        $result = app(ManualRadiusOperationsService::class)->changePppoeCredentials(
+            (int) $billingAccount->id,
+            (string) $serviceOrder->account_no,
+            $currentUsername,
+            $currentPassword !== null ? (string) $currentPassword : null,
+            $newUsername,
+            $newPassword,
+            $updatedByUser
+        );
+
+        if (($result['status'] ?? '') !== 'success') {
+            \Log::channel('radiusrelated')->error('[SERVICE ORDER PPPOE UPDATE FAILED] Account: ' . $serviceOrder->account_no
+                . " - User: '{$currentUsername}' -> '{$newUsername}' - Step: " . ($result['step'] ?? '?') . ' - ' . ($result['message'] ?? ''));
+
+            return $fail(
+                'PPPoE Update failed: ' . ($result['message'] ?? 'unknown error') . ' The service order was not saved.',
+                ($result['step'] ?? '') === 'radius' ? 502 : 500,
+                ['pppoe_update_step' => $result['step'] ?? null]
+            );
+        }
+
+        \Log::channel('radiusrelated')->info('[SERVICE ORDER PPPOE UPDATE] Account: ' . $serviceOrder->account_no
+            . " - User: '{$currentUsername}' -> '{$newUsername}' - updated in RADIUS and technical details");
+
+        return 'success';
     }
 
     private function attemptReconnection($billingAccount, $serviceOrderId = null, $updatedByUser = 'System', ?int $organizationId = null): string

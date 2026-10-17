@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   AuthLike,
   ROLE,
+  canApproveTransactions,
   homeSectionFor,
   permissionsAllow,
   permissionsFor,
@@ -28,6 +29,11 @@ export interface PermissionApi {
   isTechnician: boolean;
   isAgent: boolean;
   isCustomer: boolean;
+  /**
+   * May approve transactions (Approve / Batch Approve): the SuperAdmin and the approvers the
+   * server names. Drawn alongside the keys; see canApproveTransactions in config/permissions.ts.
+   */
+  canApproveTransactions: boolean;
   /** The section this user should land on. */
   home: string;
   /** False until authData has been read. */
@@ -93,6 +99,8 @@ export const usePermissions = (auth?: AuthLike | null): PermissionApi => {
       isTechnician: roleId === ROLE.TECHNICIAN,
       isAgent: roleId === ROLE.AGENT,
       isCustomer: roleId === ROLE.CUSTOMER,
+      // Approve / Batch Approve on transactions — SuperAdmin and the server's approvers only.
+      canApproveTransactions: canApproveTransactions(loaded),
       home: homeSectionFor(loaded),
       ready,
     }),

@@ -111,8 +111,9 @@ const ForApproval: React.FC = () => {
 
   // Batch approval of transactions, as on the Transaction List: same key, same endpoint. The
   // selection is kept across pages and searches; the header checkbox covers the page on screen.
-  const { can } = usePermissions();
-  const canBatchApprove = can('transaction-list.batch-approve');
+  // Only for an approver (the SuperAdmin or one the server names), not every holder of the key.
+  const { can, canApproveTransactions } = usePermissions();
+  const canBatchApprove = canApproveTransactions && can('transaction-list.batch-approve');
   const refreshLatestData = useBillingStore(state => state.refreshLatestData);
   const [isBatchApproveMode, setIsBatchApproveMode] = useState(false);
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<string[]>([]);

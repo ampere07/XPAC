@@ -104,6 +104,7 @@ import {
     parsePermissions,
     refreshPatch,
     roleIdOf,
+    ROLE,
 } from '../config/permissions';
 import apiClient from '../config/api';
 import { roleService } from '../services/userService';
@@ -390,7 +391,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             case 'customer-bills':
                 return <Bills initialTab={billsInitialTab} onNavigate={handleSectionChange} />;
             case 'customer-support':
-                return <Support forceLightMode={true} />;
+                // The customer portal is always light; an agent opens it inside the staff
+                // layout, which follows the theme.
+                return <Support forceLightMode={roleIdOf(userData) !== ROLE.AGENT} />;
 
             // Agent Routes
             case 'agent-dashboard':

@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { FileText, Upload, Clock, XCircle, ChevronsLeft, ChevronsRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
-import { createServiceOrder, getServiceOrders } from '../services/serviceOrderService';
+import { createServiceOrder, getAgentSupportAccounts, AgentSupportAccount } from '../services/serviceOrderService';
 import { useServiceOrderStore } from '../store/serviceOrderStore';
 import pusher from '../services/pusherService';
 import LoadingModalGlobal from '../components/common/LoadingModalGlobal';
+import SearchableField from '../components/common/SearchableField';
 
 interface SupportRequest {
   id: string;
   date: string;
   requestId: string;
+  // Shown to agents, whose list spans every customer they referred.
+  accountNo: string;
+  customerName: string;
   issue: string;
   issueDetails: string;
   status: string;
@@ -30,16 +34,34 @@ interface SupportProps {
 // Part of the notice below; the message box keys its red styling on it.
 const OPEN_REQUEST_PHRASE = 'already have an open request';
 
+// The agent's version: the open request belongs to the customer they picked, not to them.
+const AGENT_OPEN_REQUEST_PHRASE = 'already has an open request';
+
+// The agent asked to pick an account first.
+const SELECT_ACCOUNT_MESSAGE = 'Select the account this ticket is for.';
+
 /**
  * The notice for a request refused because one is still open, or null for any other failure.
  * The server (ServiceOrderApiController) names the open ticket in `open_service_order`; its own
- * message is worded for staff, so the customer gets this instead.
+ * message is worded for staff, so the customer (or agent, for their customer) gets this instead.
  */
-const openRequestMessage = (error: any): string | null => {
+const openRequestMessage = (error: any, agentAccountNo?: string): string | null => {
   const open = error?.response?.data?.open_service_order;
   if (!open) return null;
-  return `You ${OPEN_REQUEST_PHRASE}${open.ticket_id ? ` (Ticket ${open.ticket_id})` : ''}. You can submit a new one once it is resolved.`;
+  const ticket = open.ticket_id ? ` (Ticket ${open.ticket_id})` : '';
+  return agentAccountNo
+    ? `Account ${agentAccountNo} ${AGENT_OPEN_REQUEST_PHRASE}${ticket}. A new one can be submitted once it is resolved.`
+    : `You ${OPEN_REQUEST_PHRASE}${ticket}. You can submit a new one once it is resolved.`;
 };
+
+/** Whether the message box shows a refusal (red) rather than a confirmation. */
+const isErrorMessage = (message: string): boolean =>
+  ['Failed', 'limit', 'not found', OPEN_REQUEST_PHRASE, AGENT_OPEN_REQUEST_PHRASE, SELECT_ACCOUNT_MESSAGE, 'referred']
+    .some(phrase => message.includes(phrase));
+
+/** Agents (role 4) raise tickets for the customers they referred; see the Account No. field. */
+const isAgentUser = (user: any): boolean =>
+  String(user?.role_id) === '4' || String(user?.role || '').toLowerCase().trim() === 'agent';
 
 const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(forceLightMode ? false : true);
@@ -58,6 +80,14 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const [showSuccessModal, setShowSuccessModal] = useState<boolean>(false);
   const [showDetailModal, setShowDetailModal] = useState<boolean>(false);
   const [selectedRequest, setSelectedRequest] = useState<SupportRequest | null>(null);
+
+  // Agent only: the ticket is for a customer they referred, picked from the accounts the server
+  // returns for them (and checks again on submit).
+  const [isAgent, setIsAgent] = useState<boolean>(false);
+  const [agentAccounts, setAgentAccounts] = useState<AgentSupportAccount[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState<boolean>(false);
+  const [accountsError, setAccountsError] = useState<string>('');
+  const [selectedAccountNo, setSelectedAccountNo] = useState<string>('');
 
   // Pagination states
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -108,10 +138,13 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
       try {
         const user = JSON.parse(authData);
         console.log('[Support] User auth data:', user);
-        const accountNo = user.account_no || user.username || '';
-        const email = user.email || '';
+        const agent = isAgentUser(user);
+        // A customer's own account; an agent has none of their own and picks one per ticket.
+        const accountNo = agent ? '' : (user.account_no || user.username || '');
+        const email = user.email || user.email_address || '';
         console.log('[Support] Using account identifier:', accountNo);
         console.log('[Support] Using email:', email);
+        setIsAgent(agent);
         setUserAccountNo(accountNo);
         setUserEmail(email);
       } catch (error) {
@@ -136,17 +169,33 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   }, []);
 
   useEffect(() => {
-    if (userAccountNo) {
+    if (userAccountNo || isAgent) {
       fetchData();
     }
-  }, [userAccountNo]);
+  }, [userAccountNo, isAgent]);
+
+  // Agent: the accounts of the customers they referred, for the Account No. field.
+  useEffect(() => {
+    if (!isAgent) return;
+    let cancelled = false;
+    setIsLoadingAccounts(true);
+    setAccountsError('');
+    getAgentSupportAccounts()
+      .then(accounts => { if (!cancelled) setAgentAccounts(accounts); })
+      .catch((error: any) => {
+        if (!cancelled) setAccountsError(error?.response?.data?.message || 'Failed to load your customers\' accounts.');
+      })
+      .finally(() => { if (!cancelled) setIsLoadingAccounts(false); });
+    return () => { cancelled = true; };
+  }, [isAgent]);
 
   // Real-time updates via Pusher/Soketi
   useEffect(() => {
     const handleUpdate = async (data: any) => {
       console.log('[Support Soketi] Update received, refreshing:', data);
       try {
-        await fetchUpdates(undefined, userAccountNo);
+        // An agent's list is every ticket the server scopes to them, not one account's.
+        await fetchUpdates(undefined, isAgent ? undefined : userAccountNo);
         console.log('[Support Soketi] Data refreshed successfully');
       } catch (err) {
         console.error('[Support Soketi] Failed to refresh data:', err);
@@ -160,30 +209,35 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
       serviceOrderChannel.unbind('service-order-updated', handleUpdate);
       pusher.unsubscribe('service-orders');
     };
-  }, [fetchStoreServiceOrders, userAccountNo, fetchUpdates]);
+  }, [fetchStoreServiceOrders, userAccountNo, fetchUpdates, isAgent]);
 
   const fetchData = async () => {
     setIsLoading(true);
-    await fetchStoreServiceOrders(false, false, undefined, userAccountNo);
+    // The server scopes an agent's list to the customers they referred (ServiceOrderApiController).
+    await fetchStoreServiceOrders(false, false, undefined, isAgent ? undefined : userAccountNo);
     setIsLoading(false);
   };
 
   useEffect(() => {
-    if (!userAccountNo || serviceOrders.length === 0) {
-      if (!userAccountNo) setRequests([]);
+    const hasScope = isAgent || !!userAccountNo;
+    if (!hasScope || serviceOrders.length === 0) {
+      if (!hasScope) setRequests([]);
       return;
     }
 
-    const filteredOrders = serviceOrders
-      .filter(order => {
-        return order.accountNumber === userAccountNo || order.username === userAccountNo;
-      })
-      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
-      .slice(0, 1)
+    // A customer sees their own latest request. An agent sees every ticket of the customers they
+    // referred, whoever raised it — the list the server already limited to them.
+    const sortedOrders = serviceOrders
+      .filter(order => isAgent || order.accountNumber === userAccountNo || order.username === userAccountNo)
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+
+    const filteredOrders = (isAgent ? sortedOrders : sortedOrders.slice(0, 1))
       .map(order => ({
         id: order.id,
         date: order.timestamp ? new Date(order.timestamp).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '',
         requestId: order.ticketId,
+        accountNo: order.accountNumber || '',
+        customerName: order.fullName || '',
         issue: order.concern || '',
         issueDetails: order.concernRemarks || '',
         status: order.supportStatus || 'Pending',
@@ -198,7 +252,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
       }));
 
     setRequests(filteredOrders);
-  }, [serviceOrders, userAccountNo]);
+  }, [serviceOrders, userAccountNo, isAgent]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -209,7 +263,13 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
       return;
     }
 
-    if (!userAccountNo) {
+    if (isAgent && !selectedAccountNo) {
+      setSubmitMessage(SELECT_ACCOUNT_MESSAGE);
+      setTimeout(() => setSubmitMessage(''), 3000);
+      return;
+    }
+
+    if (!isAgent && !userAccountNo) {
       setSubmitMessage('Account number not found. Please log in again.');
       setTimeout(() => setSubmitMessage(''), 3000);
       return;
@@ -228,10 +288,14 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
     setShowConfirmModal(false);
     setShowLoadingModal(true);
 
+    // A customer's own account, or the one the agent picked. The server re-checks an agent's
+    // choice against their referrals and records the ticket as Pending, raised by them.
+    const ticketAccountNo = isAgent ? selectedAccountNo : userAccountNo;
+
     try {
       const newServiceOrder = {
-        account_no: userAccountNo,
-        username: userAccountNo,
+        account_no: ticketAccountNo,
+        username: ticketAccountNo,
         concern: selectedConcern,
         concern_remarks: details,
         created_by_user: userEmail,
@@ -251,19 +315,22 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
         setShowSuccessModal(true);
         await fetchStoreServiceOrders(true); // force refresh on new ticket
         setDetails('');
+        if (isAgent) setSelectedAccountNo('');
         setRemainingRequests(remainingRequests - 1);
       } else {
         setShowLoadingModal(false);
         setSubmitMessage('Failed to submit request. Please try again.');
         setTimeout(() => setSubmitMessage(''), 3000);
       }
-    } catch (error) {
-      console.error('Failed to submit request:', error);
+    } catch (error: any) {
+      console.error('Failed to submit request:', error?.response?.status, error?.response?.data?.message || error?.message);
       setShowLoadingModal(false);
-      const openMessage = openRequestMessage(error);
-      setSubmitMessage(openMessage || 'Failed to submit request. Please try again.');
+      const openMessage = openRequestMessage(error, isAgent ? ticketAccountNo : undefined);
+      // The server's own words when it refused an agent's account ("a customer you referred").
+      const refusedAccount = isAgent && error?.response?.status === 403 ? error?.response?.data?.message : null;
+      setSubmitMessage(openMessage || refusedAccount || 'Failed to submit request. Please try again.');
       // Longer for the open-request notice: it is a sentence with a ticket number to note.
-      setTimeout(() => setSubmitMessage(''), openMessage ? 8000 : 3000);
+      setTimeout(() => setSubmitMessage(''), (openMessage || refusedAccount) ? 8000 : 3000);
     }
   };
 
@@ -287,6 +354,28 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
             </div>
 
             <form onSubmit={handleSubmit}>
+              {isAgent && (
+                <div className="mb-4">
+                  <SearchableField
+                    label="Account Number"
+                    value={(() => {
+                      const picked = agentAccounts.find(a => a.account_no === selectedAccountNo);
+                      return picked ? `${picked.account_no} | ${picked.customer_name}` : '';
+                    })()}
+                    onSelect={(_label, option) => setSelectedAccountNo(option?.account_no || '')}
+                    options={agentAccounts.map(a => ({ ...a, label: `${a.account_no} | ${a.customer_name}` }))}
+                    optionLabelKey="label"
+                    placeholderOption="Select a customer you referred"
+                    placeholder={isLoadingAccounts ? 'Loading your customers…' : 'Search account no. or name…'}
+                    emptyMessage={isLoadingAccounts ? 'Loading…' : 'No referred customers found'}
+                    isDarkMode={isDarkMode}
+                    colorPalette={colorPalette}
+                    error={accountsError}
+                    required
+                  />
+                </div>
+              )}
+
               <div className="mb-4">
                 <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   Concern
@@ -357,7 +446,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
               </div>
 
               {submitMessage && (
-                <div className={`mt-3 p-3 rounded text-sm text-center ${submitMessage.includes('Failed') || submitMessage.includes('limit') || submitMessage.includes('not found') || submitMessage.includes(OPEN_REQUEST_PHRASE)
+                <div className={`mt-3 p-3 rounded text-sm text-center ${isErrorMessage(submitMessage)
                   ? isDarkMode ? 'bg-red-900/50 text-red-200' : 'bg-red-100 text-red-700'
                   : isDarkMode ? 'bg-green-900/50 text-green-200' : 'bg-green-100 text-green-700'
                   }`}>
@@ -380,7 +469,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
 
           <div className={`lg:col-span-2 ${isDarkMode ? 'bg-gray-900' : 'bg-white'} rounded-lg shadow-lg p-6`}>
             <h2 className={`text-xl font-semibold mb-6 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              Latest Request
+              {isAgent ? 'Support Tickets' : 'Latest Request'}
             </h2>
 
             <div className="overflow-x-auto">
@@ -402,6 +491,9 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                         <tr className={`border-b ${isDarkMode ? 'border-gray-800' : 'border-gray-200'}`}>
                           <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Date</th>
                           <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>ID</th>
+                          {isAgent && (
+                            <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Account</th>
+                          )}
                           <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Issue</th>
                           <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Status</th>
                           <th className={`text-left py-3 px-3 font-semibold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Visit Info</th>
@@ -417,6 +509,12 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                             <td className={`py-4 px-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                               {request.requestId}
                             </td>
+                            {isAgent && (
+                              <td className={`py-4 px-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                <div>{request.accountNo}</div>
+                                <div className="text-xs text-gray-500">{request.customerName}</div>
+                              </td>
+                            )}
                             <td className={`py-4 px-3 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                               <div>{request.issue}</div>
                               <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
@@ -520,7 +618,9 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
                     <div className={`py-12 text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                       <FileText className="mx-auto mb-4 opacity-50" size={48} strokeWidth={1} />
                       <p className="text-lg font-medium">No support requests</p>
-                      <p className="text-sm mt-1">Submit a ticket to get started</p>
+                      <p className="text-sm mt-1">
+                        {isAgent ? 'Tickets for the customers you referred appear here' : 'Submit a ticket to get started'}
+                      </p>
                     </div>
                   )}
                 </>
@@ -542,6 +642,15 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
               Are you sure you want to submit this support ticket?
             </p>
             <div className={`mb-4 p-3 rounded ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'}`}>
+              {isAgent && (
+                <p className={`text-sm font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  Account: {selectedAccountNo}
+                  {(() => {
+                    const name = agentAccounts.find(a => a.account_no === selectedAccountNo)?.customer_name;
+                    return name ? ` | ${name}` : '';
+                  })()}
+                </p>
+              )}
               <p className={`text-sm font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Concern: {selectedConcern}
               </p>
@@ -650,6 +759,14 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
 
               {/* Issue Details */}
               <div className="space-y-4">
+                {isAgent && (
+                  <div>
+                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Account</p>
+                    <p className={`text-lg font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      {selectedRequest.accountNo}{selectedRequest.customerName ? ` | ${selectedRequest.customerName}` : ''}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Issue Concern</p>
                   <p className={`text-lg font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{selectedRequest.issue}</p>

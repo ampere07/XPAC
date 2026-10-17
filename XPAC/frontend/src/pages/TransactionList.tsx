@@ -188,11 +188,15 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
 
 
-  const { can } = usePermissions();
+  const { can, canApproveTransactions } = usePermissions();
 
   // One answer for every role, from config/permissions.ts: the seeded role's
   // table (as the web draws it) or a custom role's server-resolved list.
   const hasPermission = (permission: string): boolean => can(permission);
+
+  // Batch Approve: the key, held by an approver — the SuperAdmin or one the server names, not
+  // every Administrator. The server refuses anyone else.
+  const canBatchApprove = canApproveTransactions && hasPermission('transaction-list.batch-approve');
 
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -1867,7 +1871,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 <Plus size={18} />
               </button>
             )}
-            {hasPermission('transaction-list.batch-approve') && (
+            {canBatchApprove && (
               <button
                 onClick={() => isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true)}
                 className="p-2 md:px-4 md:py-2 rounded flex items-center justify-center transition-colors text-white flex-shrink-0"
@@ -1903,7 +1907,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
                 )}
               </button>
             )}
-            {hasPermission('transaction-list.batch-approve') && isBatchApproveMode && (
+            {canBatchApprove && isBatchApproveMode && (
               <button
                 onClick={handleBatchApprove}
                 disabled={selectedTransactionIds.length === 0 || isApproving}

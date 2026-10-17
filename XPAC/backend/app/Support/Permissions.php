@@ -586,8 +586,11 @@ final class Permissions
         // Sales agent: the Transaction List only, exactly as a technician sees it — browse
         // transactions and record a payment (Add Transaction), but no 'transaction-list.approve',
         // so no Approve / Mark as Failed (TransactionController also refuses them for role 4).
+        // And Support: raise and follow tickets for the customers they referred — scoped to those
+        // accounts by ServiceOrderApiController (AgentScope), which also refuses them any edit.
         Role::AGENT => [
             'transaction-list',
+            'customer-support',
         ],
 
         Role::INVENTORY_STAFF => [
@@ -755,6 +758,33 @@ final class Permissions
         }
 
         return false;
+    }
+
+    /**
+     * May this user approve transactions — Approve, or Batch Approve with that key?
+     *
+     * The SuperAdmin, and the users listed by email in config('permissions.transaction_approvers')
+     * who also hold the key. Not every Administrator: the role keeps the keys for its other screens,
+     * but approving money onto accounts is reserved. TransactionController enforces this; the
+     * clients get it as `can_approve_transactions` (login and GET me/permissions) to hide the
+     * buttons.
+     *
+     * @param  \App\Models\User|object|null  $user
+     */
+    public static function canApproveTransactions($user, string $key = 'transaction-list.approve'): bool
+    {
+        if ($user === null) {
+            return false;
+        }
+
+        if ((int) ($user->role_id ?? 0) === Role::SUPER_ADMIN) {
+            return true;
+        }
+
+        $email = strtolower(trim((string) ($user->email_address ?? $user->email ?? '')));
+        $approvers = (array) config('permissions.transaction_approvers', []);
+
+        return $email !== '' && in_array($email, $approvers, true) && self::allows($user, $key);
     }
 
     /**

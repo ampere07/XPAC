@@ -366,6 +366,11 @@ final class ApiPermissionMap
         // editing one and deleting one all stay closed to 'customer-support'.
         ['service-orders',               ['service-order', 'customer-support'], ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request', 'customer-support']],
         ['service_orders',               ['service-order', 'customer-support'], ['service-order.tech-edit', 'service-order.admin-edit', 'customer.so-request', 'customer-support']],
+        // An agent's Support page: the accounts of the customers they referred, to raise a ticket
+        // for. Ahead of service-orders/*, which it would otherwise fall under. The controller
+        // answers agents only; ServiceOrderApiController scopes an agent's list and tickets to
+        // those same accounts (AgentScope).
+        ['service-orders/agent-accounts', 'customer-support', 'customer-support'],
         // One service order (GET service-orders/{id}), read by the overlays in
         // OVERLAY_READERS (CustomerDetails' related-records tabs). by-account and
         // by-item have their own rules above; the write side is unchanged.

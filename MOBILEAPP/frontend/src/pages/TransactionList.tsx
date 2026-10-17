@@ -356,7 +356,9 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
   // Resolved centrally (hooks/usePermissions): a seeded role answers from the
   // permission table, a custom role from the keys the server resolved for it.
-  const { can: hasPermission } = usePermissions();
+  // Batch Approve: the key, held by an approver — the SuperAdmin or one the server names, not
+  // every Administrator. The server refuses anyone else.
+  const { can: hasPermission, canApproveTransactions } = usePermissions();
 
   // ─── User org ──────────────────────────────────────────────────────────────
 
@@ -922,7 +924,7 @@ const TransactionList: React.FC<TransactionListProps> = ({ onNavigate }) => {
 
         {/* Batch approve row */}
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-          {hasPermission('transaction-list.batch-approve') && (
+          {canApproveTransactions && hasPermission('transaction-list.batch-approve') && (
             <TouchableOpacity
               onPress={() => isBatchApproveMode ? handleCancelApprove() : setIsBatchApproveMode(true)}
               style={{

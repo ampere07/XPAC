@@ -11,6 +11,8 @@ export interface LoginResponse {
       role_id: number;
       permissions?: string[] | null;
       home?: string | null;
+      /** May approve transactions: the SuperAdmin and the configured approvers only. */
+      can_approve_transactions?: boolean;
       organization?: {
         id: number;
         name: string;
@@ -64,6 +66,11 @@ export interface UserData {
   permissions?: string[] | null;
   /** The page this role lands on, as a permission key, e.g. "job-order". */
   home?: string | null;
+  /**
+   * May approve transactions (Approve / Batch Approve): the SuperAdmin and the approvers the
+   * server names, not every Administrator — see canApproveTransactions in config/permissions.ts.
+   */
+  can_approve_transactions?: boolean;
   organization?: {
     id: number;
     name: string;

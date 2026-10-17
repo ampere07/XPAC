@@ -31,7 +31,7 @@ jest.mock('../services/settingsColorPaletteService', () => ({
 }));
 jest.mock('../services/userService', () => ({ userService: { getUsersByRoleId: () => Promise.resolve({ success: false }) } }));
 jest.mock('../services/paymentMethodService', () => ({
-  paymentMethodService: { getAll: () => Promise.resolve({ success: true, data: [{ id: 1, payment_method: 'Cash' }] }) },
+  paymentMethodService: { getAll: () => Promise.resolve({ success: true, data: [{ id: 1, payment_method: 'Cash' }, { id: 2, payment_method: 'GCash' }] }) },
 }));
 jest.mock('../services/planService', () => ({ planService: { getAllPlans: () => Promise.resolve([]) } }));
 jest.mock('../services/paymentService', () => ({ paymentService: { getAvailableDiscount: () => Promise.resolve({ checkout: 0, discountsOnFile: 0 }) } }));
@@ -153,8 +153,9 @@ test('saving Under XPACS sends the Received Payment and no split', async () => {
   fireEvent.change(field('Received Payment'), { target: { value: '₱ 750' } });
   await screen.findByRole('option', { name: 'Cash' });
   fireEvent.change(field('Payment Method'), { target: { value: 'Cash' } });
-  fireEvent.change(field('Reference No.'), { target: { value: 'REF-750' } });
-  fireEvent.change(field('OR No.'), { target: { value: 'OR-750' } });
+  // Cash carries no Reference No. or OR No.: both are hidden and need no value.
+  expect(hasField('Reference No.')).toBe(false);
+  expect(hasField('OR No.')).toBe(false);
   fireEvent.change(document.querySelector('input[type="file"]')!, {
     target: { files: [new File(['proof'], 'proof.png', { type: 'image/png' })] },
   });
@@ -164,9 +165,27 @@ test('saving Under XPACS sends the Received Payment and no split', async () => {
 
   await waitFor(() => expect(transactionService.createTransaction).toHaveBeenCalledTimes(1));
   const payload = (transactionService.createTransaction as jest.Mock).mock.calls[0][0];
-  expect(payload).toEqual(expect.objectContaining({ account_no: '2002', received_payment: 750 }));
+  expect(payload).toEqual(expect.objectContaining({ account_no: '2002', received_payment: 750, reference_no: null, or_no: null }));
   expect(payload).not.toHaveProperty('collected_payment');
   expect(payload).not.toHaveProperty('agent_collected');
+});
+
+test('any method but Cash shows the Reference No. and OR No. and requires both', async () => {
+  renderForm();
+  fireEvent.click(screen.getByRole('radio', { name: 'Under XPACS' }));
+  await pickAccount('2002');
+  fireEvent.change(field('Received Payment'), { target: { value: '₱ 750' } });
+  await screen.findByRole('option', { name: 'GCash' });
+  fireEvent.change(field('Payment Method'), { target: { value: 'GCash' } });
+
+  expect(hasField('Reference No.')).toBe(true);
+  expect(hasField('OR No.')).toBe(true);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  expect(await screen.findByText('Reference No. is required')).toBeTruthy();
+  expect(screen.getByText('OR No. is required')).toBeTruthy();
+  expect(transactionService.createTransaction).not.toHaveBeenCalled();
 });
 
 test('an edit keeps the way the row was recorded and cannot switch it', () => {

@@ -117,4 +117,50 @@ class AgentScope
             $user->id ?? null
         );
     }
+
+    /**
+     * The account numbers of every billing account whose customer this agent referred — the
+     * accounts an agent raises support tickets for, and sees the service orders of.
+     *
+     * Narrowed in SQL (narrowReferrals(), a superset) and settled exactly by ownsReferral(), the
+     * same two steps BillingController uses for the agent's customer list.
+     *
+     * @return array<int, string>
+     */
+    public static function referredAccountNumbers($user): array
+    {
+        if (!$user) {
+            return [];
+        }
+
+        return \Illuminate\Support\Facades\DB::table('billing_accounts as ba')
+            ->join('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->whereNotNull('ba.account_no')
+            ->where(function ($q) use ($user) {
+                self::narrowReferrals($q, 'c.referred_by', $user);
+            })
+            ->get(['ba.account_no', 'c.referred_by'])
+            ->filter(fn ($row) => self::ownsReferral($user, $row->referred_by))
+            ->pluck('account_no')
+            ->map(fn ($accountNo) => (string) $accountNo)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /** Was this account's customer referred by this agent? */
+    public static function ownsAccount($user, ?string $accountNo): bool
+    {
+        $accountNo = trim((string) $accountNo);
+        if (!$user || $accountNo === '') {
+            return false;
+        }
+
+        $referredBy = \Illuminate\Support\Facades\DB::table('billing_accounts as ba')
+            ->join('customers as c', 'c.id', '=', 'ba.customer_id')
+            ->where('ba.account_no', $accountNo)
+            ->value('c.referred_by');
+
+        return self::ownsReferral($user, $referredBy);
+    }
 }

@@ -72,7 +72,6 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   // That sum is what approval applies to the account; both parts are stored too
   // (transactions.collected_payment / agent_collected).
   const [isAgentUser, setIsAgentUser] = useState(false);
-  const [isTechnicianUser, setIsTechnicianUser] = useState(false);
   const [collectedPayment, setCollectedPayment] = useState('');
   const [agentCollected, setAgentCollected] = useState('');
   const [paymentDate, setPaymentDate] = useState(today());
@@ -102,9 +101,8 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
       try {
         const u = JSON.parse(raw || '{}');
         setIsAgentUser(String(u.role_id) === '4' || String(u.role || '').toLowerCase().trim() === 'agent');
-        setIsTechnicianUser(String(u.role_id) === '2' || String(u.role || '').toLowerCase().trim() === 'technician');
         setProcessedBy(String(u.email_address || u.email || '').trim());
-      } catch { setIsAgentUser(false); setIsTechnicianUser(false); }
+      } catch { setIsAgentUser(false); }
     }).catch(() => {});
     settingsColorPaletteService.getActive().then(p => p?.primary && setPrimary(p.primary)).catch(() => {});
     fetchAccountRecords();
@@ -115,7 +113,9 @@ const AddTransactionModal: React.FC<Props> = ({ isOpen, onClose, onSaved }) => {
   const isPrepaid = !!account?.isPrepaid;
   const typeOptions = isPrepaid ? PREPAID_TYPES : POSTPAID_TYPES;
   const showPlanPicker = isPrepaid && transactionType === 'Top Up';
-  const hidesReceiptNumbers = isTechnicianUser && isCashPaymentMethod(paymentMethod);
+  // A Cash payment has no Reference No. or OR No., whoever records it: both are hidden, not
+  // required, and sent empty. The server drops them for Cash as well (TransactionController).
+  const hidesReceiptNumbers = isCashPaymentMethod(paymentMethod);
   const referenceNoLabel = referenceNumberLabel(paymentMethod);
   const selectedPlan = plans.find(p => p.id === selectedPlanId) || null;
   const accountDiscounts = useAccountDiscounts(account?.accountNo, isOpen);

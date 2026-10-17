@@ -15,6 +15,8 @@ export interface LoginResponse {
       home?: string | null;
       /** A custom role saved before per-action keys existed. */
       permissions_legacy?: boolean;
+      /** May approve transactions: the SuperAdmin and the configured approvers only. */
+      can_approve_transactions?: boolean;
       organization?: {
         id: number;
         name: string;
@@ -79,6 +81,11 @@ export interface UserData {
    * shortcuts (see LEGACY_CUSTOM_REACHABLE in config/permissions.ts).
    */
   permissions_legacy?: boolean;
+  /**
+   * May approve transactions (Approve / Batch Approve): the SuperAdmin and the approvers the
+   * server names, not every Administrator — see canApproveTransactions in config/permissions.ts.
+   */
+  can_approve_transactions?: boolean;
   organization?: {
     id: number;
     name: string;

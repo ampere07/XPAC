@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, FileWarning, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock, TimerReset, ReceiptText, Gift, Images, Landmark, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Users, FileText, LogOut, ChevronRight, User, FileCheck, Wrench, MapPinned, MapPin, Package, CreditCard, FileWarning, List, Router, DollarSign, Receipt, FileBarChart, Clock, Calendar, AlertTriangle, Tag, MessageSquare, Settings, Network, Activity, AlertCircle, RefreshCw, Building, Shield, UserCheck, Wallet, CalendarClock, TimerReset, ReceiptText, Gift, Images, Landmark, ClipboardCheck, LifeBuoy } from 'lucide-react';
 import { settingsColorPaletteService, ColorPalette } from '../services/settingsColorPaletteService';
 import { getPayableAlertCount } from '../services/monthlyPayableService';
 import { getNavBadgeCounts, EMPTY_NAV_BADGE_COUNTS, NavBadgeCounts, NAV_BADGES_CHANGED_EVENT } from '../services/navBadgeService';
@@ -272,6 +272,10 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, onLog
     // An agent's own weekly referral invoices, scoped server side to their team, or to
     // themselves when they belong to none.
     { id: 'agent-invoices', label: 'Invoices', icon: FileText, onlyRoles: [ROLE.AGENT] },
+    // An agent raises and follows support tickets for the customers they referred; the server
+    // scopes both the account list and the tickets to them. Customers reach the same page from
+    // the portal header, not this menu.
+    { id: 'customer-support', label: 'Support', icon: LifeBuoy, onlyRoles: [ROLE.AGENT] },
     // {
     //   id: 'agent-group',
     //   label: 'Agent',

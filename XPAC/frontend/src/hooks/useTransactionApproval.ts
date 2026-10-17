@@ -21,13 +21,15 @@ export interface TransactionApprovalOutcome {
 }
 
 /**
- * The rule the Approve button is drawn by: the approve key, on a transaction
- * that is still pending. The server re-checks both.
+ * The rule the Approve button is drawn by: the approve key, held by an approver (the SuperAdmin
+ * or one the server names — usePermissions().canApproveTransactions), on a transaction that is
+ * still pending. The server re-checks all three.
  */
 export const canApproveTransaction = (
   status: string | null | undefined,
-  can: (permission: string) => boolean
-): boolean => can('transaction-list.approve') && (status || '').toLowerCase() === 'pending';
+  can: (permission: string) => boolean,
+  isApprover: boolean
+): boolean => isApprover && can('transaction-list.approve') && (status || '').toLowerCase() === 'pending';
 
 /** The signed-in user's email, recorded as the approver. Also used by the For Approval batch approve. */
 export const currentUserEmail = (): string => {

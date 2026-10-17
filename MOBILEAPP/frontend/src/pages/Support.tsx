@@ -15,6 +15,7 @@ import * as WebBrowser from 'expo-web-browser';
 import SupportDetails from '../components/SupportDetails';
 import ImagePreview from '../components/ImagePreview';
 import apiClient from '../config/api';
+import { SUPPORT_CONCERN_OPTIONS } from '../config/supportConcerns';
 
 interface SupportRequest {
   id: string;
@@ -203,15 +204,7 @@ const Support: React.FC<SupportProps> = ({ forceLightMode }) => {
   const [user, setUser] = useState<any>(null);
   const [selectedRequest, setSelectedRequest] = useState<SupportRequest | null>(null);
 
-  const concernOptions = [
-    'No Internet',
-    'Slow Internet',
-    'Intermittent Connection',
-    'Router Issue',
-    'Cable Problem',
-    'Port Issue',
-    'Others'
-  ];
+  const concernOptions = SUPPORT_CONCERN_OPTIONS;
 
   const pan = useRef(new Animated.ValueXY()).current;
 

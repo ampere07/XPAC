@@ -158,20 +158,23 @@ class TransactionController extends Controller
         return in_array(mb_strtolower(trim((string) $paymentMethod)), ['cheque', 'check'], true) ? 'Cheque No.' : 'Reference No.';
     }
 
-    private function isTechnicianCashPayment(?string $paymentMethod): bool
+    /**
+     * A Cash payment carries no Reference No. or OR No., whoever records it: the forms hide both
+     * for Cash, and they are neither required nor kept.
+     */
+    private function isCashPayment(?string $paymentMethod): bool
     {
-        return mb_strtolower(trim((string) $paymentMethod)) === 'cash'
-            && \App\Support\AgentScope::isTechnician(auth()->user());
+        return mb_strtolower(trim((string) $paymentMethod)) === 'cash';
     }
 
-    private function requiredUnlessTechnicianCash(Request $request): RequiredIf
+    private function requiredUnlessCash(Request $request): RequiredIf
     {
-        return Rule::requiredIf(fn () => !$this->isTechnicianCashPayment($request->input('payment_method')));
+        return Rule::requiredIf(fn () => !$this->isCashPayment($request->input('payment_method')));
     }
 
-    private function discardReceiptNumbersForTechnicianCash(Request $request, ?string $storedPaymentMethod = null): void
+    private function discardReceiptNumbersForCash(Request $request, ?string $storedPaymentMethod = null): void
     {
-        if ($this->isTechnicianCashPayment($request->input('payment_method', $storedPaymentMethod))) {
+        if ($this->isCashPayment($request->input('payment_method', $storedPaymentMethod))) {
             $request->merge(['reference_no' => null, 'or_no' => null]);
         }
     }
@@ -183,7 +186,7 @@ class TransactionController extends Controller
                 'request_data' => $request->all()
             ]);
 
-            $this->discardReceiptNumbersForTechnicianCash($request);
+            $this->discardReceiptNumbersForCash($request);
             $referenceNoLabel = $this->referenceNumberLabel($request->input('payment_method'));
 
             $validated = $request->validate([
@@ -201,8 +204,8 @@ class TransactionController extends Controller
                 'processed_by_user' => 'nullable|string|max:255',
                 'created_by_user' => 'nullable|string|max:255',
                 'payment_method' => 'required|string|max:255',
-                'reference_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule($referenceNoLabel)],
-                'or_no' => [$this->requiredUnlessTechnicianCash($request), 'nullable', 'string', 'max:255'],
+                'reference_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255', $this->uniqueReferenceNoRule($referenceNoLabel)],
+                'or_no' => [$this->requiredUnlessCash($request), 'nullable', 'string', 'max:255'],
                 'remarks' => 'nullable|string',
                 'status' => 'nullable|string|max:100',
                 'image_url' => 'nullable|string|max:255',
@@ -591,9 +594,30 @@ class TransactionController extends Controller
         return null;
     }
 
+    /**
+     * Approving is the SuperAdmin's and the configured approvers' alone (Permissions::
+     * canApproveTransactions()), not every Administrator's. Enforced here for the same reason as
+     * denyTechnician(): the API permission layer only logs.
+     */
+    private function denyNonApprover(string $key): ?JsonResponse
+    {
+        if (\App\Support\Permissions::canApproveTransactions(auth()->user(), $key)) {
+            return null;
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Only the SuperAdmin and the designated approver can approve transactions.',
+        ], 403);
+    }
+
     public function approve(Request $request, string $id): JsonResponse
     {
         if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
+        if ($denied = $this->denyNonApprover('transaction-list.approve')) {
             return $denied;
         }
 
@@ -1363,7 +1387,7 @@ class TransactionController extends Controller
             // retired, so an old pending transaction remains editable.
             $existing = Transaction::where('id', $id)->first(['account_no', 'transaction_type', 'received_payment', 'collected_payment', 'agent_collected', 'payment_method']);
             $existingAccountNo = $existing->account_no ?? null;
-            $this->discardReceiptNumbersForTechnicianCash($request, $existing->payment_method ?? null);
+            $this->discardReceiptNumbersForCash($request, $existing->payment_method ?? null);
             $referenceNoLabel = $this->referenceNumberLabel($request->input('payment_method', $existing->payment_method ?? null));
 
             $validated = $request->validate([
@@ -1465,6 +1489,10 @@ class TransactionController extends Controller
     public function batchApprove(Request $request): JsonResponse
     {
         if ($denied = $this->denyTechnician()) {
+            return $denied;
+        }
+
+        if ($denied = $this->denyNonApprover('transaction-list.batch-approve')) {
             return $denied;
         }
 

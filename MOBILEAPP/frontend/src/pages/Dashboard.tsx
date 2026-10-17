@@ -33,6 +33,8 @@ import {
     permissionForSection,
     permissionsAllow,
     permissionsFor,
+    roleIdOf,
+    ROLE,
 } from '../config/permissions';
 // import UserManagement from './UserManagement';
 // import OrganizationManagement from './OrganizationManagement';
@@ -110,6 +112,7 @@ import SMSTemplate from './SMSTemplate';
 import EmailTemplates from './EmailTemplates';
 // import PPPoESetup from './PPPoESetup';
 import Support from './Support';
+import AgentSupport from './AgentSupport';
 import LiveMonitor from './LiveMonitor';
 // import ConcernConfig from './ConcernConfig';
 import DashboardCustomer from './DashboardCustomer';
@@ -206,7 +209,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                     // the role table for a seeded role, carries on being used.
                     apiClient.get<{
                         success: boolean;
-                        data: { role_id?: number; role?: string; permissions: string[]; home: string | null };
+                        data: { role_id?: number; role?: string; permissions: string[]; home: string | null; can_approve_transactions?: boolean };
                     }>('/me/permissions')
                         .then(async (response) => {
                             const fresh = response.data?.data;
@@ -230,6 +233,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
                                 ...(typeof fresh.role === 'string' && fresh.role !== '' ? { role: fresh.role } : {}),
                                 permissions: fresh.permissions,
                                 home: fresh.home ?? null,
+                                // Also how a session signed in before the flag existed learns it.
+                                can_approve_transactions: fresh.can_approve_transactions === true,
                             };
                             await AsyncStorage.setItem('authData', JSON.stringify(updated));
                             if (unmounted) return;
@@ -325,7 +330,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onLogout }) => {
             case 'customer-bills':
                 return <Bills initialTab={billsInitialTab} />;
             case 'customer-support':
-                return <Support forceLightMode={true} />;
+                // The customer's page is their own portal (balance, Pay Now, one account); an
+                // agent raises and follows tickets for the customers they referred instead.
+                return roleIdOf(userData) === ROLE.AGENT ? <AgentSupport /> : <Support forceLightMode={true} />;
             case 'support':
                 return <Support />;
             case 'job-order':

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AuthLike,
   ROLE,
+  canApproveTransactions,
   canOpenSection,
   homeSectionFor,
   permissionsAllow,
@@ -54,6 +55,11 @@ export interface PermissionApi {
   isTechnician: boolean;
   isAgent: boolean;
   isCustomer: boolean;
+  /**
+   * May approve transactions (Approve / Batch Approve): the SuperAdmin and the approvers the
+   * server names. Drawn alongside the keys; see canApproveTransactions in config/permissions.ts.
+   */
+  canApproveTransactions: boolean;
   /** The section this user should land on. */
   home: string;
 }
@@ -109,6 +115,8 @@ export const usePermissions = (): PermissionApi => {
       isTechnician: roleId === ROLE.TECHNICIAN,
       isAgent: roleId === ROLE.AGENT,
       isCustomer: roleId === ROLE.CUSTOMER,
+      // Approve / Batch Approve on transactions — SuperAdmin and the server's approvers only.
+      canApproveTransactions: canApproveTransactions(auth),
       home: homeSectionFor(auth),
     }),
     [can, canAll, canOpen, permissions, roleId, auth]

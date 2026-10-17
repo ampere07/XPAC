@@ -129,7 +129,7 @@ interface ForApprovalDetailsProps {
 const ForApprovalDetails: React.FC<ForApprovalDetailsProps> = ({
   record, onClose, onApproved, onPrevious, onNext, isDarkMode, colorPalette, paymentMethods,
 }) => {
-  const { can } = usePermissions();
+  const { can, canApproveTransactions } = usePermissions();
   const { approveTransaction } = useTransactionApproval();
   const { approveJobOrder } = useJobOrderApproval();
   const userDirectory = useUserDirectory();
@@ -190,7 +190,7 @@ const ForApprovalDetails: React.FC<ForApprovalDetailsProps> = ({
   const isApproved = approvedKey === recordKey;
   const canApprove = !isApproved && (
     record.category === 'transactions'
-      ? canApproveTransaction(record.transaction.status, can)
+      ? canApproveTransaction(record.transaction.status, can, canApproveTransactions)
       : canApproveJobOrder(record.jobOrder, can)
   );
 

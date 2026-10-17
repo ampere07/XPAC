@@ -1396,6 +1396,9 @@ Route::post('/login', function (Request $request) {
                 'home' => \App\Support\Permissions::homeFor($user),
                 // A custom role saved before per-action keys existed.
                 'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
+                // Approve / Batch Approve on transactions: SuperAdmin and the configured approvers
+                // only, whatever the role's keys (TransactionController enforces it).
+                'can_approve_transactions' => \App\Support\Permissions::canApproveTransactions($user),
             ]
         ];
 
@@ -1560,6 +1563,7 @@ Route::middleware('auth:sanctum')->get('/me/permissions', function (Request $req
             'permissions' => \App\Support\Permissions::forUser($user),
             'home'        => \App\Support\Permissions::homeFor($user),
             'permissions_legacy' => \App\Support\Permissions::isLegacyUser($user),
+            'can_approve_transactions' => \App\Support\Permissions::canApproveTransactions($user),
         ],
     ]);
 });
@@ -2408,6 +2412,8 @@ Route::prefix('service-orders')->group(function () {
     Route::get('/', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'index']);
     Route::post('/', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'store']);
     Route::post('/broadcast-viewing', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'broadcastViewing']);
+    // An agent's referred customers' accounts, for their Support page. Before /{id}, which would take it.
+    Route::get('/agent-accounts', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'agentAccounts']);
     Route::get('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'show']);
     Route::put('/{id}', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'update']);
     Route::post('/{id}/log-blocked-transfer', [\App\Http\Controllers\Api\ServiceOrderApiController::class , 'logBlockedTransfer']);

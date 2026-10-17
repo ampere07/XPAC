@@ -215,7 +215,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onSectionChange, userR
     {
       title: 'Account',
       items: [
-        { id: 'customer-support', label: 'Support', icon: LifeBuoy, onlyRoles: [ROLE.CUSTOMER] },
+        // A customer's own Support page; an agent's opens AgentSupport (Dashboard) — tickets for
+        // the customers they referred.
+        { id: 'customer-support', label: 'Support', icon: LifeBuoy, onlyRoles: [ROLE.CUSTOMER, ROLE.AGENT] },
         { id: 'menu', label: 'Menu', icon: MenuIcon, isMenuPage: true, requires: [] },
       ],
     },

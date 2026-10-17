@@ -1,12 +1,12 @@
-import React, { useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, ScrollView, Modal, Pressable, Image, ActivityIndicator, Platform, KeyboardAvoidingView, StyleSheet, Alert, TouchableOpacity, DeviceEventEmitter } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { X, ChevronDown, Search, Check, ChevronLeft, Camera, Plus } from 'lucide-react-native';
+import { X, ChevronDown, Search, Check, ChevronLeft, Camera, Plus, Eye, EyeOff } from 'lucide-react-native';
 import SignatureScreen from 'react-native-signature-canvas';
 
 import ImagePreview from '../components/ImagePreview';
 import { SearchablePicker, SearchablePickerTrigger } from '../components/SearchablePicker';
-import { useServiceOrderEdit, ServiceOrderEditFormData, OrderItem, ImageFiles } from '../hooks/useServiceOrderEdit';
+import { useServiceOrderEdit, ServiceOrderEditFormData, OrderItem, ImageFiles, PPPOE_UPDATE_CONCERN, isPppoeUpdateResolve } from '../hooks/useServiceOrderEdit';
 
 interface ServiceOrderEditModalProps {
   isOpen: boolean;
@@ -145,6 +145,50 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       {errors[field] ? <Text style={styles.errorText}>{errors[field]}</Text> : null}
     </View>
   ), [formData, errors, isDarkMode, handleInputChange, registerAnchor]);
+
+  // PPPoE Update credentials. Not renderInput(): these must not be auto-capitalised or
+  // auto-corrected, and the password is masked until shown.
+  const [showPppoePassword, setShowPppoePassword] = useState(false);
+  useEffect(() => { if (!isOpen) setShowPppoePassword(false); }, [isOpen]);
+
+  const renderPppoeInput = (field: 'newPppoeUsername' | 'newPppoePassword', label: string, secret = false) => (
+    <View ref={registerAnchor(field)} collapsable={false} style={styles.inputGroup}>
+      <Text style={[styles.label, { color: isDarkMode ? '#d1d5db' : '#374151' }]}>
+        {label} <Text style={styles.required}>*</Text>
+      </Text>
+      <View style={{ justifyContent: 'center' }}>
+        <TextInput
+          style={[styles.textInput, {
+            backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+            color: isDarkMode ? '#ffffff' : '#111827',
+            borderColor: errors[field] ? '#ef4444' : (isDarkMode ? '#374151' : '#d1d5db'),
+            height: 50,
+            paddingRight: secret ? 44 : undefined,
+          }]}
+          value={formData[field] || ''}
+          onChangeText={(text) => handleInputChange(field, text)}
+          placeholder={`Enter ${label}`}
+          placeholderTextColor={isDarkMode ? '#9ca3af' : '#6b7280'}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="off"
+          secureTextEntry={secret && !showPppoePassword}
+          accessibilityLabel={label}
+        />
+        {secret && (
+          <Pressable
+            onPress={() => setShowPppoePassword(v => !v)}
+            accessibilityLabel={showPppoePassword ? 'Hide PPPoE password' : 'Show PPPoE password'}
+            hitSlop={10}
+            style={{ position: 'absolute', right: 12 }}
+          >
+            {showPppoePassword ? <EyeOff size={20} color="#6b7280" /> : <Eye size={20} color="#6b7280" />}
+          </Pressable>
+        )}
+      </View>
+      {errors[field] ? <Text style={styles.errorText}>{errors[field]}</Text> : null}
+    </View>
+  );
 
   const renderPickerTrigger = useCallback((field: string, label: string, value: string, placeholder: string, required = false, errorKey: string = field) => (
     <View ref={registerAnchor(errorKey)} collapsable={false}>
@@ -690,6 +734,21 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
 
                   {formData.concern === 'Upgrade/Downgrade Plan' && renderPickerTrigger('plan', 'New Plan', formData.newPlan, 'Select New Plan', true, 'newPlan')}
 
+                  {(formData.concern || '').trim() === PPPOE_UPDATE_CONCERN && (
+                    <>
+                      {renderPppoeInput('newPppoeUsername', 'PPPoE Username')}
+                      {renderPppoeInput('newPppoePassword', 'PPPoE Password', true)}
+                      {isPppoeUpdateResolve(formData) && (
+                        <View style={[styles.pppoeNotice, { borderColor: '#bfdbfe', backgroundColor: '#eff6ff' }]}>
+                          <Text style={styles.pppoeNoticeTitle}>PPPoE Update Trigger Detected</Text>
+                          <Text style={styles.pppoeNoticeText}>
+                            Saving as "Resolved" changes the PPPoE username and password in RADIUS and in the technical details. The live session is cut, and the customer's router must use the new credentials. If either update fails, nothing is saved.
+                          </Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+
                   {renderInput('concernRemarks', 'Concern Remarks', !isTechnician)}
                   {renderInput('modifiedBy', 'Modified By', false)}
 
@@ -954,6 +1013,9 @@ const styles = StyleSheet.create({
   required: { color: '#ef4444' },
   textInput: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 16 },
   errorText: { color: '#ef4444', fontSize: 12, marginTop: 4 },
+  pppoeNotice: { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 16 },
+  pppoeNoticeTitle: { color: '#1e40af', fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  pppoeNoticeText: { color: '#1d4ed8', fontSize: 12, lineHeight: 17 },
   connectionTypeContainer: { flexDirection: 'row', gap: 8 },
   connectionTypeButton: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
   loadingOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },

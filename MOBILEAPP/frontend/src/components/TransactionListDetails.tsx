@@ -84,7 +84,8 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
 }) => {
   // Approve is hidden from roles without 'transaction-list.approve' (e.g. technicians,
   // who may view transactions but not settle them).
-  const { can: hasPermission } = usePermissions();
+  // canApproveTransactions: Approve is the SuperAdmin's and the configured approvers' only.
+  const { can: hasPermission, canApproveTransactions } = usePermissions();
   const [loading, setLoading] = useState(false);
   const [loadingPercentage, setLoadingPercentage] = useState(0);
   const [colorPalette, setColorPalette] = useState<ColorPalette | null>(null);
@@ -251,7 +252,7 @@ const TransactionListDetails: React.FC<TransactionListDetailsProps> = ({
           >
             {accountNo} | {transaction.account?.customer?.full_name || '-'}
           </Text>
-          {hasPermission('transaction-list.approve') && statusLower === 'pending' && (
+          {canApproveTransactions && hasPermission('transaction-list.approve') && statusLower === 'pending' && (
             <TouchableOpacity
               onPress={handleApprove}
               disabled={loading}

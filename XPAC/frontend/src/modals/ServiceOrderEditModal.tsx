@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Calendar, ChevronDown, Minus, Plus, Eraser, CheckCircle } from 'lucide-react';
+import { X, Calendar, ChevronDown, Minus, Plus, Eraser, CheckCircle, Eye, EyeOff } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { UserData } from '../types/api';
 import apiClient from '../config/api';
@@ -87,7 +87,13 @@ interface ServiceOrderEditFormData {
   routerModel: string;
   newPlan: string;
   newLcpnap: string;
+  // PPPoE Update concern: the credentials the account is given when the order is resolved.
+  newPppoeUsername: string;
+  newPppoePassword: string;
 }
+
+/** The concern whose Resolved save changes the account's PPPoE credentials (matched exactly). */
+const PPPOE_UPDATE_CONCERN = 'PPPoE Update';
 
 interface ImageFiles {
   timeInFile: File | null;
@@ -198,10 +204,12 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     newVlan: '',
     routerModel: '',
     newPlan: '',
-    newLcpnap: ''
+    newLcpnap: '',
+    newPppoeUsername: '',
+    newPppoePassword: ''
   });
 
-
+  const [showPppoePassword, setShowPppoePassword] = useState(false);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -609,8 +617,12 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         newNap: '',
         newPort: '',
         newVlan: '',
-        routerModel: ''
+        routerModel: '',
+        // Start from the account's current credentials; a PPPoE Update edits them from there.
+        newPppoeUsername: serviceOrderData.pppoe_username || serviceOrderData.username || '',
+        newPppoePassword: serviceOrderData.pppoePassword || serviceOrderData.pppoe_password || ''
       }));
+      setShowPppoePassword(false);
     }
   }, [serviceOrderData, isOpen, currentUserEmail]);
 
@@ -782,6 +794,14 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
       newErrors.newPlan = 'New Plan is required';
     }
 
+    // PPPoE Update: resolving it applies these credentials, so both must be filled in
+    if (checkPppoeUpdateTrigger()) {
+      const pppoeUsername = formData.newPppoeUsername.trim();
+      if (!pppoeUsername) newErrors.newPppoeUsername = 'PPPoE Username is required';
+      else if (/\s/.test(pppoeUsername)) newErrors.newPppoeUsername = 'PPPoE Username cannot contain spaces';
+      if (!formData.newPppoePassword.trim()) newErrors.newPppoePassword = 'PPPoE Password is required';
+    }
+
     // Fields only visible when For Visit
     if (isForVisit) {
       if (!formData.visitStatus.trim()) newErrors.visitStatus = 'Visit Status is required';
@@ -845,6 +865,11 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
     const concern = formData.concern.toLowerCase();
     return status === 'resolved' && (concern === 'restrict' || concern === 'disconnect');
   };
+
+  const isPppoeUpdateConcern = formData.concern.trim() === PPPOE_UPDATE_CONCERN;
+
+  // Saving a PPPoE Update as Resolved changes the credentials in RADIUS and technical details.
+  const checkPppoeUpdateTrigger = () => isPppoeUpdateConcern && formData.supportStatus === 'Resolved';
 
   const handleItemChange = (index: number, field: 'itemId' | 'quantity', value: string) => {
     const newOrderItems = [...orderItems];
@@ -1198,6 +1223,12 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         service_charge: parseFloat(updatedFormData.serviceCharge),
         status: updatedFormData.status,
         ...(updatedFormData.concern === 'Upgrade/Downgrade Plan' ? { new_plan: updatedFormData.newPlan } : {}),
+        // Only for a PPPoE Update being saved as Resolved; the server applies them to RADIUS and
+        // technical details before saving the order, and refuses the save if either fails.
+        ...(updatedFormData.concern.trim() === PPPOE_UPDATE_CONCERN && updatedFormData.supportStatus === 'Resolved' ? {
+          pppoe_username: updatedFormData.newPppoeUsername.trim(),
+          pppoe_password: updatedFormData.newPppoePassword.trim(),
+        } : {}),
         ...(technicianChanged || updatedFormData.visitStatus === 'Reschedule' ? {
           start_time: null,
           end_time: null,
@@ -1231,6 +1262,7 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
           customer_purge?: { status: string; account_no: string; total: number; error?: string | null } | null;
           restricted_status?: string | null;
           disconnect_status?: string | null;
+          pppoe_update_status?: 'success' | 'unchanged' | 'skipped' | null;
           radius_queued?: boolean;
           radius_queue_failed?: boolean;
           radius_steps?: Array<{ step: string; operation: string; status: string }>;
@@ -1395,6 +1427,13 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         successMessage += '\n\nUser disconnected successfully!';
       }
 
+      // PPPoE Update Messages — a failure never reaches here: the server refuses the save
+      if (response.data.pppoe_update_status === 'success') {
+        successMessage += '\n\nPPPoE credentials updated in RADIUS and technical details. The customer\'s router must use the new credentials.';
+      } else if (response.data.pppoe_update_status === 'unchanged') {
+        successMessage += '\n\nPPPoE credentials were already up to date; nothing was changed in RADIUS.';
+      }
+
       // RADIUS Queue Messages — the Service Order saved successfully, but the live
       // RADIUS operation could not be completed (server offline/timeout/etc.) and has
       // been queued for automatic retry. This is NOT an error; the data is saved.
@@ -1420,14 +1459,27 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
         }
       });
     } catch (error: any) {
-      console.error('Error updating service order:', error);
+      console.error('Error updating service order:', error?.response?.status, error?.response?.data?.message || error?.message);
       const errorMessage = error.response?.data?.message || error.message || 'Unknown error occurred';
       setUploadProgress(0);
+
+      // PPPoE Update refused by the server: nothing was saved. Point at the field it names.
+      const isPppoeFailure = error.response?.data?.pppoe_update_status === 'failed';
+      if (isPppoeFailure) {
+        const fieldErrors = error.response?.data?.errors || {};
+        const firstError = (v: any) => (Array.isArray(v) ? v[0] : v) || '';
+        setErrors(prev => ({
+          ...prev,
+          ...(fieldErrors.pppoe_username ? { newPppoeUsername: firstError(fieldErrors.pppoe_username) } : {}),
+          ...(fieldErrors.pppoe_password ? { newPppoePassword: firstError(fieldErrors.pppoe_password) } : {}),
+        }));
+      }
+
       setModal({
         isOpen: true,
         type: 'error',
-        title: 'Failed to Update',
-        message: `Failed to update service order: ${errorMessage}`,
+        title: isPppoeFailure ? 'PPPoE Update Failed' : 'Failed to Update',
+        message: isPppoeFailure ? errorMessage : `Failed to update service order: ${errorMessage}`,
         onConfirm: () => {
           setModal({ ...modal, isOpen: false });
         }
@@ -2333,6 +2385,62 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
               </div>
             )}
 
+            {isPppoeUpdateConcern && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>PPPoE Username<span className="text-red-500">*</span></label>
+                  <input
+                    aria-label="PPPoE Username"
+                    type="text"
+                    autoComplete="off"
+                    value={formData.newPppoeUsername}
+                    onChange={(e) => handleInputChange('newPppoeUsername', e.target.value)}
+                    placeholder="Enter PPPoE Username"
+                    className={`w-full px-3 py-2 border rounded focus:outline-none focus-primary ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                      } ${errors.newPppoeUsername ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}
+                  />
+                  {errors.newPppoeUsername && (
+                    <div className="flex items-center mt-1">
+                      <div className="flex items-center justify-center w-4 h-4 rounded-full text-white text-xs mr-2" style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}>!</div>
+                      <p className="text-xs" style={{ color: colorPalette?.primary || '#7c3aed' }}>{errors.newPppoeUsername}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                    }`}>PPPoE Password<span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <input
+                      aria-label="PPPoE Password"
+                      type={showPppoePassword ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      value={formData.newPppoePassword}
+                      onChange={(e) => handleInputChange('newPppoePassword', e.target.value)}
+                      placeholder="Enter PPPoE Password"
+                      className={`w-full px-3 py-2 pr-10 border rounded focus:outline-none focus-primary ${isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+                        } ${errors.newPppoePassword ? 'border-red-500' : isDarkMode ? 'border-gray-700' : 'border-gray-300'}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPppoePassword(v => !v)}
+                      aria-label={showPppoePassword ? 'Hide PPPoE password' : 'Show PPPoE password'}
+                      className={`absolute right-3 top-2.5 ${isDarkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {showPppoePassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                  {errors.newPppoePassword && (
+                    <div className="flex items-center mt-1">
+                      <div className="flex items-center justify-center w-4 h-4 rounded-full text-white text-xs mr-2" style={{ backgroundColor: colorPalette?.primary || '#7c3aed' }}>!</div>
+                      <p className="text-xs" style={{ color: colorPalette?.primary || '#7c3aed' }}>{errors.newPppoePassword}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
 
             <div>
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'
@@ -2438,6 +2546,23 @@ const ServiceOrderEditModal: React.FC<ServiceOrderEditModalProps> = ({
                   </p>
                   <p className={`text-xs mt-1 ${isDarkMode ? 'text-red-400/80' : 'text-red-700/80'}`}>
                     Saving this service order with "Resolved" status and "{formData.concern}" concern will automatically trigger a technical restriction in RADIUS and set the billing status to "Inactive".
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {checkPppoeUpdateTrigger() && (
+              <div className={`p-3 rounded-lg flex items-start space-x-3 mb-4 ${isDarkMode ? 'bg-blue-900/30 border border-blue-800' : 'bg-blue-50 border border-blue-200'
+                }`}>
+                <div className={`mt-0.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                  <CheckCircle size={18} />
+                </div>
+                <div>
+                  <p className={`text-sm font-medium ${isDarkMode ? 'text-blue-300' : 'text-blue-800'}`}>
+                    PPPoE Update Trigger Detected
+                  </p>
+                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-blue-400/80' : 'text-blue-700/80'}`}>
+                    Saving this service order with "Resolved" status will change the PPPoE username and password in RADIUS and in the technical details. The live session is cut, and the customer's router must use the new credentials. If either update fails, nothing is saved.
                   </p>
                 </div>
               </div>

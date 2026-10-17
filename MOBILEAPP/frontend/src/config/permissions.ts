@@ -467,10 +467,11 @@ export const ROLE_PERMISSIONS: Record<number, string[]> = {
     'customer-dashboard', 'customer-bills', 'customer-support',
   ],
 
-  // Transaction List only, as a technician sees it: browse and record a payment, no approve.
-  // Mirrors Permissions::ROLE_PERMISSIONS on the server.
+  // Transaction List as a technician sees it (browse and record a payment, no approve), and
+  // Support for the customers they referred. Mirrors Permissions::ROLE_PERMISSIONS on the server.
   [ROLE.AGENT]: [
     'transaction-list',
+    'customer-support',
   ],
 
   [ROLE.INVENTORY_STAFF]: [
@@ -640,7 +641,20 @@ export interface AuthLike {
   role_id?: number | string | null;
   permissions?: string[] | string | null;
   home?: string | null;
+  /**
+   * May approve transactions — the server's Permissions::canApproveTransactions(), sent at
+   * sign-in and by GET /me/permissions. See canApproveTransactions().
+   */
+  can_approve_transactions?: boolean | null;
 }
+
+/**
+ * Approve / Batch Approve on transactions: the SuperAdmin, and the approvers the server names
+ * (config('permissions.transaction_approvers')) — not every Administrator, although the role
+ * holds the keys. Drawn alongside the key; the server refuses anyone else.
+ */
+export const canApproveTransactions = (auth?: AuthLike | null): boolean =>
+  roleIdOf(auth) === ROLE.SUPER_ADMIN || auth?.can_approve_transactions === true;
 
 /** Resolve a role id from whichever of id/name the caller has. */
 export const roleIdOf = (auth?: AuthLike | null): number => {

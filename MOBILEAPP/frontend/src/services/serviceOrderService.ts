@@ -88,6 +88,20 @@ export interface ServiceOrderData {
   technicians?: string[];
 }
 
+export interface AgentSupportAccount {
+  account_no: string;
+  customer_name: string;
+}
+
+/**
+ * The accounts an agent may raise a support ticket for — their referred customers only, decided
+ * by the server (GET service-orders/agent-accounts). Agents only; the server refuses anyone else.
+ */
+export const getAgentSupportAccounts = async (): Promise<AgentSupportAccount[]> => {
+  const response = await apiClient.get<ApiResponse<AgentSupportAccount[]>>('/service-orders/agent-accounts');
+  return Array.isArray(response.data?.data) ? response.data.data : [];
+};
+
 export const createServiceOrder = async (serviceOrderData: Partial<ServiceOrderData>) => {
   try {
     const response = await apiClient.post<ApiResponse<ServiceOrderData>>('/service-orders', serviceOrderData);

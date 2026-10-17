@@ -143,6 +143,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           // role is answered from the table there.
           permissions: response.data.user.permissions || null,
           home: response.data.user.home || null,
+          // Approve / Batch Approve on transactions — the server's decision, see canApproveTransactions.
+          can_approve_transactions: response.data.user.can_approve_transactions === true,
           organization: response.data.user.organization
         };
         if (response.data.token) {

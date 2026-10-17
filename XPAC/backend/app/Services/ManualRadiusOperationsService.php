@@ -769,6 +769,128 @@ class ManualRadiusOperationsService
     }
 
     /**
+     * Change an account's PPPoE username and password in RADIUS and in the database, all or nothing.
+     *
+     * For a "PPPoE Update" service order. Unlike updateCredentials() — database first, RADIUS
+     * queued for retry on failure — this changes RADIUS FIRST and queues nothing, so the caller
+     * can report success only when both sides hold the new credentials:
+     *   1. RADIUS: the user found under $currentUsername is renamed / given the new password
+     *      (updateRadiusCredentials(): disabled, sessions cut, updated, re-enabled). If no server
+     *      accepts the change, the database is not touched.
+     *   2. Database, in one transaction: technical_details (username, pppoe_password), job_orders
+     *      (username, pppoe_username, pppoe_password) and online_status (username).
+     *      If that fails, RADIUS is put back to the old username, and the old password when known.
+     *
+     * Passwords are never written to the log.
+     *
+     * @return array{status:string, step:string, message:string}
+     *   status 'success' | 'error'; step names where it stopped: 'radius', 'database' or 'done'.
+     */
+    public function changePppoeCredentials(
+        int $accountId,
+        string $accountNo,
+        string $currentUsername,
+        ?string $currentPassword,
+        string $newUsername,
+        string $newPassword,
+        string $updatedBy
+    ): array {
+        $this->writeLog("=== CHANGE PPPOE CREDENTIALS START ===");
+        $this->writeLog("Account: $accountNo | User: '$currentUsername' -> '$newUsername' | Password changed: "
+            . ((string) $currentPassword !== $newPassword ? 'yes' : 'no'));
+
+        try {
+            $radiusEndpoints = $this->getRadiusEndpoints();
+        } catch (Throwable $e) {
+            $this->writeLog("[EXCEPTION] " . $e->getMessage());
+            $this->writeLog("=== CHANGE PPPOE CREDENTIALS END ===");
+            return ['status' => 'error', 'step' => 'radius', 'message' => 'RADIUS is not configured, so the PPPoE credentials could not be changed. Nothing was changed.'];
+        }
+
+        // 1. RADIUS first: if it refuses, nothing else changes.
+        try {
+            $radiusUpdated = $this->updateRadiusCredentials($radiusEndpoints, $currentUsername, $newUsername, $newPassword);
+        } catch (Throwable $e) {
+            $this->writeLog("[RADIUS ERROR] " . $e->getMessage());
+            $radiusUpdated = false;
+        }
+
+        if (!$radiusUpdated) {
+            $this->writeLog("[FAILED] RADIUS not updated — database left unchanged");
+            $this->writeLog("=== CHANGE PPPOE CREDENTIALS END ===");
+            return [
+                'status' => 'error',
+                'step' => 'radius',
+                'message' => "RADIUS could not be updated: user '{$currentUsername}' was not found on any RADIUS server, or the server refused the change. Nothing was changed.",
+            ];
+        }
+
+        // 2. Database, all three tables together.
+        try {
+            DB::transaction(function () use ($accountId, $newUsername, $newPassword, $updatedBy) {
+                $technicalRows = DB::table('technical_details')
+                    ->where('account_id', $accountId)
+                    ->update([
+                        'username' => $newUsername,
+                        'pppoe_password' => $newPassword,
+                        'updated_at' => now(),
+                        'updated_by' => $updatedBy,
+                    ]);
+
+                if ($technicalRows === 0) {
+                    throw new Exception('No technical details record exists for this account.');
+                }
+
+                DB::table('job_orders')
+                    ->where('account_id', $accountId)
+                    ->update([
+                        'username' => $newUsername,
+                        'pppoe_username' => $newUsername,
+                        'pppoe_password' => $newPassword,
+                        'updated_at' => now(),
+                    ]);
+
+                DB::table('online_status')
+                    ->where('account_id', $accountId)
+                    ->update(['username' => $newUsername, 'updated_at' => now()]);
+            });
+        } catch (Throwable $e) {
+            $this->writeLog("[DB ERROR] " . $e->getMessage() . " — reverting RADIUS to the old credentials");
+
+            $reverted = false;
+            try {
+                $reverted = $this->updateRadiusCredentials(
+                    $radiusEndpoints,
+                    $newUsername,
+                    $currentUsername,
+                    ($currentPassword !== null && $currentPassword !== '') ? $currentPassword : null
+                );
+            } catch (Throwable $revertEx) {
+                $this->writeLog("[REVERT ERROR] " . $revertEx->getMessage());
+            }
+
+            $this->writeLog($reverted ? "[REVERT] RADIUS restored to '$currentUsername'" : "[REVERT FAILED] RADIUS still holds '$newUsername'");
+            $this->writeLog("=== CHANGE PPPOE CREDENTIALS END ===");
+
+            $message = 'The database could not be updated (' . $e->getMessage() . ').';
+            if (!$reverted) {
+                $message .= " RADIUS could NOT be put back and now has the new username '{$newUsername}': fix it in RADIUS by hand.";
+            } elseif ($currentPassword === null || $currentPassword === '') {
+                $message .= " RADIUS was put back to '{$currentUsername}', but the old password was not on record, so RADIUS keeps the new password.";
+            } else {
+                $message .= ' RADIUS was put back to the old credentials. Nothing was changed.';
+            }
+
+            return ['status' => 'error', 'step' => 'database', 'message' => $message];
+        }
+
+        $this->writeLog("[SUCCESS] PPPoE credentials changed in RADIUS and the database");
+        $this->writeLog("=== CHANGE PPPOE CREDENTIALS END ===");
+
+        return ['status' => 'success', 'step' => 'done', 'message' => 'PPPoE credentials updated in RADIUS and technical details.'];
+    }
+
+    /**
      * Update database credentials (username and optional password)
      */
     private function updateDatabaseCredentials(string $accountNo, string $oldUsername, string $newUsername, string $updatedBy, ?string $newPassword = null): void

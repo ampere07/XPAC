@@ -84,7 +84,17 @@ export interface ServiceOrderEditFormData {
   routerReadingImage: string;
   boxReadingImage: string;
   portLabelImage: string;
+  // PPPoE Update concern: the credentials the account is given when the order is resolved.
+  newPppoeUsername: string;
+  newPppoePassword: string;
 }
+
+/** The concern whose Resolved save changes the account's PPPoE credentials (matched exactly). */
+export const PPPOE_UPDATE_CONCERN = 'PPPoE Update';
+
+/** Saving this concern as Resolved changes the PPPoE credentials in RADIUS and technical details. */
+export const isPppoeUpdateResolve = (f: Pick<ServiceOrderEditFormData, 'concern' | 'supportStatus'>) =>
+  (f.concern || '').trim() === PPPOE_UPDATE_CONCERN && f.supportStatus === 'Resolved';
 
 export interface ImageFiles {
   timeInFile: ImagePicker.ImagePickerAsset | null;
@@ -407,7 +417,10 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
     if (!isOpen || !serviceOrderId || !initialDataLoadedRef.current) return;
     const t = setTimeout(async () => {
       try {
-        await AsyncStorage.setItem(`serviceOrderDraft_${serviceOrderId}`, JSON.stringify(formData));
+        // Passwords stay out of the draft: AsyncStorage is plain text on the device. Both come
+        // back from the API (or what was typed this session) when the order is reopened.
+        const { pppoePassword: _current, newPppoePassword: _new, ...draft } = formData;
+        await AsyncStorage.setItem(`serviceOrderDraft_${serviceOrderId}`, JSON.stringify(draft));
         await AsyncStorage.setItem(`serviceOrderItemsDraft_${serviceOrderId}`, JSON.stringify(orderItems));
       } catch (e) {}
     }, 1500);
@@ -437,6 +450,8 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
             port: freshData.port,
             vlan: freshData.vlan,
             username: freshData.username,
+            // Drafts no longer carry passwords; one saved before that may hold a stale one.
+            pppoePassword: freshData.pppoePassword,
             fullName: freshData.fullName,
             plan: freshData.plan,
             emailAddress: freshData.emailAddress,
@@ -673,7 +688,14 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
                        res.data?.pullout_status === 'queued' || 
                        res.data?.migration_status === 'queued';
       
-      Alert.alert('Success', isQueued ? 'success saving radius function in queue' : 'Updated!');
+      // A PPPoE Update failure never reaches here: the server refuses the save.
+      const pppoeNote = res.data?.pppoe_update_status === 'success'
+        ? '\n\nPPPoE credentials updated in RADIUS and technical details. The customer\'s router must use the new credentials.'
+        : res.data?.pppoe_update_status === 'unchanged'
+          ? '\n\nPPPoE credentials were already up to date; nothing was changed in RADIUS.'
+          : '';
+
+      Alert.alert('Success', (isQueued ? 'success saving radius function in queue' : 'Updated!') + pppoeNote);
       onClose();
     } catch (e: any) {
       if (progressInterval) clearInterval(progressInterval);
@@ -683,6 +705,20 @@ export const useServiceOrderEdit = (isOpen: boolean, serviceOrderData: any, onCl
       // Detect SN-related validation errors and highlight the newRouterModemSN field
       const errorMessage = e.response?.data?.message || e.message || 'Unknown error';
       const lowerError = errorMessage.toLowerCase();
+
+      // PPPoE Update refused by the server: nothing was saved. Point at the field it names.
+      if (e.response?.data?.pppoe_update_status === 'failed') {
+        const fieldErrors = e.response?.data?.errors || {};
+        const firstError = (v: any) => (Array.isArray(v) ? v[0] : v) || '';
+        setErrors(prev => ({
+          ...prev,
+          ...(fieldErrors.pppoe_username ? { newPppoeUsername: firstError(fieldErrors.pppoe_username) } : {}),
+          ...(fieldErrors.pppoe_password ? { newPppoePassword: firstError(fieldErrors.pppoe_password) } : {}),
+        }));
+        if (fieldErrors.pppoe_username || fieldErrors.pppoe_password) setValidationFailedAt(n => n + 1);
+        Alert.alert('PPPoE Update Failed', errorMessage);
+        return;
+      }
 
       if (
         lowerError.includes('smart olt') ||
@@ -765,7 +801,8 @@ const initialFormState: ServiceOrderEditFormData = {
   itemName1: '', timeIn: '', modemSetupImage: '', timeOut: '', assignedEmail: '', concern: '', concernRemarks: '',
   modifiedBy: '', modifiedDate: '', serviceCharge: '0.00', status: 'unused',
   newRouterModemSN: '', newLcp: '', newNap: '', newPort: '', newVlan: '', routerModel: '', newPlan: '', newLcpnap: '', fullAddress: '', proofImage: '',
-  setupImage: '', routerReadingImage: '', boxReadingImage: '', portLabelImage: ''
+  setupImage: '', routerReadingImage: '', boxReadingImage: '', portLabelImage: '',
+  newPppoeUsername: '', newPppoePassword: ''
 };
 
 const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
@@ -828,7 +865,10 @@ const mapApiToForm = (d: any): Partial<ServiceOrderEditFormData> => {
     newVlan: d.newVlan || d.new_vlan || '', routerModel: d.routerModel || d.router_model || '',
     newLcpnap: d.newLcpnap || d.new_lcpnap || '', fullAddress: d.fullAddress || d.full_address || '', proofImage: d.proofImage || d.proof_image_url || d.proof_image || '',
     setupImage: d.setupImage || d.setup_image_url || '', routerReadingImage: d.routerReadingImage || d.router_reading_image_url || '',
-    boxReadingImage: d.boxReadingImage || d.box_reading_image_url || '', portLabelImage: d.portLabelImage || d.speedtest_image_url || ''
+    boxReadingImage: d.boxReadingImage || d.box_reading_image_url || '', portLabelImage: d.portLabelImage || d.speedtest_image_url || '',
+    // Start from the account's current credentials; a PPPoE Update edits them from there.
+    newPppoeUsername: d.pppoe_username || d.username || '',
+    newPppoePassword: d.pppoePassword || d.pppoe_password || ''
   };
 };
 
@@ -855,6 +895,13 @@ const mapFormToApi = (f: ServiceOrderEditFormData, uploads: any, user: string, o
     old_lcpnap: original?.old_lcpnap || original?.lcpnap || '',
     old_router_modem_sn: f.routerModemSN,
   };
+
+  // Only for a PPPoE Update being saved as Resolved; the server applies them to RADIUS and
+  // technical details before saving the order, and refuses the save if either fails.
+  if (isPppoeUpdateResolve(f)) {
+    payload.pppoe_username = f.newPppoeUsername.trim();
+    payload.pppoe_password = f.newPppoePassword.trim();
+  }
 
   if (f.supportStatus === 'For Visit') {
     payload.visit_status = f.visitStatus;
@@ -921,6 +968,13 @@ const validateForm = (f: ServiceOrderEditFormData, items: OrderItem[], images: I
   if (!f.supportStatus) e.supportStatus = 'Required';
   if (!f.concern) e.concern = 'Required';
   if (f.concern === 'Upgrade/Downgrade Plan' && !f.newPlan) e.newPlan = 'Required';
+  // PPPoE Update: resolving it applies these credentials, so both must be filled in
+  if (isPppoeUpdateResolve(f)) {
+    const pppoeUsername = (f.newPppoeUsername || '').trim();
+    if (!pppoeUsername) e.newPppoeUsername = 'PPPoE Username is required';
+    else if (/\s/.test(pppoeUsername)) e.newPppoeUsername = 'PPPoE Username cannot contain spaces';
+    if (!(f.newPppoePassword || '').trim()) e.newPppoePassword = 'PPPoE Password is required';
+  }
   if (f.supportStatus === 'For Visit') {
     if (!f.assignedEmail) e.assignedEmail = 'Required';
     if (f.visitStatus === 'Done') {

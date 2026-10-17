@@ -28,4 +28,20 @@
 
 return [
     'api_access_control' => env('API_ACCESS_CONTROL', 'log'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Transaction approvers
+    |--------------------------------------------------------------------------
+    |
+    | Approve and Batch Approve on the Transaction List belong to the SuperAdmin
+    | and to the users listed here by email — not to every Administrator, though
+    | that role holds the keys for its other screens. Comma-separated, compared
+    | case-insensitively. See Permissions::canApproveTransactions().
+    |
+    */
+    'transaction_approvers' => array_values(array_filter(array_map(
+        static fn ($email) => strtolower(trim((string) $email)),
+        explode(',', (string) env('TRANSACTION_APPROVER_EMAILS', 'cb@xpacsconnect.ph,dcopag@gmail.com'))
+    ))),
 ];
